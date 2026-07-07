@@ -61,6 +61,50 @@ export async function upsertTenantAndRepo(
 }
 
 /**
+ * SIG-41 (Stripe paid tier): set an installation's plan tier. This is the ONE write
+ * site the billing seam (`src/lib/resolve-plan.ts`) + the entitlements gate
+ * (`readInstallationPlan`) read back through `tenant.tier`. UPSERT by installation_id:
+ * a brand-new tenant (its first PR webhook hasn't run yet) is inserted with the tier;
+ * an existing row has only its tier + updated_at touched (account_login/type,
+ * concurrency_cap, daily_budget are left intact).
+ *
+ * Unlike the fail-OPEN `upsertTenantAndRepo` above, this returns `{ ok }` and does NOT
+ * swallow a genuine D1 fault into a silent success: billing correctness beats
+ * availability here, so the webhook route surfaces a 5xx on `ok:false` and lets Stripe
+ * redeliver. Returns `{ ok: false }` (never throws) when the binding is absent or the
+ * write fails. `installationId` is validated positive-integer.
+ */
+export async function upsertTenantTier(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  installationId: number,
+  tier: string,
+  nowIso: string,
+): Promise<{ ok: boolean }> {
+  if (!env.SIGILIX_PLATFORM_DB) return { ok: false }
+  if (!Number.isInteger(installationId) || installationId <= 0) return { ok: false }
+  try {
+    await env.SIGILIX_PLATFORM_DB.prepare(
+      "INSERT INTO tenant (installation_id, tier, created_at, updated_at)" +
+        " VALUES (?, ?, ?, ?)" +
+        " ON CONFLICT(installation_id) DO UPDATE SET tier = excluded.tier, updated_at = excluded.updated_at",
+    )
+      .bind(installationId, tier, nowIso, nowIso)
+      .run()
+    return { ok: true }
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "d1-tenant-tier-upsert-failed",
+        installationId,
+        tier,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return { ok: false }
+  }
+}
+
+/**
  * Look up the repo_id + installation_id for a GitHub `owner/repo` full name.
  * Returns null when the platform DB binding is absent, the repo has no row
  * yet (a benign race — the PR webhook upserts this table asynchronously, so

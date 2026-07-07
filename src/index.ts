@@ -117,6 +117,7 @@ import {
 // re-exported below so no importer or test path changes.
 import { handleGitHubWebhook } from "@/src/index-github-webhook"
 import { handleGitLabWebhook } from "@/src/index-gitlab-webhook"
+import { handleStripeWebhookRoute } from "@/src/features/billing"
 import { handleLinearWebhook, handleManualTrigger } from "@/src/index-webhooks"
 import { dispatchJob } from "@/src/index-dispatch"
 import { handleSlackRequest } from "@/src/index-slack-webhook"
@@ -455,6 +456,14 @@ export default {
     // shared review-trigger decision, and enqueues a `gitlab-mr-review` job.
     if (request.method === "POST" && url.pathname === "/gitlab/webhook") {
       return handleGitLabWebhook(request, env, ctx)
+    }
+
+    // SIG-41 (Stripe paid tier): Stripe subscription webhooks → tenant.tier. Verifies
+    // the Stripe-Signature (async Web Crypto HMAC) over the raw body; UPSERTs the
+    // installation's plan tier on subscription changes. Inert (503) until
+    // SIGILIX_STRIPE_WEBHOOK_SECRET is set.
+    if (request.method === "POST" && url.pathname === "/stripe/webhook") {
+      return handleStripeWebhookRoute(request, env)
     }
 
     // SIG-196: Sigilix Slack agent routes (dark behind SIGILIX_SLACK_MODE).

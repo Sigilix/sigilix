@@ -6,7 +6,11 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
-import { upsertTenantAndRepo, readTenantConfig } from "@/src/features/tenancy/adapters/d1-tenant-store"
+import {
+  upsertTenantAndRepo,
+  upsertTenantTier,
+  readTenantConfig,
+} from "@/src/features/tenancy/adapters/d1-tenant-store"
 import type { Env } from "@/src/shared/types/env"
 
 const MIGRATION_SQL = readFileSync(
@@ -260,5 +264,54 @@ describe("readTenantConfig", () => {
 
   it("thrown query — returns null without throwing (fail-open)", async () => {
     await expect(readTenantConfig({ SIGILIX_PLATFORM_DB: makeBrokenDb() }, 1)).resolves.toBeNull()
+  })
+})
+
+describe("upsertTenantTier", () => {
+  let db: D1Database
+  beforeEach(async () => {
+    db = makeD1()
+    await db.exec(MIGRATION_SQL)
+  })
+
+  it("inserts a new tenant row with the tier", async () => {
+    const res = await upsertTenantTier(makeEnv(db), 5, "pro", "2026-01-01T00:00:00Z")
+    expect(res).toEqual({ ok: true })
+    const row = await db.prepare("SELECT tier FROM tenant WHERE installation_id = ?").bind(5).first<{ tier: string }>()
+    expect(row?.tier).toBe("pro")
+  })
+
+  it("updates the tier of an existing tenant, leaving other columns intact", async () => {
+    await upsertTenantAndRepo(makeEnv(db), {
+      installationId: 6,
+      repoId: 600,
+      fullName: "acme/x",
+      nowIso: "2026-01-01T00:00:00Z",
+      accountLogin: "acme",
+    })
+    const res = await upsertTenantTier(makeEnv(db), 6, "max", "2026-02-02T00:00:00Z")
+    expect(res).toEqual({ ok: true })
+    const row = await db
+      .prepare("SELECT tier, account_login FROM tenant WHERE installation_id = ?")
+      .bind(6)
+      .first<{ tier: string; account_login: string }>()
+    expect(row).toEqual({ tier: "max", account_login: "acme" })
+  })
+
+  it("returns {ok:false} (never throws) on an absent binding", async () => {
+    await expect(upsertTenantTier(makeAbsentEnv(), 7, "pro", "2026-01-01T00:00:00Z")).resolves.toEqual({ ok: false })
+  })
+
+  it("returns {ok:false} for a non-positive / non-integer installation id", async () => {
+    await expect(upsertTenantTier(makeEnv(db), 0, "pro", "2026-01-01T00:00:00Z")).resolves.toEqual({ ok: false })
+    await expect(upsertTenantTier(makeEnv(db), 1.5, "pro", "2026-01-01T00:00:00Z")).resolves.toEqual({ ok: false })
+  })
+
+  it("returns {ok:false} on a genuine D1 fault (so the caller can surface a retry)", async () => {
+    await expect(
+      upsertTenantTier({ SIGILIX_PLATFORM_DB: makeBrokenDb() }, 8, "pro", "2026-01-01T00:00:00Z"),
+    ).resolves.toEqual({
+      ok: false,
+    })
   })
 })

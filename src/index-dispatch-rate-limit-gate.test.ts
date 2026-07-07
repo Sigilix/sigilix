@@ -19,6 +19,14 @@ vi.mock("@/src/features/tenancy", async (importActual) => {
   return { ...(actual as object), checkRateLimit: checkRateLimitMock }
 })
 
+const { readInstallationPlanMock } = vi.hoisted(() => ({
+  readInstallationPlanMock: vi.fn<() => Promise<string | null>>(),
+}))
+vi.mock("@/src/features/entitlements", async (importActual) => {
+  const actual = await importActual()
+  return { ...(actual as object), readInstallationPlan: readInstallationPlanMock }
+})
+
 // NOTE: vi.mock for @/src/shared/adapters/github/github-app is omitted intentionally.
 // Instead, makeEnv() provides a KV stub whose get() returns a pre-cached token so
 // the real getInstallationToken short-circuits the cache path without any HTTP call.
@@ -108,6 +116,9 @@ let warnSpy: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
   checkRateLimitMock.mockClear()
+  readInstallationPlanMock.mockClear()
+  // Default: the tenant has no plan row yet (null) unless a test overrides it.
+  readInstallationPlanMock.mockResolvedValue(null)
   createIssueCommentMock.mockClear()
   attachExistingCheckRunMock.mockClear()
   completeCheckRunMock.mockClear()
@@ -204,5 +215,33 @@ describe("runRateLimitGate", () => {
     expect(result.skipped).toBe(false)
     const events = warnEvents()
     expect(events.some((e) => e["event"] === "rate-limit-comment-failed")).toBe(true)
+  })
+
+  it("threads the installation's tier from readInstallationPlan into checkRateLimit", async () => {
+    // Regression: the gate must pass the tenant's real tier so an `ultra` org is
+    // NOT free-capped at 2 by resolveRateLimitCap(undefined).
+    readInstallationPlanMock.mockResolvedValue("ultra")
+    checkRateLimitMock.mockResolvedValue(allowed())
+
+    await runRateLimitGate(makeEnv(), makeArgs({ installationId: 42 }))
+
+    expect(readInstallationPlanMock).toHaveBeenCalledWith(expect.anything(), 42)
+    expect(checkRateLimitMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tier: "ultra", installationId: 42 }),
+    )
+  })
+
+  it("fails open on a tier-read fault → tier null (free cap) + rate-limit-tier-read-failed warn", async () => {
+    // readInstallationPlan THROWS on a D1 fault; the gate must swallow it, warn, and
+    // fall back to the default (free) cap rather than block or widen the cap silently.
+    readInstallationPlanMock.mockRejectedValue(new Error("d1 down"))
+    checkRateLimitMock.mockResolvedValue(allowed())
+
+    await runRateLimitGate(makeEnv(), makeArgs())
+
+    expect(checkRateLimitMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tier: null }))
+    const events = warnEvents()
+    expect(events.some((e) => e["event"] === "rate-limit-tier-read-failed")).toBe(true)
   })
 })

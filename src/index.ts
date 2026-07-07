@@ -470,6 +470,9 @@ export default {
     // here, every response wrapped with withPortalCors (never a `*` origin).
     // These are dual-authed (session cookie OR bearer api key); see each route.
     const isPortalCorsPath =
+      // sig-portal-bugs: the portal logs out cross-origin with credentials; its
+      // preflight (and the POST's CORS grant, applied in auth-routes.ts) run here.
+      url.pathname === "/auth/logout" ||
       url.pathname === "/v1/keys" ||
       url.pathname.startsWith("/v1/keys/") ||
       url.pathname === "/v1/onboarding" ||

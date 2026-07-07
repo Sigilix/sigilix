@@ -60,8 +60,13 @@ export async function handleAuthRoutes(
     return withPortalCors(request, await handleAuthMeRoute(request, env, ctx), env)
   }
   if (method === "POST" && pathname === "/auth/logout") {
+    // sig-portal-bugs: the portal (app.sigilix.ai) calls this cross-origin with
+    // `credentials: "include"`. Without the CORS-with-credentials grant the
+    // browser blocks the response AND drops its Set-Cookie, so logout silently
+    // does nothing. Wrap it (the OPTIONS preflight is handled in index.ts, which
+    // lists /auth/logout as a portal-CORS path).
     const sessionId = readCookie(request, SESSION_COOKIE_NAME)
-    return handleLogout(request, env, sessionId)
+    return withPortalCors(request, await handleLogout(request, env, sessionId), env)
   }
   // #155 onboarding-backend FOUNDATION (slice 1 of 2): the GitHub App Setup
   // URL handler + the install-redirect kickoff that mints its CSRF nonce.

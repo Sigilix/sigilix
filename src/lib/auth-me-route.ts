@@ -10,7 +10,7 @@
 // session-lookup failure (no cookie / expired session) returns 401.
 
 import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
-import { decryptAccessToken } from "@/src/lib/auth-session"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { resolveUserRole, type UserRole } from "@/src/lib/resolve-user-role"
 import type { Env } from "@/src/shared/types/env"
 
@@ -25,11 +25,15 @@ async function resolveRoleFailSafe(authed: AuthedSession, env: Env): Promise<Use
       console.error(JSON.stringify({ event: "auth-me-role-encryption-key-missing" }))
       return "member"
     }
-    const accessToken = await decryptAccessToken(
-      { encryptedAccessToken: authed.record.encryptedAccessToken, iv: authed.record.iv },
-      authed.sessionId,
-      env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-    )
+    // sig-portal-bugs: refresh the (short-lived) GitHub App user token before
+    // deriving the role — a stale token 401s /user/memberships/orgs and would
+    // silently downgrade an org owner to "member".
+    const accessToken = await getValidGithubToken({
+      env,
+      sessionId: authed.sessionId,
+      record: authed.record,
+      encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+    })
     return await resolveUserRole(accessToken, authed.record.login)
   } catch (error) {
     // Never log the token itself — only the fact that role derivation failed.

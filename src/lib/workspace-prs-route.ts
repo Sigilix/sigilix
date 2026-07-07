@@ -47,7 +47,7 @@
 // preferable to silently mis-scoping a query.
 
 import { requireSession } from "@/src/lib/auth-middleware"
-import { decryptAccessToken } from "@/src/lib/auth-session"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { readRecentWorkspacePrs, collapseWorkspacePrs, type WorkspacePrSummary } from "@/src/features/tenancy"
 import { resolveGithubAuthors } from "@/src/shared/adapters/github/resolve-authors"
@@ -149,11 +149,15 @@ export async function handleWorkspacePrsRoute(request: Request, env: Env, ctx?: 
 
     let token: string
     try {
-      token = await decryptAccessToken(
-        { encryptedAccessToken: authed.record.encryptedAccessToken, iv: authed.record.iv },
-        authed.sessionId,
-        env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-      )
+      // sig-portal-bugs: refresh the short-lived GitHub App user token before
+      // listing installations — a stale token 401s /user/installations and the
+      // feed silently scopes to [] (an empty "No reviews yet" panel).
+      token = await getValidGithubToken({
+        env,
+        sessionId: authed.sessionId,
+        record: authed.record,
+        encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+      })
     } catch (error) {
       // Never log the token itself — only the fact that decryption failed.
       console.error(

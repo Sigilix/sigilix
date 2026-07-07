@@ -1,6 +1,7 @@
 // SIG-545 — the Pyroeis gateway route: auth gating (503/401) BEFORE any GCP call, model
-// forcing (Gemma 4 26B), daily metering, and response/stream/tool_calls passthrough. Plus
-// a regression guard that the shared refactor did NOT swap the two routes' forced models.
+// forcing (Gemini 3.5 Flash, env-overridable via SIGILIX_PYROEIS_MODEL), daily metering,
+// and response/stream/tool_calls passthrough. Plus a regression guard that the shared
+// refactor did NOT swap the two routes' forced models.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { handlePyroeisApiRoute } from "@/src/lib/boreas-gateway/api-pyroeis-route"
@@ -12,7 +13,7 @@ import {
   GENERATE_ACCESS_TOKEN_URL,
   VERTEX_CHAT_COMPLETIONS_URL,
   VERTEX_MODEL,
-  PYROEIS_MODEL,
+  DEFAULT_PYROEIS_MODEL,
 } from "@/src/lib/boreas-gateway/constants"
 import { makeEnv, makeCtx } from "@/src/lib/boreas-gateway/boreas-gateway.test-helpers"
 
@@ -109,7 +110,7 @@ describe("handlePyroeisApiRoute — auth gating", () => {
 })
 
 describe("handlePyroeisApiRoute — proxy", () => {
-  it("forces the Gemma model id, passes the Vertex response through, and meters its own counter", async () => {
+  it("forces the default Pyroeis (Gemini) model id, passes the Vertex response through, and meters its own counter", async () => {
     const f = stubFullChain()
     const store = new Map<string, string>()
     const env = makeEnv({ OPENCLAW_SIGILIX_API_KEY: KEY, OPENCLAW_GATEWAY_ISSUER: ISSUER }, store)
@@ -130,8 +131,8 @@ describe("handlePyroeisApiRoute — proxy", () => {
     expect(vertexCall).toBeDefined()
     const init = vertexCall![1] as RequestInit
     const sent = JSON.parse(init.body as string) as { model?: string }
-    expect(sent.model).toBe(PYROEIS_MODEL)
-    expect(sent.model).toBe("google/gemma-4-26b-a4b-it-maas")
+    expect(sent.model).toBe(DEFAULT_PYROEIS_MODEL)
+    expect(sent.model).toBe("google/gemini-3.5-flash")
     expect(sent.model).not.toBe("attacker/chosen-model")
     expect(sent.model).not.toBe(VERTEX_MODEL) // NOT the Boreas (qwen) model
     // Authorization is the minted SA token, not the caller's bearer.
@@ -141,6 +142,42 @@ describe("handlePyroeisApiRoute — proxy", () => {
     const day = new Date().toISOString().slice(0, 10)
     expect(await store.get(`pyroeis:count:${day}`)).toBe("1")
     expect(await store.get(`boreas:count:${day}`)).toBeUndefined()
+  })
+
+  it("SIGILIX_PYROEIS_MODEL overrides the default Gemini id in the forwarded Vertex request", async () => {
+    const f = stubFullChain()
+    const override = "google/gemini-3.5-flash-001" // e.g. a pinned version string
+    const env = makeEnv({
+      OPENCLAW_SIGILIX_API_KEY: KEY,
+      OPENCLAW_GATEWAY_ISSUER: ISSUER,
+      SIGILIX_PYROEIS_MODEL: override,
+    })
+    const { ctx } = makeCtx()
+
+    const res = await handlePyroeisApiRoute(post({ messages: [] }, `Bearer ${KEY}`), env, ctx)
+    expect(res.status).toBe(200)
+
+    const vertexCall = f.mock.calls.find((c) => String(c[0]) === VERTEX_CHAT_COMPLETIONS_URL)
+    const sent = JSON.parse((vertexCall![1] as RequestInit).body as string) as { model?: string }
+    expect(sent.model).toBe(override)
+    expect(sent.model).not.toBe(DEFAULT_PYROEIS_MODEL) // env override wins over the built-in default
+  })
+
+  it("a blank/whitespace SIGILIX_PYROEIS_MODEL falls back to the built-in default", async () => {
+    const f = stubFullChain()
+    const env = makeEnv({
+      OPENCLAW_SIGILIX_API_KEY: KEY,
+      OPENCLAW_GATEWAY_ISSUER: ISSUER,
+      SIGILIX_PYROEIS_MODEL: "   ",
+    })
+    const { ctx } = makeCtx()
+
+    const res = await handlePyroeisApiRoute(post({ messages: [] }, `Bearer ${KEY}`), env, ctx)
+    expect(res.status).toBe(200)
+
+    const vertexCall = f.mock.calls.find((c) => String(c[0]) === VERTEX_CHAT_COMPLETIONS_URL)
+    const sent = JSON.parse((vertexCall![1] as RequestInit).body as string) as { model?: string }
+    expect(sent.model).toBe(DEFAULT_PYROEIS_MODEL)
   })
 
   it("passes a streamed (SSE) Vertex response through transparently", async () => {
@@ -212,7 +249,7 @@ describe("handlePyroeisApiRoute — proxy", () => {
 })
 
 describe("regression — the shared refactor did NOT swap the two routes' models", () => {
-  it("the Boreas route still forces the qwen model (not the Gemma/Pyroeis one)", async () => {
+  it("the Boreas route still forces the qwen model (not the Pyroeis/Gemini one)", async () => {
     const f = stubFullChain()
     const env = makeEnv({ OPENCLAW_SIGILIX_API_KEY: KEY, OPENCLAW_GATEWAY_ISSUER: ISSUER })
     const { ctx } = makeCtx()
@@ -233,12 +270,12 @@ describe("regression — the shared refactor did NOT swap the two routes' models
     const sent = JSON.parse((vertexCall![1] as RequestInit).body as string) as { model?: string }
     expect(sent.model).toBe(VERTEX_MODEL)
     expect(sent.model).toBe("qwen/qwen3-next-80b-a3b-instruct-maas")
-    expect(sent.model).not.toBe(PYROEIS_MODEL) // the refactor didn't swap them
+    expect(sent.model).not.toBe(DEFAULT_PYROEIS_MODEL) // the refactor didn't swap them
   })
 
   it("the two forced model constants are distinct", () => {
-    expect(VERTEX_MODEL).not.toBe(PYROEIS_MODEL)
-    expect(PYROEIS_MODEL).toBe("google/gemma-4-26b-a4b-it-maas")
+    expect(VERTEX_MODEL).not.toBe(DEFAULT_PYROEIS_MODEL)
+    expect(DEFAULT_PYROEIS_MODEL).toBe("google/gemini-3.5-flash")
     expect(VERTEX_MODEL).toBe("qwen/qwen3-next-80b-a3b-instruct-maas")
   })
 })

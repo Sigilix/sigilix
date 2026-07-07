@@ -371,7 +371,7 @@ describe("model-gateway failover chain — #158", () => {
       OPENCLAW_SIGILIX_API_KEY: KEY,
       OPENCLAW_GATEWAY_ISSUER: ISSUER,
       OLLAMA_API_KEY: OLLAMA_KEY,
-      OPENCLAW_PYROEIS_FALLBACK_TURBO_MODEL: "some-gemma-tag:cloud",
+      OPENCLAW_PYROEIS_FALLBACK_TURBO_MODEL: "some-pyroeis-fallback:cloud",
     })
     const { ctx } = makeCtx()
 
@@ -385,7 +385,7 @@ describe("model-gateway failover chain — #158", () => {
     expect(res.headers.get("x-sigilix-served-by")).toBe("turbo")
     const turboCall = f.mock.calls.find((c) => String(c[0]) === OLLAMA_TURBO_CHAT_COMPLETIONS_URL)
     const sentBody = JSON.parse((turboCall![1] as RequestInit).body as string) as { model?: string }
-    expect(sentBody.model).toBe("some-gemma-tag:cloud")
+    expect(sentBody.model).toBe("some-pyroeis-fallback:cloud")
   })
 
   it("Astraeus uses glm-5.2:cloud as its built-in Turbo fallback default", async () => {

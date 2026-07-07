@@ -309,8 +309,9 @@ export default {
     }
 
     // SIG-545: Pyroeis CLI gateway — same keyless-WIF Vertex proxy as Boreas above,
-    // forcing a different model (Gemma 4 26B serverless MaaS). Same 503-until-configured
-    // + static-bearer auth + server-side SA-token mint + model forcing.
+    // forcing a different model (Gemini 3.5 Flash on Vertex AI, env-overridable via
+    // SIGILIX_PYROEIS_MODEL). Same 503-until-configured + static-bearer auth +
+    // server-side SA-token mint + model forcing.
     if (request.method === "POST" && url.pathname === "/v1/pyroeis/chat/completions") {
       return handlePyroeisApiRoute(request, env, ctx)
     }
@@ -469,6 +470,9 @@ export default {
     // here, every response wrapped with withPortalCors (never a `*` origin).
     // These are dual-authed (session cookie OR bearer api key); see each route.
     const isPortalCorsPath =
+      // sig-portal-bugs: the portal logs out cross-origin with credentials; its
+      // preflight (and the POST's CORS grant, applied in auth-routes.ts) run here.
+      url.pathname === "/auth/logout" ||
       url.pathname === "/v1/keys" ||
       url.pathname.startsWith("/v1/keys/") ||
       url.pathname === "/v1/onboarding" ||

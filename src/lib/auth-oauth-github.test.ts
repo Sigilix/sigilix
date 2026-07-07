@@ -485,8 +485,10 @@ describe("handleLogout", () => {
       }),
     })
     const res = await handleLogout(new Request("https://app.sigilix.ai/auth/logout"), env(kv), "abc")
-    expect(res.status).toBe(302)
-    expect(res.headers.get("location")).toBe("/")
+    // 204 (not a 302): the portal calls logout cross-origin via fetch and owns
+    // its own navigation — a redirect would reject the credentialed fetch.
+    expect(res.status).toBe(204)
+    expect(res.headers.get("location")).toBeNull()
     expect(kv.delete).toHaveBeenCalledWith("auth_session:abc")
     const cookie = res.headers.get("set-cookie")!
     expect(cookie).toContain("__Host-sigilix_session=")
@@ -496,8 +498,7 @@ describe("handleLogout", () => {
   it("succeeds even when no session id present", async () => {
     const kv = makeKV()
     const res = await handleLogout(new Request("https://app.sigilix.ai/auth/logout"), env(kv), null)
-    expect(res.status).toBe(302)
-    expect(res.headers.get("location")).toBe("/")
+    expect(res.status).toBe(204)
     expect(kv.delete).not.toHaveBeenCalled()
   })
 })

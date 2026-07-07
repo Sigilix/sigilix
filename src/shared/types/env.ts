@@ -533,6 +533,16 @@ export interface Env {
   // (`pyroeis:count:<YYYY-MM-DD>`), unset → a built-in default, 429 once the day hits it.
   OPENCLAW_PYROEIS_DAILY_LIMIT?: string
 
+  // Forced Vertex model id for the Pyroeis route (POST /v1/pyroeis/chat/completions).
+  // Overrides the built-in DEFAULT_PYROEIS_MODEL (Gemini 3.5 Flash on Vertex AI —
+  // `google/gemini-3.5-flash`, served over the same OpenAI-compat chat/completions
+  // endpoint as the other legs, so no request/response adapter). Trimmed; blank → the
+  // built-in default. Exists because the exact Gemini 3.5 Flash version string (e.g. a
+  // `-001`/date suffix) can't be confirmed without live Vertex, so correcting it is a
+  // config flip, not a code change. Unlike Boreas/Astraeus (hard-pinned constants), the
+  // Pyroeis model is env-overridable for exactly this reason.
+  SIGILIX_PYROEIS_MODEL?: string
+
   // SIG-545: coarse daily request ceiling for POST /v1/astraeus/chat/completions. Same
   // shape as OPENCLAW_BOREAS_DAILY_LIMIT above — a global KV counter
   // (`astraeus:count:<YYYY-MM-DD>`), unset → a built-in default, 429 once the day hits it.
@@ -546,8 +556,8 @@ export interface Env {
   // be configured; the leg is skipped (not attempted) without it.
   OPENCLAW_BOREAS_FALLBACK_TURBO_MODEL?: string
   // Same shape as OPENCLAW_BOREAS_FALLBACK_TURBO_MODEL above. NO built-in
-  // default -- Pyroeis's Vertex model (Gemma 4 26B) has no confirmed Ollama
-  // Turbo tag in this codebase, so guessing one risks a silent wrong-model
+  // default -- Pyroeis's Vertex model (Gemini 3.5 Flash) is Vertex-only, with no
+  // Gemini tag on Ollama Turbo, so guessing one risks a silent wrong-model
   // swap. Unset -> Pyroeis has no Turbo leg; a Vertex failure surfaces
   // directly (or falls to Bedrock, once configured).
   OPENCLAW_PYROEIS_FALLBACK_TURBO_MODEL?: string

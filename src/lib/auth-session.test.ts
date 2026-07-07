@@ -317,12 +317,18 @@ describe("cookie helpers", () => {
     expect(c).not.toContain("Domain=")
   })
 
-  it("clearSessionCookie sets Max-Age=0 with the same locked attributes", () => {
+  it("clearSessionCookie sets Max-Age=0 and mirrors setSessionCookie's SameSite=None", () => {
     const c = clearSessionCookie()
     expect(c).toContain("__Host-sigilix_session=")
     expect(c).toContain("Max-Age=0")
     expect(c).toContain("HttpOnly")
     expect(c).toContain("Secure")
+    // sig-relogin-session-fix: the deletion cookie must mirror how the session
+    // cookie is SET (SameSite=None) so it's an unambiguous overwrite when emitted
+    // from the cross-origin logout fetch — otherwise a same-tab logout can leave a
+    // stale session cookie that a fresh incognito tab never has.
+    expect(c).toContain("SameSite=None")
+    expect(c).not.toContain("SameSite=Lax")
   })
 
   it("remember me ON (default) → persistent 30-day cookie with all secure flags", () => {
@@ -357,9 +363,12 @@ describe("cookie helpers", () => {
     expect(c).toContain("Max-Age=600")
   })
 
-  it("clearStateCookie zeroes the state cookie", () => {
+  it("clearStateCookie zeroes the state cookie with SameSite=None for cross-origin clearing", () => {
     const c = clearStateCookie()
     expect(c).toContain("__Host-sigilix_oauth_state=")
     expect(c).toContain("Max-Age=0")
+    // sig-relogin-session-fix: cleared with SameSite=None so it's reliably applied
+    // even when emitted from the cross-origin logout fetch.
+    expect(c).toContain("SameSite=None")
   })
 })

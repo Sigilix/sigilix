@@ -552,8 +552,15 @@ export async function handleLogout(_request: Request, _env: AuthOauthEnv, sessio
   // the clear-cookie lets the browser drop the session cookie and the fetch
   // resolve cleanly. The caller wraps this with withPortalCors so the
   // credentialed response is actually accepted (see auth-routes.ts).
-  return new Response(null, {
-    status: 204,
-    headers: { "set-cookie": clearSessionCookie() },
-  })
+  //
+  // sig-relogin-session-fix: clear BOTH the session cookie AND the OAuth state
+  // cookie. Previously only the session cookie was cleared, so a leftover state
+  // cookie (from an interrupted kickoff) could survive a same-tab logout into the
+  // next login round-trip and desync the callback's browser-binding check. Clearing
+  // both leaves a logged-out tab with the same clean cookie jar as a fresh
+  // incognito tab — so a same-tab logout→login behaves identically to incognito.
+  const headers = new Headers()
+  headers.append("set-cookie", clearSessionCookie())
+  headers.append("set-cookie", clearStateCookie())
+  return new Response(null, { status: 204, headers })
 }

@@ -547,6 +547,13 @@ describe("handleLogout", () => {
     const cookie = res.headers.get("set-cookie")!
     expect(cookie).toContain("__Host-sigilix_session=")
     expect(cookie).toContain("Max-Age=0")
+    // sig-relogin-session-fix: logout clears BOTH the session cookie AND the OAuth
+    // state cookie (with SameSite=None so the cross-origin logout fetch reliably
+    // applies them) — so a same-tab logout leaves the same clean cookie jar as a
+    // fresh incognito tab and the next login can't be desynced by a stale cookie.
+    expect(cookie).toContain("__Host-sigilix_oauth_state=")
+    expect(cookie).toContain("SameSite=None")
+    expect(cookie).not.toContain("SameSite=Lax")
   })
 
   it("succeeds even when no session id present", async () => {

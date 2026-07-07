@@ -6,9 +6,11 @@
 //   POST /linear/manual        manual triage trigger (dev/admin) — body: { issueId }
 //   POST /github/webhook       GitHub sends pull_request, workflow_run,
 //                              pull_request_review
+//   POST /gitlab/webhook       GitLab sends Merge Request Hook (MR review)
 //
 // HMAC verification on Linear uses LINEAR_WEBHOOK_SECRET. GitHub uses
-// GITHUB_WEBHOOK_SECRET (sha256= prefix).
+// GITHUB_WEBHOOK_SECRET (sha256= prefix). GitLab uses a plaintext
+// SIGILIX_GITLAB_WEBHOOK_SECRET echoed in the X-Gitlab-Token header.
 //
 // Long-running work (Ollama Turbo calls, 30-90s typical) runs in a
 // Cloudflare Queue consumer instead of `ctx.waitUntil()`. The 30-second
@@ -114,6 +116,7 @@ import {
 // class names against the entry module). Every previously-public symbol is
 // re-exported below so no importer or test path changes.
 import { handleGitHubWebhook } from "@/src/index-github-webhook"
+import { handleGitLabWebhook } from "@/src/index-gitlab-webhook"
 import { handleLinearWebhook, handleManualTrigger } from "@/src/index-webhooks"
 import { dispatchJob } from "@/src/index-dispatch"
 import { handleSlackRequest } from "@/src/index-slack-webhook"
@@ -445,6 +448,13 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/github/webhook") {
       return handleGitHubWebhook(request, env, ctx)
+    }
+
+    // sig-gitlab-adapter (GitLab support PR 2): GitLab Merge Request Hooks. The
+    // handler verifies the plaintext X-Gitlab-Token, maps the MR event onto the
+    // shared review-trigger decision, and enqueues a `gitlab-mr-review` job.
+    if (request.method === "POST" && url.pathname === "/gitlab/webhook") {
+      return handleGitLabWebhook(request, env, ctx)
     }
 
     // SIG-196: Sigilix Slack agent routes (dark behind SIGILIX_SLACK_MODE).

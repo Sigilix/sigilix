@@ -19,8 +19,8 @@ const wrangler = readRepo("wrangler.toml")
 const workflow = readRepo(".github/workflows/sigilix-runner.yml")
 
 // Worker side (wrangler.toml [vars]).
-const audienceVar = /OPENCLAW_RUNNER_OIDC_AUDIENCE\s*=\s*"([^"]+)"/.exec(wrangler)?.[1]
-const workflowRefVar = /OPENCLAW_RUNNER_WORKFLOW_REF\s*=\s*"([^"]+)"/.exec(wrangler)?.[1]
+const audienceVar = /SIGILIX_RUNNER_OIDC_AUDIENCE\s*=\s*"([^"]+)"/.exec(wrangler)?.[1]
+const workflowRefVar = /SIGILIX_RUNNER_WORKFLOW_REF\s*=\s*"([^"]+)"/.exec(wrangler)?.[1]
 // Caller side (the dogfood workflow). The `uses:` carries an `@<sha>` pin the
 // worker's WORKFLOW_REF does not (the provenance gate matches the path, not the
 // ref), so strip it before comparing.
@@ -34,18 +34,18 @@ const pathPart = (ref: string): string => ref.split("/").slice(2).join("/")
 
 describe("runner-evidence identity contract (wrangler.toml ↔ dogfood workflow)", () => {
   it("all four contract values are present in their files", () => {
-    expect(audienceVar, "OPENCLAW_RUNNER_OIDC_AUDIENCE in wrangler.toml").toBeTruthy()
-    expect(workflowRefVar, "OPENCLAW_RUNNER_WORKFLOW_REF in wrangler.toml").toBeTruthy()
+    expect(audienceVar, "SIGILIX_RUNNER_OIDC_AUDIENCE in wrangler.toml").toBeTruthy()
+    expect(workflowRefVar, "SIGILIX_RUNNER_WORKFLOW_REF in wrangler.toml").toBeTruthy()
     expect(usesPath, "jobs.evidence.uses in sigilix-runner.yml").toBeTruthy()
     expect(audienceInput, "oidc-audience input in sigilix-runner.yml").toBeTruthy()
   })
 
-  it("OPENCLAW_RUNNER_WORKFLOW_REF matches the workflow `uses:` path (the provenance gate's owner/repo + path rules)", () => {
+  it("SIGILIX_RUNNER_WORKFLOW_REF matches the workflow `uses:` path (the provenance gate's owner/repo + path rules)", () => {
     expect(ownerRepo(workflowRefVar!)).toBe(ownerRepo(usesPath!)) // case-insensitive
     expect(pathPart(workflowRefVar!)).toBe(pathPart(usesPath!)) // case-sensitive
   })
 
-  it("OPENCLAW_RUNNER_OIDC_AUDIENCE matches the workflow `oidc-audience` input exactly", () => {
+  it("SIGILIX_RUNNER_OIDC_AUDIENCE matches the workflow `oidc-audience` input exactly", () => {
     // The ingest route requires the token's `aud` (== this input) to equal the
     // configured audience byte-for-byte.
     expect(audienceVar).toBe(audienceInput)

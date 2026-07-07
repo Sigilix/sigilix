@@ -7,9 +7,10 @@
 // from the entry module.
 
 import type { Env } from "@/src/shared/types/env"
+import type { ScmReviewEventInput } from "@/src/lib/ensemble/ports"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
-import { verifyGitHubWebhook } from "@/src/shared/adapters/github/github-webhook-verify"
+import { selectScmProvider } from "@/src/index-scm-provider"
 import { readReviewManifest } from "@/src/lib/review-manifest"
 import { PROMPT_VERSION } from "@/src/prompts/pr-review"
 import {
@@ -32,7 +33,6 @@ import { postPrOverviewStubIfNeeded } from "@/src/lib/pr-overview-stub"
 import { handleInstallReposRemoved, handleInstallationDeleted } from "@/src/lib/index-delete"
 import {
   type GitHubWebhookPayload,
-  decidePullRequestJobs,
   queueGithubMention,
   handlePushEvent,
   dispatchReviewMemoryCapture,
@@ -51,11 +51,16 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
     return new Response("github app not configured\n", { status: 503 })
   }
 
+  // SCM seam: the review ingress (signature verify, the event→review-trigger
+  // decision, the per-installation client build) routes through the selected
+  // forge provider — GitHub delegates verbatim, so behavior is byte-identical.
+  const scm = selectScmProvider("github")
+
   const rawBody = await request.text()
   const sig = request.headers.get("x-hub-signature-256") ?? ""
   const event = request.headers.get("x-github-event") ?? ""
 
-  const verified = await verifyGitHubWebhook(rawBody, sig, env.GITHUB_WEBHOOK_SECRET)
+  const verified = await scm.verifyWebhook({ rawBody, signature: sig, secret: env.GITHUB_WEBHOOK_SECRET })
   if (!verified) {
     return new Response("invalid signature\n", { status: 401 })
   }
@@ -382,7 +387,7 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
       }
       return new Response("skip draft\n", { status: 200 })
     }
-    const decideArgs: Parameters<typeof decidePullRequestJobs>[0] = {
+    const decideArgs: ScmReviewEventInput = {
       action: action ?? "",
       draft: false,
       prBody: pr.body,
@@ -390,7 +395,7 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
     }
     if (pr.base?.ref) decideArgs.baseRef = pr.base.ref
     if (pr.head?.ref) decideArgs.headRef = pr.head.ref
-    const decision = decidePullRequestJobs(decideArgs)
+    const decision = scm.parseReviewEvent(decideArgs)
     // SIG-437: `@sigilix summary` gate + best-effort enqueue (default-off →
     // no-op), BEFORE the overview/review early return so a summary-only edit fires.
     maybeEnqueuePrSummary({ env, ctx, action, owner, repo, installationId, pr })
@@ -439,13 +444,7 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
     let webhookClient: GitHubClient | null = null
     if (decision.overview || decision.review) {
       try {
-        const token = await getInstallationToken({
-          kv: env.OPENCLAW_STATE,
-          appId: env.GITHUB_APP_ID,
-          privateKey: env.GITHUB_PRIVATE_KEY,
-          installationId,
-        })
-        webhookClient = new GitHubClient({ token })
+        webhookClient = await scm.buildReviewClient(env, installationId)
         webhookSigilixConfig = await loadSigilixConfig(webhookClient, owner, repo, headSha)
       } catch (err) {
         // Auth + config-load failures here are non-blocking: the

@@ -29,6 +29,19 @@ export type { GitHubPort } from "./github"
 
 export type { ReviewSinkPort } from "./review-sink"
 
+// SIG SCM abstraction: the forge-provider seam for the PR/MR review ingress
+// (webhook verify + event→trigger decision + per-installation client build),
+// plus the read/write client alias (`ScmReviewClient = GitHubPort &
+// ReviewSinkPort`). GitHub is the first implementation; GitLab is Phase-3.
+export type {
+  ScmProvider,
+  ScmProviderKind,
+  ScmReviewClient,
+  ScmReviewDecision,
+  ScmReviewEventInput,
+  ScmWebhookVerifyInput,
+} from "./scm"
+
 export type { RetrievalPort, RetrievedChunk, CorpusHit, MultiCorpusResult } from "./retrieval"
 
 export type { RunnerReceiptPort, RunnerEvidenceState } from "./runner-receipt"

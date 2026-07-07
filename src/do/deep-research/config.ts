@@ -38,12 +38,12 @@ const EFFORT_PRESETS: Record<
  *  (`chat` → `isOpenRouterModel`) dispatches to OpenRouter — so the SELECTED tier's
  *  real model does the actual research. astraeus = the flagship reasoning default
  *  (GLM-5.2), pyroeis = the mid-tier (Gemini 3.5 Flash, switched from GLM per #812),
- *  boreas = the cheap tier (gpt-oss-120b, which also serves classify/extract at every
+ *  boreas = the cheap tier (Qwen3-Next-80B, matching the gateway's forced Boreas model,
  *  tier). Each id is env-overridable via `SIGILIX_DEEPRESEARCH_<TIER>_MODEL` for a
  *  one-line flip. Ids verified present in the OpenRouter catalog
  *  (https://openrouter.ai/api/v1/models) on 2026-07-06. */
 export const TIER_MODELS: Record<ResearchTier, string> = {
-  boreas: "openai/gpt-oss-120b",
+  boreas: "qwen/qwen3-next-80b-a3b-instruct",
   pyroeis: "google/gemini-3.5-flash",
   astraeus: "z-ai/glm-5.2",
 }

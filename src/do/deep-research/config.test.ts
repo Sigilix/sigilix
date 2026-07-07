@@ -50,10 +50,10 @@ describe("deep-research tier models route through OpenRouter", () => {
     }
   })
 
-  it("defaults to the current tier models (GLM-5.2 / Gemini 3.5 Flash / gpt-oss-120b)", () => {
+  it("defaults to the current tier models (GLM-5.2 / Gemini 3.5 Flash / Qwen3-Next-80B)", () => {
     expect(TIER_MODELS.astraeus).toBe("z-ai/glm-5.2")
     expect(TIER_MODELS.pyroeis).toBe("google/gemini-3.5-flash")
-    expect(TIER_MODELS.boreas).toBe("openai/gpt-oss-120b")
+    expect(TIER_MODELS.boreas).toBe("qwen/qwen3-next-80b-a3b-instruct")
   })
 
   it("SIGILIX_DEEPRESEARCH_<TIER>_MODEL overrides the tier's heavy-role default", () => {

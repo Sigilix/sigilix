@@ -123,6 +123,7 @@ import { dispatchJob } from "@/src/index-dispatch"
 import { handleSlackRequest } from "@/src/index-slack-webhook"
 import { handleSlackInstall, handleSlackOAuthCallback, handleSlackInstalled } from "@/src/lib/slack/slack-install"
 import { handleLinearOAuthCallback, handleLinearInstall } from "@/src/lib/linear-agent-oauth"
+import { tryHandleGitLabConnectRoute, isGitLabConnectCorsPath } from "@/src/lib/gitlab-connect"
 
 // Re-export the relocated public symbols so the entry module's export
 // surface is byte-for-byte unchanged for every importer + test pin.
@@ -506,10 +507,18 @@ export default {
       // (write/query/extract, api-key-only) return before this block, so
       // adding /v1/memory here only affects the new GET/DELETE + their OPTIONS.
       url.pathname === "/v1/memory" ||
-      url.pathname.startsWith("/v1/memory/")
+      url.pathname.startsWith("/v1/memory/") ||
+      // sig-gitlab-connector: the portal's connect-flow project fetches
+      // (status / list / connect / disconnect) are cross-origin credentialed.
+      isGitLabConnectCorsPath(url.pathname)
     if (request.method === "OPTIONS" && isPortalCorsPath) {
       return handlePortalPreflight(request, env)
     }
+
+    // sig-gitlab-connector: the GitLab connect surface — OAuth round-trip
+    // (top-level 302s) + the portal project endpoints (CORS-wrapped internally).
+    const gitlabConnectResponse = await tryHandleGitLabConnectRoute(request, env, ctx, url)
+    if (gitlabConnectResponse) return gitlabConnectResponse
 
     // SIG-298: deep web research engine. Auth = session OR API key (handled in
     // the route). CORS'd via portal-cors (the SSE stream body passes through).

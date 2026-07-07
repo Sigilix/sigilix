@@ -101,6 +101,17 @@ export interface Env {
   SIGILIX_GITLAB_TOKEN?: string
   SIGILIX_GITLAB_BASE_URL?: string
   SIGILIX_GITLAB_ALLOWED_PROJECTS?: string
+  // sig-gitlab-connector: the GitLab OAuth APPLICATION credentials that power the
+  // portal's one-click "Connect GitLab" flow (SEPARATE from the read_user login
+  // OAuth). This app requests the broad `api` scope so the connect callback can
+  // list the user's projects, auto-create the MR webhook, and provision a
+  // project access token as the review credential. Registered redirect URI:
+  // `${OPENCLAW_BASE_URL}/gitlab/connect/callback`. Absent -> the connect routes
+  // 503 and the portal card shows "not configured" (the existing webhook-driven
+  // review path is unaffected). Self-managed instances authorize against
+  // SIGILIX_GITLAB_BASE_URL; gitlab.com is the default.
+  SIGILIX_GITLAB_OAUTH_CLIENT_ID?: string
+  SIGILIX_GITLAB_OAUTH_CLIENT_SECRET?: string
 
   // Phase 5 user-OAuth (ARC-163). Same GitHub App as GITHUB_APP_ID — its
   // OAuth credentials live on the App settings page next to the JWT

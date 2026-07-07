@@ -484,3 +484,27 @@ export type JobMessage =
   // posts a Linear agent `response` activity into that session instead of a plain
   // comment ack; absent (the assignee path) → the legacy comment ack.
   | { type: "linear-agent-run"; issueId: string; sessionId?: string }
+  // sig-gitlab-adapter (GitLab support PR 2): a GitLab Merge Request Hook passed
+  // the review-trigger decision and was enqueued for review. This is a DISTINCT
+  // job type from `pr-review` (which is GitHub-App-specific — installation
+  // tokens, check-runs, tenant/rate-limit keyed on GitHub ids). Keeping GitLab
+  // on its own discriminant means the GitHub `pr-review` queue + dispatch path
+  // (shadow-quota admission, DO dedup, App-token client build) stays untouched.
+  // PR-2 ships the ingress + provider + client; the CONSUMER that builds the
+  // GitLab review client via `GitLabScmProvider` and runs the SCM-agnostic
+  // ensemble is PR-3 (alongside the /auth/gitlab OAuth login). Until then the
+  // dispatch case logs + defers (recall-safe: there is no prior GitLab review
+  // capability being suppressed). `projectPath` is `path_with_namespace` (kept
+  // whole so nested groups survive); `projectId` is GitLab's numeric project id;
+  // `mrIid` is the per-project MR number.
+  | {
+      type: "gitlab-mr-review"
+      projectPath: string
+      projectId: number
+      mrIid: number
+      headSha: string
+      baseSha: string | null
+      sourceBranch: string
+      targetBranch: string
+      deliveryId: string | null
+    }

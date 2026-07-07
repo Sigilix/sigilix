@@ -78,6 +78,22 @@ export interface Env {
   GITHUB_PRIVATE_KEY?: string
   GITHUB_WEBHOOK_SECRET?: string
 
+  // sig-gitlab-adapter (GitLab support PR 2): the GitLab MR-review path. All
+  // optional — unset leaves `POST /gitlab/webhook` returning 503, so a deploy
+  // without GitLab configured is unaffected. Resolved SIGILIX_-first via the
+  // normalizeEnv shim like every other SIGILIX_ var.
+  //   - SIGILIX_GITLAB_WEBHOOK_SECRET — the value GitLab echoes VERBATIM in the
+  //     plaintext `X-Gitlab-Token` header; constant-time-compared on ingress.
+  //   - SIGILIX_GITLAB_TOKEN — the per-tenant GitLab access token (Project/Group
+  //     Access Token or PAT), sent as `PRIVATE-TOKEN` against REST v4. v0 is a
+  //     single global token; a per-tenant `projectId -> token` mapping (mirroring
+  //     GitHub installation -> token) is the pre-launch follow-up.
+  //   - SIGILIX_GITLAB_BASE_URL — REST origin WITHOUT `/api/v4` (default
+  //     `https://gitlab.com`); a self-managed instance sets its own origin.
+  SIGILIX_GITLAB_WEBHOOK_SECRET?: string
+  SIGILIX_GITLAB_TOKEN?: string
+  SIGILIX_GITLAB_BASE_URL?: string
+
   // Phase 5 user-OAuth (ARC-163). Same GitHub App as GITHUB_APP_ID — its
   // OAuth credentials live on the App settings page next to the JWT
   // private key. Only used to authenticate human users into the Sigilix

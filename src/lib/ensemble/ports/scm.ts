@@ -18,9 +18,9 @@ import type { Env } from "@/src/shared/types/env"
 import type { GitHubPort } from "./github"
 import type { ReviewSinkPort } from "./review-sink"
 
-/** Discriminant identifying which forge a provider speaks to. Only `"github"`
- *  exists today; a `"gitlab"` member is added when the second adapter lands. */
-export type ScmProviderKind = "github"
+/** Discriminant identifying which forge a provider speaks to. `"github"` is the
+ *  original; `"gitlab"` was added by the GitLab MR-review adapter (PR 2). */
+export type ScmProviderKind = "github" | "gitlab"
 
 /**
  * The read + write handle a single review run uses against the forge — the

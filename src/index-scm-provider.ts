@@ -25,6 +25,7 @@ import type { GitHubClient } from "@/src/shared/adapters/github"
 import { verifyGitHubWebhook } from "@/src/shared/adapters/github/github-webhook-verify"
 import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import { decidePullRequestJobs } from "@/src/index-internals"
+import { GITLAB_SCM_PROVIDER, GitLabScmProvider } from "@/src/index-gitlab-scm-provider"
 
 /**
  * GitHub `ScmProvider`. `buildReviewClient` returns the CONCRETE `GitHubClient`
@@ -57,14 +58,20 @@ const GITHUB_SCM_PROVIDER = new GitHubScmProvider()
 
 /**
  * Select the SCM provider for a delivery by its forge discriminant. Defaults to
- * GitHub — the only forge today; the GitLab branch is added when its adapter
- * lands. Returns the concrete `GitHubScmProvider` for `"github"` so the webhook
- * handler retains the concrete `GitHubClient` from `buildReviewClient`.
+ * GitHub. The `"github"` overload narrows the return to the concrete
+ * `GitHubScmProvider` so the GitHub webhook handler retains the concrete
+ * `GitHubClient` from `buildReviewClient`; the `"gitlab"` branch (GitLab support
+ * PR 2) returns the `GitLabScmProvider`.
  */
-export function selectScmProvider(kind: ScmProviderKind = "github"): GitHubScmProvider {
+export function selectScmProvider(kind?: "github"): GitHubScmProvider
+export function selectScmProvider(kind: "gitlab"): GitLabScmProvider
+export function selectScmProvider(kind: ScmProviderKind): ScmProvider
+export function selectScmProvider(kind: ScmProviderKind = "github"): ScmProvider {
   switch (kind) {
     case "github":
       return GITHUB_SCM_PROVIDER
+    case "gitlab":
+      return GITLAB_SCM_PROVIDER
     default: {
       const exhaustive: never = kind
       throw new Error(`unsupported SCM provider: ${String(exhaustive)}`)

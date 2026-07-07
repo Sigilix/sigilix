@@ -417,7 +417,15 @@ export function setSessionCookie(sessionId: string, remember = true): string {
 }
 
 export function clearSessionCookie(): string {
-  return [`${SESSION_COOKIE}=`, "Path=/", "HttpOnly", "Secure", "SameSite=Lax", "Max-Age=0"].join("; ")
+  // sig-relogin-session-fix: MUST mirror setSessionCookie's `SameSite=None`. The
+  // portal (a different ORIGIN) calls POST /auth/logout — and the account sweeps
+  // (delete-account / logout-everywhere) — over `fetch(..., {credentials:"include"})`.
+  // A deletion cookie whose SameSite differs from how the cookie was SET is not a
+  // reliable overwrite across browsers/topologies (localhost dev is genuinely
+  // cross-site); matching `SameSite=None; Secure` makes the clear an exact,
+  // unambiguous overwrite so a logged-out tab is left with the SAME clean cookie
+  // jar as a fresh incognito tab. The `__Host-` prefix still forces Secure/Path=/.
+  return [`${SESSION_COOKIE}=`, "Path=/", "HttpOnly", "Secure", "SameSite=None", "Max-Age=0"].join("; ")
 }
 
 export function setStateCookie(nonce: string): string {
@@ -425,7 +433,12 @@ export function setStateCookie(nonce: string): string {
 }
 
 export function clearStateCookie(): string {
-  return [`${STATE_COOKIE}=`, "Path=/", "HttpOnly", "Secure", "SameSite=Lax", "Max-Age=0"].join("; ")
+  // sig-relogin-session-fix: `SameSite=None` so this clear is reliably applied even
+  // when emitted from the cross-origin logout fetch (see clearSessionCookie). The
+  // state cookie is SET SameSite=Lax (it only ever rides top-level OAuth navigations),
+  // but for DELETION we want the widest, unambiguous overwrite so no stale OAuth
+  // state cookie survives a same-tab logout into the next login round-trip.
+  return [`${STATE_COOKIE}=`, "Path=/", "HttpOnly", "Secure", "SameSite=None", "Max-Age=0"].join("; ")
 }
 
 export const SESSION_COOKIE_NAME = SESSION_COOKIE

@@ -16,6 +16,8 @@
 
 import { requireSession } from "@/src/lib/auth-middleware"
 import { decryptAccessToken } from "@/src/lib/auth-session"
+import { connectUserKey } from "@/src/lib/gitlab-connect/gitlab-connect-oauth"
+import { getConnection, getUserConnectionIds } from "@/src/lib/gitlab-connect/gitlab-connect-store"
 import type { Env } from "@/src/shared/types/env"
 
 // Defensive pagination caps — mirrors auth-setup-route.ts's
@@ -68,6 +70,32 @@ export interface OnboardingContextInstallation {
 export interface OnboardingContextResponse {
   user: { login: string; name: string | null }
   installations: OnboardingContextInstallation[]
+  /** GitLab projects the caller has connected via the one-click connect flow
+   *  (sig-gitlab-connector). A GitLab-only user has NO GitHub App installation,
+   *  so `installations` is empty even though they're fully set up — the portal's
+   *  returning-user gate treats a positive count here as onboarding-complete so
+   *  they land in the app, not the wizard. Provider-agnostic: keyed by the
+   *  session's stable `connectUserKey`, so it covers GitLab-login users who have
+   *  no GitHub id (the profile store, keyed on github_user_id, can't). */
+  gitlabConnectionCount: number
+}
+
+/** Count the GitLab projects THIS user still owns — mirrors the ownership
+ *  filter in the connect-status handler so a stale index entry (a project since
+ *  taken over / disconnected) never inflates the count. Soft-fails to 0 (a KV
+ *  hiccup must never block the wizard nor falsely mark someone onboarded). */
+async function countOwnedGitLabConnections(env: Env, userId: string): Promise<number> {
+  try {
+    const ids = await getUserConnectionIds(env, userId)
+    let owned = 0
+    for (const id of ids) {
+      const conn = await getConnection(env, id)
+      if (conn && conn.userId === userId) owned++
+    }
+    return owned
+  } catch {
+    return 0
+  }
 }
 
 function githubHeaders(accessToken: string): HeadersInit {
@@ -202,9 +230,10 @@ export async function handleOnboardingContextRoute(
     return json({ error: "context_failed" }, 500)
   }
 
-  const [user, rawInstallations] = await Promise.all([
+  const [user, rawInstallations, gitlabConnectionCount] = await Promise.all([
     fetchGitHubUser(accessToken, authed.record.login),
     fetchInstallations(accessToken),
+    countOwnedGitLabConnections(env, connectUserKey(authed.record)),
   ])
 
   const installations: OnboardingContextInstallation[] = []
@@ -218,6 +247,6 @@ export async function handleOnboardingContextRoute(
     })
   }
 
-  const body: OnboardingContextResponse = { user, installations }
+  const body: OnboardingContextResponse = { user, installations, gitlabConnectionCount }
   return json(body, 200)
 }

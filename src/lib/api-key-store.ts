@@ -115,6 +115,33 @@ export async function listApiKeysByCreator(db: D1Database, createdBy: string): P
 }
 
 /**
+ * Every installation `githubUserId` is linked to via account_tenant, newest
+ * link first. Used by the CLI-login flow (cli-login-route.ts) to pick the
+ * installation a browser-authorized CLI key is minted against — the same
+ * account_tenant trust link `/setup` writes and `isLinkedToInstallation`
+ * checks. FAILS SOFT — a D1 error yields an empty list, which the caller
+ * treats as "no linked installation" (a clean refuse-to-mint, never a mint
+ * against an unverified installation).
+ */
+export async function getInstallationsForUser(db: D1Database, githubUserId: string): Promise<number[]> {
+  try {
+    const { results } = await db
+      .prepare("SELECT installation_id FROM account_tenant WHERE github_user_id = ? ORDER BY created_at DESC")
+      .bind(githubUserId)
+      .all<{ installation_id: number }>()
+    return (results ?? []).map((row) => row.installation_id)
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "api-key-store-installations-for-user-d1-error",
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return []
+  }
+}
+
+/**
  * Link a GitHub user to an installation (idempotent — a re-run of /setup for
  * an already-linked user is a no-op, not a constraint error).
  */

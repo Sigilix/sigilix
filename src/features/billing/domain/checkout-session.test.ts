@@ -1,6 +1,7 @@
 // sig-stripe-checkout: the PURE checkout builder/validator contract. These pin the
-// security-critical invariants (14-day trial, the installation as client_reference_id,
-// per-tier seat bounds) in isolation so a regression is a red unit test, not a prod bug.
+// security-critical invariants (the Pro-only 14-day trial, the installation as
+// client_reference_id, per-tier seat bounds) in isolation so a regression is a red
+// unit test, not a prod bug.
 
 import { describe, expect, it } from "vitest"
 import {
@@ -9,6 +10,7 @@ import {
   validateCheckoutRequest,
   resolvePriceForTier,
   buildCheckoutForm,
+  trialDaysForTier,
 } from "@/src/features/billing/domain/checkout-session"
 
 describe("isPaidTier", () => {
@@ -76,19 +78,59 @@ describe("resolvePriceForTier", () => {
   })
 })
 
+describe("trialDaysForTier — the Pro-only trial gate", () => {
+  it("grants a 14-day trial for pro ONLY", () => {
+    expect(trialDaysForTier("pro")).toBe(14)
+  })
+
+  it("grants NO trial (0 days) for teams / max / ultra", () => {
+    for (const tier of ["teams", "max", "ultra"] as const) {
+      expect(trialDaysForTier(tier)).toBe(0)
+    }
+  })
+})
+
 describe("buildCheckoutForm — the Stripe form fields", () => {
   const form = buildCheckoutForm({
     priceId: "price_teams",
     seats: 12,
     bounds: SEAT_BOUNDS.teams,
+    tier: "teams",
     installationId: 987654,
     customerId: "cus_ABC",
     successUrl: "https://app.sigilix.ai/org?checkout=success",
     cancelUrl: "https://app.sigilix.ai/org?checkout=cancel",
   })
 
-  it("always sets a 14-day trial", () => {
-    expect(form.get("subscription_data[trial_period_days]")).toBe("14")
+  it("sets a 14-day trial for PRO only", () => {
+    const proForm = buildCheckoutForm({
+      priceId: "price_pro",
+      seats: 1,
+      bounds: SEAT_BOUNDS.pro,
+      tier: "pro",
+      installationId: 987654,
+      customerId: "cus_ABC",
+      successUrl: "https://app.sigilix.ai/org?checkout=success",
+      cancelUrl: "https://app.sigilix.ai/org?checkout=cancel",
+    })
+    expect(proForm.get("subscription_data[trial_period_days]")).toBe("14")
+  })
+
+  it("sets NO trial for teams / max / ultra (immediate paid subscription)", () => {
+    for (const tier of ["teams", "max", "ultra"] as const) {
+      const f = buildCheckoutForm({
+        priceId: `price_${tier}`,
+        seats: SEAT_BOUNDS[tier].min,
+        bounds: SEAT_BOUNDS[tier],
+        tier,
+        installationId: 987654,
+        customerId: "cus_ABC",
+        successUrl: "https://app.sigilix.ai/org?checkout=success",
+        cancelUrl: "https://app.sigilix.ai/org?checkout=cancel",
+      })
+      expect(f.has("subscription_data[trial_period_days]")).toBe(false)
+      expect(f.get("subscription_data[trial_period_days]")).toBeNull()
+    }
   })
 
   it("sets client_reference_id AND subscription metadata to the installation id", () => {

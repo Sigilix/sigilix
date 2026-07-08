@@ -187,7 +187,7 @@ describe("POST /v1/billing/checkout", () => {
     expect(captured.checkoutBody).toBeUndefined()
   })
 
-  it("builds a Checkout Session with trial=14 + client_reference_id from the SESSION, not the body", async () => {
+  it("builds a Checkout Session with client_reference_id from the SESSION, not the body (teams, no trial)", async () => {
     const { kv } = makeKV()
     await seedSession(kv, "s1", "octocat")
     const captured: { checkoutBody?: string } = {}
@@ -212,12 +212,46 @@ describe("POST /v1/billing/checkout", () => {
     expect(body.url).toBe("https://checkout.stripe.com/pay/cs_test")
 
     const form = new URLSearchParams(captured.checkoutBody)
-    expect(form.get("subscription_data[trial_period_days]")).toBe("14")
+    // Teams is a paid-immediately tier: NO trial_period_days on the Stripe form.
+    expect(form.has("subscription_data[trial_period_days]")).toBe(false)
     expect(form.get("client_reference_id")).toBe("555") // the verified install, NOT 999
     expect(form.get("subscription_data[metadata][installation_id]")).toBe("555")
     expect(form.get("line_items[0][adjustable_quantity][minimum]")).toBe("10")
     expect(form.get("line_items[0][adjustable_quantity][maximum]")).toBe("150")
     expect(form.get("line_items[0][quantity]")).toBe("12")
+  })
+
+  it("grants the 14-day trial for PRO", async () => {
+    const { kv } = makeKV()
+    await seedSession(kv, "s1", "octocat")
+    const captured: { checkoutBody?: string } = {}
+    stubFetch({ installations: ADMIN_INSTALLS, captured })
+
+    const res = await handleBillingCheckoutRoute(post({ tier: "pro", installationId: 555 }, "s1"), baseEnv(kv))
+    expect(res.status).toBe(200)
+    const form = new URLSearchParams(captured.checkoutBody)
+    expect(form.get("subscription_data[trial_period_days]")).toBe("14")
+  })
+
+  it("grants NO trial for teams / max / ultra — even when the body spoofs a trial intent", async () => {
+    for (const tier of ["teams", "max", "ultra"] as const) {
+      const { kv } = makeKV()
+      await seedSession(kv, "s1", "octocat")
+      const captured: { checkoutBody?: string } = {}
+      stubFetch({ installations: ADMIN_INSTALLS, captured })
+
+      // The client sends a spoofed trial intent alongside a non-pro plan. The worker
+      // ignores untrusted body fields and derives the trial from the validated tier,
+      // so no trial is ever granted for these tiers.
+      const seats = tier === "teams" ? 10 : 1
+      const res = await handleBillingCheckoutRoute(
+        post({ tier, seats, installationId: 555, intent: "trial", plan: tier, trial: true }, "s1"),
+        baseEnv(kv),
+      )
+      expect(res.status).toBe(200)
+      const form = new URLSearchParams(captured.checkoutBody)
+      expect(form.has("subscription_data[trial_period_days]")).toBe(false)
+    }
   })
 
   it("defaults to the sole installation when none is selected, min seats for the tier", async () => {

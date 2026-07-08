@@ -5,7 +5,7 @@
 // Recall-safety / anti-spoof is enforced by the ADAPTER (it only ever passes a
 // server-verified installation id here). This file's job is the deterministic,
 // unit-testable shape: which tiers are purchasable, the per-tier seat bounds, and
-// the exact Stripe form fields (trial_period_days=14, client_reference_id=the
+// the exact Stripe form fields (the Pro-only 14-day trial, client_reference_id=the
 // installation, adjustable_quantity min/max) — so those invariants are provable in
 // isolation and can never silently drift.
 
@@ -33,6 +33,20 @@ const PAID_TIERS: readonly PaidTier[] = ["pro", "teams", "max", "ultra"]
 /** True for a tier a customer may check out. Narrows unknown/free/enterprise out. */
 export function isPaidTier(v: unknown): v is PaidTier {
   return typeof v === "string" && (PAID_TIERS as readonly string[]).includes(v)
+}
+
+/** The free-trial length, in days, granted for a subscription (0 = no trial). */
+export const TRIAL_PERIOD_DAYS = 14
+
+/**
+ * Trial days for a resolved paid tier. The 14-day trial is Pro-ONLY: Teams / Max /
+ * Ultra go straight to a paid subscription (0 days → no `trial_period_days` on the
+ * Stripe form). This is the AUTHORITATIVE gate — a client that spoofs a trial intent
+ * for a non-pro plan still gets 0 here, because the tier is derived server-side from
+ * the validated checkout request. Fail toward "no trial": anything but `pro` → 0.
+ */
+export function trialDaysForTier(tier: PaidTier): number {
+  return tier === "pro" ? TRIAL_PERIOD_DAYS : 0
 }
 
 /** A validated checkout request, or a typed rejection carrying the HTTP status. */
@@ -84,6 +98,8 @@ export interface CheckoutFormInput {
   priceId: string
   seats: number
   bounds: SeatBounds
+  /** The validated, server-derived tier — decides trial eligibility (Pro-only). */
+  tier: PaidTier
   /** SERVER-VERIFIED installation id (admin-gated) — the anti-spoof link the webhook reads. */
   installationId: number
   /** The Stripe customer carrying metadata[installation_id] — resolved/created by the adapter. */
@@ -109,9 +125,15 @@ export function buildCheckoutForm(input: CheckoutFormInput): URLSearchParams {
   form.set("line_items[0][adjustable_quantity][enabled]", "true")
   form.set("line_items[0][adjustable_quantity][minimum]", String(input.bounds.min))
   form.set("line_items[0][adjustable_quantity][maximum]", String(input.bounds.max))
-  // 14-day trial → the subscription lands 'trialing' → the trial-cap layer serves
-  // HALF volume until it converts to 'active' (already wired in the webhook).
-  form.set("subscription_data[trial_period_days]", "14")
+  // Pro-ONLY 14-day trial → the subscription lands 'trialing' → the trial-cap layer
+  // serves HALF volume until it converts to 'active' (already wired in the webhook).
+  // Teams / Max / Ultra get 0 days here, so NO `trial_period_days` is sent and the
+  // subscription is paid immediately. Derived from the server-validated tier, so a
+  // spoofed client trial intent for a non-pro plan can never grant a trial.
+  const trialDays = trialDaysForTier(input.tier)
+  if (trialDays > 0) {
+    form.set("subscription_data[trial_period_days]", String(trialDays))
+  }
   form.set("subscription_data[metadata][installation_id]", String(input.installationId))
   // The anti-spoof link the webhook reads FIRST (server-side, never from the body).
   form.set("client_reference_id", String(input.installationId))

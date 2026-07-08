@@ -109,6 +109,7 @@ describe("handleOnboardingContextRoute (GET /v1/onboarding/context)", () => {
         account: string
         repos: Array<{ fullName: string; description: string | null }>
       }>
+      gitlabConnectionCount: number
     }
     expect(body.user).toEqual({ login: "octocat", name: "The Octocat" })
     expect(body.installations).toHaveLength(1)
@@ -120,6 +121,59 @@ describe("handleOnboardingContextRoute (GET /v1/onboarding/context)", () => {
         { fullName: "acme-corp/worker", description: null },
       ],
     })
+    // No GitLab projects connected → 0 (never marks a non-GitLab user onboarded).
+    expect(body.gitlabConnectionCount).toBe(0)
+  })
+
+  it("reports the count of GitLab projects the caller owns (only their own)", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", 111)
+    const env = { OPENCLAW_STATE: kv, OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY } as unknown as Env
+
+    // connectUserKey for a githubUserId-only session (no surrogate userId) → "gh:111".
+    const userKey = "gh:111"
+    // Two projects owned by this user + one connected by ANOTHER user that a stale
+    // index entry still references — only the owned two must count.
+    await kv.put(`gitlab-connections:${userKey}`, JSON.stringify([10, 20, 30]))
+    await kv.put(
+      "gitlab-connection:10",
+      JSON.stringify({ userId: userKey, projectPath: "grp/a", name: "a", hookId: 1, connectedAt: "t" }),
+    )
+    await kv.put(
+      "gitlab-connection:20",
+      JSON.stringify({ userId: userKey, projectPath: "grp/b", name: "b", hookId: 2, connectedAt: "t" }),
+    )
+    await kv.put(
+      "gitlab-connection:30",
+      JSON.stringify({ userId: "gh:999", projectPath: "grp/c", name: "c", hookId: 3, connectedAt: "t" }),
+    )
+
+    // GitHub side has no installations (a GitLab-only-style user).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString()
+        if (url === "https://api.github.com/user") {
+          return new Response(JSON.stringify({ login: "octocat", name: null }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        if (url.startsWith("https://api.github.com/user/installations?")) {
+          return new Response(JSON.stringify({ total_count: 0, installations: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        throw new Error(`unexpected fetch: ${url}`)
+      }),
+    )
+
+    const res = await handleOnboardingContextRoute(reqWithSession("https://x/v1/onboarding/context", "sess-1"), env)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { installations: unknown[]; gitlabConnectionCount: number }
+    expect(body.installations).toEqual([])
+    expect(body.gitlabConnectionCount).toBe(2)
   })
 
   it("caps repos at 100 per installation across multiple pages", async () => {

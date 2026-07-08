@@ -13,11 +13,12 @@
 // (its signature is verified, but a malformed-but-signed body must not throw).
 
 /** The Sigilix paid/free tiers this webhook drives (subset of tenant.tier's domain). */
-export type BillingTier = "free" | "pro" | "max" | "ultra"
+export type BillingTier = "free" | "pro" | "teams" | "max" | "ultra"
 
 /** Env-configured Stripe price ids → Sigilix tier. Any/all may be unset. */
 export interface PriceTierConfig {
   pro?: string | undefined
+  teams?: string | undefined
   max?: string | undefined
   ultra?: string | undefined
 }
@@ -86,6 +87,14 @@ export type BillingInterpretation =
       installationId: number | null
       /** Target tenant.tier, or null when this event only establishes the link. */
       tier: BillingTier | null
+      /**
+       * sig-trial-cap: the subscription's normalized status ('active' / 'trialing' /
+       * a terminal status), or null when this event carries no status. Persisted with
+       * the tier so the caps layer can apply FULL (active) vs HALF (trialing/unknown)
+       * usage volume. Only written when `tier` is non-null (a link-only event never
+       * touches the tenant row).
+       */
+      subscriptionStatus: string | null
     }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -113,8 +122,8 @@ function installationFromMetadata(meta: Record<string, unknown> | undefined): nu
  * Map a Stripe price to a Sigilix tier. FIRST by exact configured price-id match
  * (the authoritative signal — the founder pastes each price id into env), THEN a
  * fallback substring match on the price's lookup_key / nickname containing
- * `pro`/`max`/`ultra` (so a correctly-named price still maps before the ids are set).
- * Returns null when nothing matches — the caller must NOT grant a tier on a null.
+ * `pro`/`teams`/`max`/`ultra` (so a correctly-named price still maps before the ids
+ * are set). Returns null when nothing matches — the caller must NOT grant a tier on null.
  */
 export function mapPriceToTier(price: StripePrice | undefined, cfg: PriceTierConfig): BillingTier | null {
   if (!price) return null
@@ -122,6 +131,7 @@ export function mapPriceToTier(price: StripePrice | undefined, cfg: PriceTierCon
   if (id) {
     if (cfg.ultra && id === cfg.ultra) return "ultra"
     if (cfg.max && id === cfg.max) return "max"
+    if (cfg.teams && id === cfg.teams) return "teams"
     if (cfg.pro && id === cfg.pro) return "pro"
   }
   const key = `${asString(price.lookup_key) ?? ""} ${asString(price.nickname) ?? ""}`.toLowerCase()
@@ -130,6 +140,7 @@ export function mapPriceToTier(price: StripePrice | undefined, cfg: PriceTierCon
   // `sigilix_pro_monthly` match `pro`, while `approve`/`product`/`maximum` do NOT).
   if (hasTierToken(key, "ultra")) return "ultra"
   if (hasTierToken(key, "max")) return "max"
+  if (hasTierToken(key, "teams")) return "teams"
   if (hasTierToken(key, "pro")) return "pro"
   return null
 }
@@ -151,6 +162,12 @@ function priceFromSubscription(sub: StripeSubscription): StripePrice | undefined
 /** Narrow a `subscription` field to the expanded object form (null for a bare string id). */
 function expandedSubscription(v: unknown): StripeSubscription | null {
   return typeof v === "object" && v !== null ? (v as StripeSubscription) : null
+}
+
+/** sig-trial-cap: a subscription's normalized (lowercased) status, or null when absent. */
+function statusOf(sub: StripeSubscription | null): string | null {
+  const s = sub ? asString(sub.status) : null
+  return s ? s.toLowerCase() : null
 }
 
 /**
@@ -189,7 +206,9 @@ export function interpretStripeEvent(event: StripeEvent, cfg: PriceTierConfig): 
       // that proof this is LINK-ONLY — the paired subscription.created event, which
       // carries the authoritative status, sets the tier.
       const tier = tierFromActiveSubscription(sub, cfg)
-      return { kind: "apply", customerId, installationId, tier }
+      // sig-trial-cap: the expanded sub's status (active/trialing) rides along so a
+      // trial checkout starts on the HALF cap and an active one on the full cap.
+      return { kind: "apply", customerId, installationId, tier, subscriptionStatus: statusOf(sub) }
     }
 
     case "customer.subscription.created":
@@ -197,14 +216,17 @@ export function interpretStripeEvent(event: StripeEvent, cfg: PriceTierConfig): 
       const sub = object as StripeSubscription
       const customerId = asString(sub.customer)
       const installationId = installationFromMetadata(sub.metadata)
+      // sig-trial-cap: the authoritative status — 'trialing' → HALF volume, 'active' →
+      // FULL volume (a trial→active conversion overwrites the stored status to 'active').
+      const subscriptionStatus = statusOf(sub)
       if (!isActiveStatus(sub.status)) {
         // canceled / unpaid / past_due / incomplete / paused → drop to free.
-        return { kind: "apply", customerId, installationId, tier: "free" }
+        return { kind: "apply", customerId, installationId, tier: "free", subscriptionStatus }
       }
       const tier = mapPriceToTier(priceFromSubscription(sub), cfg)
       // Active but unmapped price → we can't prove which paid tier; DON'T guess a
       // paid tier (recall-safety). Establish the link only.
-      return { kind: "apply", customerId, installationId, tier }
+      return { kind: "apply", customerId, installationId, tier, subscriptionStatus }
     }
 
     case "customer.subscription.deleted": {
@@ -214,6 +236,7 @@ export function interpretStripeEvent(event: StripeEvent, cfg: PriceTierConfig): 
         customerId: asString(sub.customer),
         installationId: installationFromMetadata(sub.metadata),
         tier: "free",
+        subscriptionStatus: statusOf(sub),
       }
     }
 
@@ -229,17 +252,20 @@ export function interpretStripeEvent(event: StripeEvent, cfg: PriceTierConfig): 
       const installationId =
         installationFromMetadata(inv.metadata) ?? (sub ? installationFromMetadata(sub.metadata) : null)
       const tier = tierFromActiveSubscription(sub, cfg)
-      return { kind: "apply", customerId, installationId, tier }
+      return { kind: "apply", customerId, installationId, tier, subscriptionStatus: statusOf(sub) }
     }
 
     case "invoice.payment_failed": {
       const inv = object as StripeInvoice
-      // Payment failed → the subscription is past_due; withdraw the paid tier.
+      // Payment failed → the subscription is past_due; withdraw the paid tier. A null
+      // status (not 'active') also withdraws FULL volume (sig-trial-cap), belt-and-braces
+      // with the free tier already set here.
       return {
         kind: "apply",
         customerId: asString(inv.customer),
         installationId: installationFromMetadata(inv.metadata),
         tier: "free",
+        subscriptionStatus: null,
       }
     }
 

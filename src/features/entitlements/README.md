@@ -8,13 +8,13 @@ reviews but NOT the three paid-only surfaces.
 
 | Feature (`EntitledFeature`) | Surface | Entitled tiers |
 | --- | --- | --- |
-| `ci_triage` | CI-failure triage sticky comment | `pro`, `max`, `ultra` |
-| `slack` | Slack app-mention assistant | `pro`, `max`, `ultra` |
-| `linear` | Linear triage + assign→PR agent | `pro`, `max`, `ultra` |
-| `cli_byok` | BYOK key entry (CLI/portal) — **gating is a follow-up** | `pro`, `max`, `ultra` |
+| `ci_triage` | CI-failure triage sticky comment | `pro`, `teams`, `max`, `ultra` |
+| `slack` | Slack app-mention assistant | `pro`, `teams`, `max`, `ultra` |
+| `linear` | Linear triage + assign→PR agent | `pro`, `teams`, `max`, `ultra` |
+| `cli_byok` | BYOK key entry (CLI/portal) — **gating is a follow-up** | `pro`, `teams`, `max`, `ultra` |
 
-`ENTITLED_TIERS = {pro, max, ultra}`. **Fail-closed**: anything not positively one of
-those three — `free`, `individual`, `team`, `enterprise`, `"default"`, unknown, unset,
+`ENTITLED_TIERS = {pro, teams, max, ultra}` (teams is feature-complete). **Fail-closed**: anything not positively one of
+those four — `free`, `individual`, `team`, `enterprise`, `"default"`, unknown, unset,
 a typo — is NOT entitled.
 
 ## The boundary is one edit

@@ -7,7 +7,7 @@ import {
   type StripeEvent,
 } from "@/src/features/billing/domain/stripe-events"
 
-const CFG: PriceTierConfig = { pro: "price_pro", max: "price_max", ultra: "price_ultra" }
+const CFG: PriceTierConfig = { pro: "price_pro", teams: "price_teams", max: "price_max", ultra: "price_ultra" }
 
 describe("parseInstallationId", () => {
   it("accepts positive int number and numeric string", () => {
@@ -26,6 +26,7 @@ describe("parseInstallationId", () => {
 describe("mapPriceToTier", () => {
   it("maps by exact configured price id", () => {
     expect(mapPriceToTier({ id: "price_pro" }, CFG)).toBe("pro")
+    expect(mapPriceToTier({ id: "price_teams" }, CFG)).toBe("teams")
     expect(mapPriceToTier({ id: "price_max" }, CFG)).toBe("max")
     expect(mapPriceToTier({ id: "price_ultra" }, CFG)).toBe("ultra")
   })
@@ -34,6 +35,8 @@ describe("mapPriceToTier", () => {
     expect(mapPriceToTier({ id: "price_x", lookup_key: "sigilix_pro_monthly" }, CFG)).toBe("pro")
     expect(mapPriceToTier({ id: "price_x", nickname: "Pro plan" }, CFG)).toBe("pro")
     expect(mapPriceToTier({ id: "price_x", lookup_key: "max annual" }, {})).toBe("max")
+    expect(mapPriceToTier({ id: "price_x", lookup_key: "sigilix_teams_monthly" }, {})).toBe("teams")
+    expect(mapPriceToTier({ id: "price_x", nickname: "Teams plan" }, {})).toBe("teams")
   })
   it("returns null when nothing matches", () => {
     expect(mapPriceToTier({ id: "price_x", nickname: "starter" }, CFG)).toBeNull()
@@ -51,7 +54,13 @@ describe("interpretStripeEvent", () => {
       ev("checkout.session.completed", { customer: "cus_1", client_reference_id: "789" }),
       CFG,
     )
-    expect(r).toEqual({ kind: "apply", customerId: "cus_1", installationId: 789, tier: null })
+    expect(r).toEqual({
+      kind: "apply",
+      customerId: "cus_1",
+      installationId: 789,
+      tier: null,
+      subscriptionStatus: null,
+    })
   })
 
   it("checkout.session.completed with an expanded ACTIVE subscription → mapped tier", () => {
@@ -63,7 +72,25 @@ describe("interpretStripeEvent", () => {
       }),
       CFG,
     )
-    expect(r).toEqual({ kind: "apply", customerId: "cus_1", installationId: 789, tier: "pro" })
+    expect(r).toEqual({
+      kind: "apply",
+      customerId: "cus_1",
+      installationId: 789,
+      tier: "pro",
+      subscriptionStatus: "active",
+    })
+  })
+
+  it("checkout.session.completed with an expanded TRIALING subscription → mapped tier + trialing status", () => {
+    const r = interpretStripeEvent(
+      ev("checkout.session.completed", {
+        customer: "cus_1",
+        client_reference_id: "789",
+        subscription: { status: "trialing", items: { data: [{ price: { id: "price_pro" } }] } },
+      }),
+      CFG,
+    )
+    expect(r).toMatchObject({ tier: "pro", subscriptionStatus: "trialing" })
   })
 
   it("checkout.session.completed with a NON-active expanded subscription → link only (never grant)", () => {
@@ -104,10 +131,16 @@ describe("interpretStripeEvent", () => {
       }),
       CFG,
     )
-    expect(r).toEqual({ kind: "apply", customerId: "cus_1", installationId: 10, tier: "max" })
+    expect(r).toEqual({
+      kind: "apply",
+      customerId: "cus_1",
+      installationId: 10,
+      tier: "max",
+      subscriptionStatus: "active",
+    })
   })
 
-  it("subscription.updated trialing → paid tier", () => {
+  it("subscription.updated trialing → paid tier + trialing status (half volume, full features)", () => {
     const r = interpretStripeEvent(
       ev("customer.subscription.updated", {
         status: "trialing",
@@ -116,7 +149,20 @@ describe("interpretStripeEvent", () => {
       }),
       CFG,
     )
-    expect(r).toMatchObject({ tier: "pro" })
+    expect(r).toMatchObject({ tier: "pro", subscriptionStatus: "trialing" })
+  })
+
+  it("subscription.updated trial→active conversion → active status (full volume restored)", () => {
+    const r = interpretStripeEvent(
+      ev("customer.subscription.updated", {
+        status: "active",
+        customer: "cus_1",
+        metadata: { installation_id: "10" },
+        items: { data: [{ price: { id: "price_pro" } }] },
+      }),
+      CFG,
+    )
+    expect(r).toMatchObject({ tier: "pro", subscriptionStatus: "active" })
   })
 
   it("subscription active but UNMAPPED price → tier null (never guess a paid tier)", () => {

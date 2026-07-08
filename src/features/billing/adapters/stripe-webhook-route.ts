@@ -42,6 +42,7 @@ const MAX_BODY_BYTES = 1024 * 1024
 export function resolvePriceTierConfig(env: Env): PriceTierConfig {
   return {
     pro: env.SIGILIX_STRIPE_PRICE_PRO,
+    teams: env.SIGILIX_STRIPE_PRICE_TEAMS,
     max: env.SIGILIX_STRIPE_PRICE_MAX,
     ultra: env.SIGILIX_STRIPE_PRICE_ULTRA,
   }
@@ -159,7 +160,10 @@ export async function handleStripeWebhookRoute(request: Request, env: Env): Prom
   }
 
   const nowIso = new Date().toISOString()
-  const result = await upsertTenantTier(env, installationId, tier, nowIso)
+  // sig-trial-cap: persist the subscription status alongside the tier so the caps layer
+  // resolves FULL (active) vs HALF (trialing/unknown) volume. Co-written in one UPSERT so
+  // a trial→active conversion can never leave a stale 'trialing' behind the new tier.
+  const result = await upsertTenantTier(env, installationId, tier, nowIso, interpretation.subscriptionStatus)
   if (!result.ok) {
     // Genuine write failure — DON'T mark processed; 500 so Stripe redelivers.
     console.error(JSON.stringify({ event: "stripe-webhook-tier-upsert-failed", type: eventType, installationId, tier }))

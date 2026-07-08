@@ -12,10 +12,12 @@ import type { Env } from "@/src/shared/types/env"
 
 const SECRET = "whsec_test"
 const NOW = 1_700_000_000
-const MIGRATION_SQL = readFileSync(
-  new URL("../../../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url),
-  "utf8",
-)
+// sig-trial-cap: apply 0001 (tenant table) + 0011 (subscription_status column) so the
+// tier UPSERT — which now co-writes subscription_status — matches production schema.
+const MIGRATION_SQL = [
+  readFileSync(new URL("../../../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8"),
+  readFileSync(new URL("../../../../migrations/0011_add_tenant_subscription_status.sql", import.meta.url), "utf8"),
+].join("\n")
 
 function makeKv() {
   const store = new Map<string, string>()
@@ -35,6 +37,7 @@ async function makeEnv(extra: Partial<Env> = {}) {
   const env = {
     SIGILIX_STRIPE_WEBHOOK_SECRET: SECRET,
     SIGILIX_STRIPE_PRICE_PRO: "price_pro",
+    SIGILIX_STRIPE_PRICE_TEAMS: "price_teams",
     SIGILIX_STRIPE_PRICE_MAX: "price_max",
     SIGILIX_STRIPE_PRICE_ULTRA: "price_ultra",
     SIGILIX_PLATFORM_DB: db,
@@ -60,6 +63,14 @@ async function readTier(db: D1Database, installationId: number): Promise<string 
     .bind(installationId)
     .first<{ tier: string }>()
   return row?.tier ?? null
+}
+
+async function readStatus(db: D1Database, installationId: number): Promise<string | null> {
+  const row = await db
+    .prepare("SELECT subscription_status FROM tenant WHERE installation_id = ?")
+    .bind(installationId)
+    .first<{ subscription_status: string | null }>()
+  return row?.subscription_status ?? null
 }
 
 describe("handleStripeWebhookRoute", () => {
@@ -114,6 +125,67 @@ describe("handleStripeWebhookRoute", () => {
     expect(res.status).toBe(200)
     expect(await readTier(db, 42)).toBe("max")
     expect(store.get("stripe-customer:cus_A")).toBe("42")
+  })
+
+  it("sig-trial-cap: trialing subscription persists tier + subscription_status='trialing'; converting to active restores 'active'", async () => {
+    // Trial checkout: tier set, status recorded as trialing (→ HALF volume downstream).
+    await handleStripeWebhookRoute(
+      await signedReq({
+        id: "e_trial",
+        type: "customer.subscription.created",
+        data: {
+          object: {
+            status: "trialing",
+            customer: "cus_T",
+            metadata: { installation_id: "70" },
+            items: { data: [{ price: { id: "price_pro" } }] },
+          },
+        },
+      }),
+      env,
+    )
+    expect(await readTier(db, 70)).toBe("pro")
+    expect(await readStatus(db, 70)).toBe("trialing")
+
+    // Trial converts to a paid active subscription → status overwritten to 'active'
+    // (full volume restored; no lingering 'trialing').
+    const res = await handleStripeWebhookRoute(
+      await signedReq({
+        id: "e_convert",
+        type: "customer.subscription.updated",
+        data: {
+          object: {
+            status: "active",
+            customer: "cus_T",
+            metadata: { installation_id: "70" },
+            items: { data: [{ price: { id: "price_pro" } }] },
+          },
+        },
+      }),
+      env,
+    )
+    expect(res.status).toBe(200)
+    expect(await readTier(db, 70)).toBe("pro")
+    expect(await readStatus(db, 70)).toBe("active")
+  })
+
+  it("subscription.created active price_teams → tenant.tier upserted to 'teams' + status active", async () => {
+    const req = await signedReq({
+      id: "e_teams",
+      type: "customer.subscription.created",
+      data: {
+        object: {
+          status: "active",
+          customer: "cus_TEAMS",
+          metadata: { installation_id: "60" },
+          items: { data: [{ price: { id: "price_teams" } }] },
+        },
+      },
+    })
+    const res = await handleStripeWebhookRoute(req, env)
+    expect(res.status).toBe(200)
+    expect(await readTier(db, 60)).toBe("teams")
+    expect(await readStatus(db, 60)).toBe("active")
   })
 
   it("subscription.deleted → downgrade to free (installation resolved via KV link)", async () => {

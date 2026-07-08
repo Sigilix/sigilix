@@ -6,13 +6,13 @@
 // one-file edit.
 //
 // POLICY (founder-confirmed 2026-07-02): CI-failure triage, the Slack assistant,
-// and Linear triage/agent are Pro/Max/Ultra ONLY. Free — and `individual`, and
+// and Linear triage/agent are Pro/Teams/Max/Ultra ONLY. Free — and `individual`, and
 // any unknown/unset plan — get core PR reviews but NOT these three. `cli_byok`
 // (BYOK key entry in the CLI/portal) is included in the enum so the helper is
 // ready; its gating lands in a separate follow-up (sigilix-cli + portal).
 //
 // FAIL-CLOSED: the entitled set is an explicit ALLOWLIST. Anything we cannot
-// positively identify as one of {pro, max, ultra} — free, individual, team,
+// positively identify as one of {pro, teams, max, ultra} — free, individual, team,
 // enterprise, "default", unknown, unset, a typo — is NOT entitled. The burden is
 // on a plan to prove it is entitled, never on this resolver to prove it is not.
 
@@ -30,11 +30,13 @@
 export type EntitledFeature = "ci_triage" | "slack" | "linear" | "cli_byok"
 
 /**
- * The tiers entitled to the paid-only features — EXACTLY {pro, max, ultra}. The
- * one place the paid boundary is defined. Compared case-insensitively against a
- * normalized plan string (see `normalizePlan`).
+ * The tiers entitled to the paid-only features — {pro, teams, max, ultra}. The one
+ * place the paid boundary is defined. Compared case-insensitively against a normalized
+ * plan string (see `normalizePlan`). `teams` is FEATURE-COMPLETE (SSO + admin + all
+ * connectors) — it earns every entitled feature, like the top consumer tier; only its
+ * usage VOLUME differs (2× pro; see resolveRateLimitCap).
  */
-export const ENTITLED_TIERS: ReadonlySet<string> = new Set<string>(["pro", "max", "ultra"])
+export const ENTITLED_TIERS: ReadonlySet<string> = new Set<string>(["pro", "teams", "max", "ultra"])
 
 /**
  * The per-feature policy: which features currently require an entitled tier.

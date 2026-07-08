@@ -361,4 +361,76 @@ describe("checkRateLimit", () => {
     expect(d5.allowed).toBe(false)
     expect(d5.used).toBe(5)
   })
+
+  // ── trial cap seam (sig-trial-cap) ──────────────────────────────────────────
+
+  it("tier=pro trialing → HALF cap=3 (full pro is 5); active → full cap=5 restored", async () => {
+    // Trialing pro: cap halved to 3. 3 reviews at the trial cap → denied (3 < 3 = false).
+    for (let i = 0; i < 3; i++) {
+      await insertReview(db, 52, "heidi", i, recentIso(0.5))
+    }
+    const trial = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 52,
+      authorLogin: "heidi",
+      nowMs: NOW,
+      tier: "pro",
+      trialing: true,
+    })
+    expect(trial.cap).toBe(3)
+    expect(trial.allowed).toBe(false)
+    expect(trial.used).toBe(3)
+
+    // Same tenant, same 3 reviews, but now ACTIVE (trial converted) → full pro cap 5,
+    // and 3 < 5 → allowed. Proves converting restores the full volume, no lingering half.
+    const active = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 52,
+      authorLogin: "heidi",
+      nowMs: NOW,
+      tier: "pro",
+      trialing: false,
+    })
+    expect(active.cap).toBe(5)
+    expect(active.allowed).toBe(true)
+    expect(active.used).toBe(3)
+  })
+
+  it("tier=teams → active cap=10 (2× pro); trialing → half cap=5", async () => {
+    const active = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 55,
+      authorLogin: "judy",
+      nowMs: NOW,
+      tier: "teams",
+      trialing: false,
+    })
+    expect(active.cap).toBe(10)
+    expect(active.allowed).toBe(true)
+
+    const trial = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 56,
+      authorLogin: "judy",
+      nowMs: NOW,
+      tier: "teams",
+      trialing: true,
+    })
+    expect(trial.cap).toBe(5)
+  })
+
+  it("a Pro trial's halved cap (3) is still ≥ the Free cap (2) — a trial is never worse than Free", async () => {
+    const proTrial = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 53,
+      authorLogin: "ivan",
+      nowMs: NOW,
+      tier: "pro",
+      trialing: true,
+    })
+    const free = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 54,
+      authorLogin: "ivan",
+      nowMs: NOW,
+      tier: "free",
+    })
+    expect(proTrial.cap).toBeGreaterThanOrEqual(free.cap)
+    expect(proTrial.cap).toBe(3)
+    expect(free.cap).toBe(2)
+  })
 })

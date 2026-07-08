@@ -7,6 +7,7 @@ import {
   computeResetMs,
   decideRateLimit,
   formatUsageFooter,
+  isFullPaidStatus,
   resolveRateLimitCap,
   resolveRateLimitMode,
 } from "./rate-limit"
@@ -62,26 +63,42 @@ describe("resolveRateLimitCap", () => {
     expect(resolveRateLimitCap("free")).toBe(2)
   })
 
-  it('returns 5 for "pro"', () => {
+  it('returns 5 for "pro" (the ladder base)', () => {
     expect(resolveRateLimitCap("pro")).toBe(5)
   })
 
-  it('returns 10 for "max"', () => {
-    expect(resolveRateLimitCap("max")).toBe(10)
+  it('returns 10 for "teams" (2× pro)', () => {
+    expect(resolveRateLimitCap("teams")).toBe(10)
   })
 
-  it('returns 20 for "ultra" (the highest paid consumer tier)', () => {
-    expect(resolveRateLimitCap("ultra")).toBe(20)
+  it('returns 25 for "max" (5× pro)', () => {
+    expect(resolveRateLimitCap("max")).toBe(25)
   })
 
-  it("caps ascend free < pro < max < ultra", () => {
+  it('returns 250 for "ultra" (10× max, the highest paid consumer tier)', () => {
+    expect(resolveRateLimitCap("ultra")).toBe(250)
+  })
+
+  it("the paid ladder is base × multiplier: pro 1× / teams 2× / max 5× / ultra 50×", () => {
+    const base = resolveRateLimitCap("pro")
+    expect(base).toBe(5)
+    expect(resolveRateLimitCap("teams")).toBe(base * 2)
+    expect(resolveRateLimitCap("max")).toBe(base * 5)
+    expect(resolveRateLimitCap("ultra")).toBe(base * 50)
+    // ultra is exactly 10× max, per the founder's ladder.
+    expect(resolveRateLimitCap("ultra")).toBe(resolveRateLimitCap("max") * 10)
+  })
+
+  it("caps ascend free < pro < teams < max < ultra", () => {
     expect(resolveRateLimitCap("free")).toBeLessThan(resolveRateLimitCap("pro"))
-    expect(resolveRateLimitCap("pro")).toBeLessThan(resolveRateLimitCap("max"))
+    expect(resolveRateLimitCap("pro")).toBeLessThan(resolveRateLimitCap("teams"))
+    expect(resolveRateLimitCap("teams")).toBeLessThan(resolveRateLimitCap("max"))
     expect(resolveRateLimitCap("max")).toBeLessThan(resolveRateLimitCap("ultra"))
   })
 
-  it("is case-insensitive: 'ULTRA' → 20", () => {
-    expect(resolveRateLimitCap("ULTRA")).toBe(20)
+  it("is case-insensitive: 'ULTRA' → 250, 'TEAMS' → 10", () => {
+    expect(resolveRateLimitCap("ULTRA")).toBe(250)
+    expect(resolveRateLimitCap("TEAMS")).toBe(10)
   })
 
   it('returns 10 for "pro_plus"', () => {
@@ -110,6 +127,68 @@ describe("resolveRateLimitCap", () => {
 
   it("is case-insensitive: 'PRO' → 5", () => {
     expect(resolveRateLimitCap("PRO")).toBe(5)
+  })
+
+  it("trialing=false is byte-identical to omitting the flag (full tier volume)", () => {
+    expect(resolveRateLimitCap("pro", false)).toBe(resolveRateLimitCap("pro"))
+    expect(resolveRateLimitCap("ultra", false)).toBe(250)
+  })
+})
+
+// ─── resolveRateLimitCap: trial cap (sig-trial-cap) ──────────────────────────
+
+describe("resolveRateLimitCap — trialing (half volume)", () => {
+  it("halves each paid tier deterministically: pro 5→3, teams 10→5, max 25→13, ultra 250→125", () => {
+    expect(resolveRateLimitCap("pro", true)).toBe(3)
+    expect(resolveRateLimitCap("teams", true)).toBe(5)
+    expect(resolveRateLimitCap("max", true)).toBe(13)
+    expect(resolveRateLimitCap("ultra", true)).toBe(125)
+  })
+
+  it("a trial cap is NEVER below the Free floor (pro 5→3 ≥ free 2)", () => {
+    const freeCap = resolveRateLimitCap("free")
+    expect(resolveRateLimitCap("pro", true)).toBeGreaterThanOrEqual(freeCap)
+    expect(resolveRateLimitCap("teams", true)).toBeGreaterThanOrEqual(freeCap)
+    expect(resolveRateLimitCap("max", true)).toBeGreaterThanOrEqual(freeCap)
+    expect(resolveRateLimitCap("ultra", true)).toBeGreaterThanOrEqual(freeCap)
+  })
+
+  it("free stays at the floor when trialing (2→2, never below)", () => {
+    expect(resolveRateLimitCap("free", true)).toBe(DEFAULT_RATE_LIMIT_CAP)
+  })
+
+  it("an unknown/null tier trialing floors at DEFAULT_RATE_LIMIT_CAP (never 0/negative)", () => {
+    expect(resolveRateLimitCap(null, true)).toBe(DEFAULT_RATE_LIMIT_CAP)
+    expect(resolveRateLimitCap("unknown_tier", true)).toBe(DEFAULT_RATE_LIMIT_CAP)
+  })
+
+  it("a trial cap is always < the full paid cap for that tier (halving is real)", () => {
+    for (const tier of ["pro", "teams", "max", "ultra"]) {
+      expect(resolveRateLimitCap(tier, true)).toBeLessThan(resolveRateLimitCap(tier, false))
+    }
+  })
+})
+
+// ─── isFullPaidStatus (sig-trial-cap) ────────────────────────────────────────
+
+describe("isFullPaidStatus", () => {
+  it("returns true ONLY for 'active' (case/space-insensitive)", () => {
+    expect(isFullPaidStatus("active")).toBe(true)
+    expect(isFullPaidStatus("  ACTIVE ")).toBe(true)
+  })
+
+  it("returns false for 'trialing' → trial (half volume)", () => {
+    expect(isFullPaidStatus("trialing")).toBe(false)
+  })
+
+  it("FAIL-SAFE RESTRICTIVE: null/undefined/blank/unknown are NOT full-paid", () => {
+    expect(isFullPaidStatus(null)).toBe(false)
+    expect(isFullPaidStatus(undefined)).toBe(false)
+    expect(isFullPaidStatus("")).toBe(false)
+    expect(isFullPaidStatus("   ")).toBe(false)
+    expect(isFullPaidStatus("past_due")).toBe(false)
+    expect(isFullPaidStatus("canceled")).toBe(false)
+    expect(isFullPaidStatus("whatever")).toBe(false)
   })
 })
 

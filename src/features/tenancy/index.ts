@@ -21,6 +21,7 @@ export type { QuotaMode } from "./domain/quota"
 export {
   resolveRateLimitMode,
   resolveRateLimitCap,
+  isFullPaidStatus,
   decideRateLimit,
   computeResetMs,
   formatUsageFooter,
@@ -35,6 +36,7 @@ export {
   upsertTenantAndRepo,
   upsertTenantTier,
   readTenantConfig,
+  readTenantSubscriptionStatus,
   lookupRepoByFullName,
 } from "./adapters/d1-tenant-store"
 export { resolveTenantCap } from "./adapters/resolve-tenant-cap"

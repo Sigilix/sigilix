@@ -1326,13 +1326,15 @@ export interface Env {
   //                                   you save the webhook destination. HMAC-verifies
   //                                   every delivery; unset → the route 503s. Set via
   //                                   `wrangler secret put SIGILIX_STRIPE_WEBHOOK_SECRET`.
-  //   SIGILIX_STRIPE_PRICE_PRO / _MAX / _ULTRA — the Stripe price ids (`price_…`) that
-  //                                   map a subscription to the Sigilix pro/max/ultra
-  //                                   tier. A price with no id match falls back to a
-  //                                   `lookup_key`/`nickname` containing pro|max|ultra.
+  //   SIGILIX_STRIPE_PRICE_PRO / _TEAMS / _MAX / _ULTRA — the Stripe price ids (`price_…`)
+  //                                   that map a subscription to the Sigilix
+  //                                   pro/teams/max/ultra tier. A price with no id match
+  //                                   falls back to a `lookup_key`/`nickname` containing
+  //                                   pro|teams|max|ultra.
   SIGILIX_STRIPE_SECRET_KEY?: string
   SIGILIX_STRIPE_WEBHOOK_SECRET?: string
   SIGILIX_STRIPE_PRICE_PRO?: string
+  SIGILIX_STRIPE_PRICE_TEAMS?: string
   SIGILIX_STRIPE_PRICE_MAX?: string
   SIGILIX_STRIPE_PRICE_ULTRA?: string
 

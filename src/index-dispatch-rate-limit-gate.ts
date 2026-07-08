@@ -12,7 +12,7 @@
 // The caller threads `rateLimit` into Task 7's `finalStatusUpdate` footer.
 
 import type { Env } from "@/src/shared/types/env"
-import { checkRateLimit } from "@/src/features/tenancy"
+import { checkRateLimit, isFullPaidStatus, readTenantSubscriptionStatus } from "@/src/features/tenancy"
 import type { RateLimitDecision } from "@/src/features/tenancy"
 import { readInstallationPlan } from "@/src/features/entitlements"
 import { GitHubClient } from "@/src/shared/adapters/github"
@@ -67,11 +67,22 @@ export async function runRateLimitGate(
     tier = null
   }
 
+  // sig-trial-cap: a subscriber on their 14-day TRIAL gets the tier's FEATURES but HALF
+  // its usage volume; only a fully-paid `active` subscription earns the full cap.
+  // readTenantSubscriptionStatus never throws (null on any fault/absent), and
+  // isFullPaidStatus treats a null/unknown status as NOT active → trialing (half), so a
+  // read fault fails safe to the more-restrictive cap, never to full paid volume.
+  // (Existing paid tenants are backfilled to 'active' by migration 0011, so this
+  // fail-safe half never mis-applies to a pre-existing paying customer.)
+  const subscriptionStatus = await readTenantSubscriptionStatus(env, args.installationId)
+  const trialing = !isFullPaidStatus(subscriptionStatus)
+
   const rateLimit = await checkRateLimit(env, {
     installationId: args.installationId,
     authorLogin: args.authorLogin,
     nowMs: Date.now(),
     tier,
+    trialing,
     ...(args.bypassClosedSkip === true ? { bypassReason: "slash-command-rerun" } : {}),
   })
 

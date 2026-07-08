@@ -21,7 +21,7 @@
 import type { Env } from "@/src/shared/types/env"
 
 /** The canonical plan set. Order is low→high tier. */
-export const PLAN_NAMES = ["free", "pro", "max", "ultra", "team", "enterprise"] as const
+export const PLAN_NAMES = ["free", "pro", "teams", "max", "ultra", "team", "enterprise"] as const
 export type PlanName = (typeof PLAN_NAMES)[number]
 
 /**

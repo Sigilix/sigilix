@@ -13,10 +13,19 @@ import type { RateLimitDecision } from "@/src/features/tenancy"
 
 // ─── hoisted mocks ────────────────────────────────────────────────────────────
 
-const { checkRateLimitMock } = vi.hoisted(() => ({ checkRateLimitMock: vi.fn<() => Promise<RateLimitDecision>>() }))
+const { checkRateLimitMock, readTenantSubscriptionStatusMock } = vi.hoisted(() => ({
+  checkRateLimitMock: vi.fn<() => Promise<RateLimitDecision>>(),
+  readTenantSubscriptionStatusMock: vi.fn<() => Promise<string | null>>(),
+}))
 vi.mock("@/src/features/tenancy", async (importActual) => {
   const actual = await importActual()
-  return { ...(actual as object), checkRateLimit: checkRateLimitMock }
+  return {
+    ...(actual as object),
+    checkRateLimit: checkRateLimitMock,
+    readTenantSubscriptionStatus: readTenantSubscriptionStatusMock,
+    // isFullPaidStatus stays REAL (spread from actual) — the gate's trialing decision
+    // is exercised through the genuine domain helper.
+  }
 })
 
 const { readInstallationPlanMock } = vi.hoisted(() => ({
@@ -117,8 +126,11 @@ let warnSpy: ReturnType<typeof vi.spyOn>
 beforeEach(() => {
   checkRateLimitMock.mockClear()
   readInstallationPlanMock.mockClear()
+  readTenantSubscriptionStatusMock.mockClear()
   // Default: the tenant has no plan row yet (null) unless a test overrides it.
   readInstallationPlanMock.mockResolvedValue(null)
+  // Default: no recorded subscription status (null) → fail-safe trialing unless overridden.
+  readTenantSubscriptionStatusMock.mockResolvedValue(null)
   createIssueCommentMock.mockClear()
   attachExistingCheckRunMock.mockClear()
   completeCheckRunMock.mockClear()
@@ -229,6 +241,46 @@ describe("runRateLimitGate", () => {
     expect(checkRateLimitMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ tier: "ultra", installationId: 42 }),
+    )
+  })
+
+  it("sig-trial-cap: an 'active' subscription threads trialing:false (full volume)", async () => {
+    readInstallationPlanMock.mockResolvedValue("pro")
+    readTenantSubscriptionStatusMock.mockResolvedValue("active")
+    checkRateLimitMock.mockResolvedValue(allowed())
+
+    await runRateLimitGate(makeEnv(), makeArgs({ installationId: 42 }))
+
+    expect(readTenantSubscriptionStatusMock).toHaveBeenCalledWith(expect.anything(), 42)
+    expect(checkRateLimitMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tier: "pro", trialing: false }),
+    )
+  })
+
+  it("sig-trial-cap: a 'trialing' subscription threads trialing:true (half volume)", async () => {
+    readInstallationPlanMock.mockResolvedValue("pro")
+    readTenantSubscriptionStatusMock.mockResolvedValue("trialing")
+    checkRateLimitMock.mockResolvedValue(allowed())
+
+    await runRateLimitGate(makeEnv(), makeArgs({ installationId: 42 }))
+
+    expect(checkRateLimitMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tier: "pro", trialing: true }),
+    )
+  })
+
+  it("sig-trial-cap FAIL-SAFE: a null/unknown status threads trialing:true (never full paid without an active sub)", async () => {
+    readInstallationPlanMock.mockResolvedValue("ultra")
+    readTenantSubscriptionStatusMock.mockResolvedValue(null)
+    checkRateLimitMock.mockResolvedValue(allowed())
+
+    await runRateLimitGate(makeEnv(), makeArgs({ installationId: 42 }))
+
+    expect(checkRateLimitMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tier: "ultra", trialing: true }),
     )
   })
 

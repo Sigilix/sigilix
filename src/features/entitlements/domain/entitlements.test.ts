@@ -9,8 +9,8 @@ import {
 const ALL_FEATURES: EntitledFeature[] = ["ci_triage", "slack", "linear", "cli_byok"]
 
 describe("ENTITLED_TIERS", () => {
-  it("is exactly {pro, max, ultra}", () => {
-    expect([...ENTITLED_TIERS].sort()).toEqual(["max", "pro", "ultra"])
+  it("is exactly {pro, teams, max, ultra} (teams is feature-complete, like the top tier)", () => {
+    expect([...ENTITLED_TIERS].sort()).toEqual(["max", "pro", "teams", "ultra"])
   })
 })
 
@@ -27,7 +27,9 @@ describe("normalizePlan", () => {
 })
 
 describe("isFeatureEntitled — entitled tiers", () => {
-  for (const plan of ["pro", "max", "ultra", "Pro", "  MAX  "]) {
+  // teams is FEATURE-COMPLETE: it gets ALL entitled features like the top tier, not
+  // a pro-limited subset. "  TEAMS  " proves the case/space-insensitive match too.
+  for (const plan of ["pro", "teams", "max", "ultra", "Pro", "  MAX  ", "  TEAMS  "]) {
     for (const feature of ALL_FEATURES) {
       it(`allows plan=${JSON.stringify(plan)} for ${feature}`, () => {
         expect(isFeatureEntitled(plan, feature)).toBe(true)

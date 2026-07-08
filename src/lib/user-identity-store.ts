@@ -41,12 +41,13 @@
 //
 // This module NEVER logs an email body, a password, or a hash value.
 
-export type Provider = "github" | "google" | "password"
+export type Provider = "github" | "google" | "gitlab" | "password"
 
 export interface UserIdentity {
   userId: string
   githubUserId: string | null
   googleSub: string | null
+  gitlabId: string | null
   email: string | null
   emailVerified: boolean
   name: string | null
@@ -61,6 +62,7 @@ interface IdentityRow {
   user_id: string
   github_user_id: string | null
   google_sub: string | null
+  gitlab_id: string | null
   email: string | null
   email_verified: number
   name: string | null
@@ -92,7 +94,7 @@ function parseProviders(raw: string): Provider[] {
   try {
     const arr = JSON.parse(raw)
     if (!Array.isArray(arr)) return []
-    return arr.filter((p): p is Provider => p === "github" || p === "google" || p === "password")
+    return arr.filter((p): p is Provider => p === "github" || p === "google" || p === "gitlab" || p === "password")
   } catch {
     return []
   }
@@ -107,6 +109,7 @@ function rowToIdentity(row: IdentityRow): UserIdentity {
     userId: row.user_id,
     githubUserId: row.github_user_id,
     googleSub: row.google_sub,
+    gitlabId: row.gitlab_id,
     email: row.email,
     emailVerified: row.email_verified === 1,
     name: row.name,
@@ -119,7 +122,7 @@ function rowToIdentity(row: IdentityRow): UserIdentity {
 }
 
 const SELECT_COLS =
-  "user_id, github_user_id, google_sub, email, email_verified, name, avatar_url, providers, mfa_enabled, created_at, last_login_at"
+  "user_id, github_user_id, google_sub, gitlab_id, email, email_verified, name, avatar_url, providers, mfa_enabled, created_at, last_login_at"
 
 async function selectOne(db: D1Database, where: string, ...binds: unknown[]): Promise<UserIdentity | null> {
   const row = await db
@@ -139,6 +142,10 @@ export function findByGithubUserId(db: D1Database, githubUserId: string): Promis
 
 export function findByGoogleSub(db: D1Database, googleSub: string): Promise<UserIdentity | null> {
   return selectOne(db, "google_sub = ?", googleSub)
+}
+
+export function findByGitlabId(db: D1Database, gitlabId: string): Promise<UserIdentity | null> {
+  return selectOne(db, "gitlab_id = ?", gitlabId)
 }
 
 /** Look up by normalized email. Returns null for a blank/unnormalizable input. */
@@ -244,6 +251,94 @@ export async function upsertGithubIdentity(db: D1Database, args: GithubUpsertArg
     )
     return null
   }
+}
+
+interface GitlabFindOrCreateArgs {
+  gitlabId: string
+  email?: string | null
+  name?: string | null
+  avatarUrl?: string | null
+  nowIso: string
+}
+
+/**
+ * Find-or-create the identity for a GitLab login (sig-gitlab-oauth-login).
+ *
+ * Resolution is by gitlab_id ONLY — a GitLab-provided email is treated as
+ * UNVERIFIED and is NEVER a cross-provider linking key, exactly like the GitHub
+ * path (`upsertGithubIdentity`). This is the takeover-safe choice: it means an
+ * attacker who controls a GitLab account whose profile email happens to equal a
+ * victim's cannot silently merge into the victim's verified GitHub/Google/password
+ * row. A GitLab email is therefore stored only when NO other account already holds
+ * it, and it is written email_verified=0 (a later real verification flow can
+ * promote it). When GitLab returns no email at all the row is created with
+ * email=NULL — the login still succeeds and the portal's email-capture path fills
+ * it in later (the "don't block login" requirement).
+ *
+ * Unlike `upsertGithubIdentity` (which is BEST-EFFORT because a GitHub session
+ * carries githubUserId directly), a GitLab session has no provider id of its own
+ * on the record — it needs this row's `user_id` to mint the session — so this
+ * FAILS CLOSED: a D1 fault throws (the caller returns a 5xx and issues no
+ * session) rather than silently minting a half-formed account, matching
+ * `findOrCreateGoogleIdentity`. Resolution:
+ *   1. Existing row for this gitlab_id -> update (refresh name/avatar/last_login;
+ *      fill email only if this row has none AND the address is free; add "gitlab").
+ *   2. Else -> insert a brand-new row (storing the email only when it's free).
+ * There is deliberately NO "link into a row found by email" path — that would be
+ * the account-takeover sink an unverified email opens.
+ */
+export async function findOrCreateGitlabIdentity(db: D1Database, args: GitlabFindOrCreateArgs): Promise<UserIdentity> {
+  const email = normalizeEmail(args.email)
+  const existingByGitlab = await findByGitlabId(db, args.gitlabId)
+  if (existingByGitlab) {
+    const providers = mergeProvider(existingByGitlab.providers, "gitlab")
+    // Fill the email only when this row has none AND no other account holds it
+    // (COALESCE keeps the existing value; a null bind leaves it unchanged). The
+    // email_verified flag is left untouched — a GitLab email is never asserted
+    // as verified, so it never becomes a cross-provider linking target.
+    const emailToFill = email && !(await emailHeldByOther(db, email, existingByGitlab.userId)) ? email : null
+    await db
+      .prepare(
+        "UPDATE user_identity SET name = ?, avatar_url = ?, providers = ?, last_login_at = ?, " +
+          "email = COALESCE(email, ?) WHERE user_id = ?",
+      )
+      .bind(
+        args.name ?? existingByGitlab.name,
+        args.avatarUrl ?? existingByGitlab.avatarUrl,
+        JSON.stringify(providers),
+        args.nowIso,
+        emailToFill,
+        existingByGitlab.userId,
+      )
+      .run()
+    const updated = await findByUserId(db, existingByGitlab.userId)
+    if (!updated) throw new Error("identity vanished after gitlab update")
+    return updated
+  }
+
+  // New GitLab row. Store the (unverified) email only when it's free, so we
+  // never collide with — or silently attach to — another account's address.
+  const emailToInsert = email && !(await emailHeldByOther(db, email)) ? email : null
+  const userId = crypto.randomUUID()
+  await db
+    .prepare(
+      "INSERT INTO user_identity (user_id, gitlab_id, email, email_verified, name, avatar_url, providers, created_at, last_login_at) " +
+        "VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?)",
+    )
+    .bind(
+      userId,
+      args.gitlabId,
+      emailToInsert,
+      args.name ?? null,
+      args.avatarUrl ?? null,
+      JSON.stringify(["gitlab"]),
+      args.nowIso,
+      args.nowIso,
+    )
+    .run()
+  const created = await findByUserId(db, userId)
+  if (!created) throw new Error("identity vanished after gitlab insert")
+  return created
 }
 
 interface GoogleFindOrCreateArgs {

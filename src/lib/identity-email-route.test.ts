@@ -10,6 +10,10 @@ import type { SessionRecord } from "@/src/lib/auth-session"
 import type { Env } from "@/src/shared/types/env"
 
 const MIGRATION_SQL = readFileSync(new URL("../../migrations/0006_create_user_identity.sql", import.meta.url), "utf8")
+const MIGRATION_0010 = readFileSync(
+  new URL("../../migrations/0010_add_gitlab_id_to_user_identity.sql", import.meta.url),
+  "utf8",
+)
 const COOKIE = "__Host-sigilix_session"
 
 function makeKV(): { kv: KVNamespace; store: Map<string, string> } {
@@ -50,6 +54,7 @@ describe("handleIdentityEmailRoute", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await db.exec(MIGRATION_0010)
     const k = makeKV()
     kv = k.kv
     env = { OPENCLAW_STATE: kv, SIGILIX_PLATFORM_DB: db } as unknown as Env

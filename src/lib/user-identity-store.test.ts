@@ -17,6 +17,10 @@ import {
 } from "@/src/lib/user-identity-store"
 
 const MIGRATION_SQL = readFileSync(new URL("../../migrations/0006_create_user_identity.sql", import.meta.url), "utf8")
+const MIGRATION_0010 = readFileSync(
+  new URL("../../migrations/0010_add_gitlab_id_to_user_identity.sql", import.meta.url),
+  "utf8",
+)
 const NOW = "2026-07-02T00:00:00.000Z"
 
 describe("user-identity-store", () => {
@@ -24,6 +28,7 @@ describe("user-identity-store", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await db.exec(MIGRATION_0010)
   })
 
   it("upsertGithubIdentity inserts a new row on first login, then updates on the second", async () => {
@@ -215,6 +220,7 @@ describe("user-identity-store — cross-provider linking is takeover-safe", () =
   beforeEach(async () => {
     db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await db.exec(MIGRATION_0010)
   })
 
   it("Google login does NOT merge into a GitHub-seeded unverified email row", async () => {

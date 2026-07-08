@@ -46,6 +46,7 @@ interface StripeSubscriptionItem {
 }
 
 interface StripeSubscription {
+  id?: unknown
   status?: unknown
   customer?: unknown
   metadata?: Record<string, unknown>
@@ -87,6 +88,13 @@ export type BillingInterpretation =
       installationId: number | null
       /** Target tenant.tier, or null when this event only establishes the link. */
       tier: BillingTier | null
+      /**
+       * sig-billing-dup-sub-guard: the Stripe subscription id this event is about, for
+       * subscription.created/updated/deleted (null for checkout/invoice events). The
+       * webhook uses it to recognise a `subscription.deleted` for a duplicate it itself
+       * cancelled — so that self-inflicted deletion never downgrades the surviving sub.
+       */
+      subscriptionId: string | null
       /**
        * sig-trial-cap: the subscription's normalized status ('active' / 'trialing' /
        * a terminal status), or null when this event carries no status. Persisted with
@@ -208,7 +216,14 @@ export function interpretStripeEvent(event: StripeEvent, cfg: PriceTierConfig): 
       const tier = tierFromActiveSubscription(sub, cfg)
       // sig-trial-cap: the expanded sub's status (active/trialing) rides along so a
       // trial checkout starts on the HALF cap and an active one on the full cap.
-      return { kind: "apply", customerId, installationId, tier, subscriptionStatus: statusOf(sub) }
+      return {
+        kind: "apply",
+        customerId,
+        installationId,
+        tier,
+        subscriptionId: sub ? asString(sub.id) : null,
+        subscriptionStatus: statusOf(sub),
+      }
     }
 
     case "customer.subscription.created":
@@ -216,17 +231,18 @@ export function interpretStripeEvent(event: StripeEvent, cfg: PriceTierConfig): 
       const sub = object as StripeSubscription
       const customerId = asString(sub.customer)
       const installationId = installationFromMetadata(sub.metadata)
+      const subscriptionId = asString(sub.id)
       // sig-trial-cap: the authoritative status — 'trialing' → HALF volume, 'active' →
       // FULL volume (a trial→active conversion overwrites the stored status to 'active').
       const subscriptionStatus = statusOf(sub)
       if (!isActiveStatus(sub.status)) {
         // canceled / unpaid / past_due / incomplete / paused → drop to free.
-        return { kind: "apply", customerId, installationId, tier: "free", subscriptionStatus }
+        return { kind: "apply", customerId, installationId, tier: "free", subscriptionId, subscriptionStatus }
       }
       const tier = mapPriceToTier(priceFromSubscription(sub), cfg)
       // Active but unmapped price → we can't prove which paid tier; DON'T guess a
       // paid tier (recall-safety). Establish the link only.
-      return { kind: "apply", customerId, installationId, tier, subscriptionStatus }
+      return { kind: "apply", customerId, installationId, tier, subscriptionId, subscriptionStatus }
     }
 
     case "customer.subscription.deleted": {
@@ -236,6 +252,7 @@ export function interpretStripeEvent(event: StripeEvent, cfg: PriceTierConfig): 
         customerId: asString(sub.customer),
         installationId: installationFromMetadata(sub.metadata),
         tier: "free",
+        subscriptionId: asString(sub.id),
         subscriptionStatus: statusOf(sub),
       }
     }
@@ -252,7 +269,14 @@ export function interpretStripeEvent(event: StripeEvent, cfg: PriceTierConfig): 
       const installationId =
         installationFromMetadata(inv.metadata) ?? (sub ? installationFromMetadata(sub.metadata) : null)
       const tier = tierFromActiveSubscription(sub, cfg)
-      return { kind: "apply", customerId, installationId, tier, subscriptionStatus: statusOf(sub) }
+      return {
+        kind: "apply",
+        customerId,
+        installationId,
+        tier,
+        subscriptionId: sub ? asString(sub.id) : null,
+        subscriptionStatus: statusOf(sub),
+      }
     }
 
     case "invoice.payment_failed": {
@@ -265,6 +289,7 @@ export function interpretStripeEvent(event: StripeEvent, cfg: PriceTierConfig): 
         customerId: asString(inv.customer),
         installationId: installationFromMetadata(inv.metadata),
         tier: "free",
+        subscriptionId: null,
         subscriptionStatus: null,
       }
     }

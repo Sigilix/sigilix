@@ -59,6 +59,7 @@ describe("interpretStripeEvent", () => {
       customerId: "cus_1",
       installationId: 789,
       tier: null,
+      subscriptionId: null,
       subscriptionStatus: null,
     })
   })
@@ -77,6 +78,7 @@ describe("interpretStripeEvent", () => {
       customerId: "cus_1",
       installationId: 789,
       tier: "pro",
+      subscriptionId: null,
       subscriptionStatus: "active",
     })
   })
@@ -136,8 +138,28 @@ describe("interpretStripeEvent", () => {
       customerId: "cus_1",
       installationId: 10,
       tier: "max",
+      subscriptionId: null,
       subscriptionStatus: "active",
     })
+  })
+
+  it("subscription.created/deleted carry the subscription id (for the dup-cancel guard)", () => {
+    const created = interpretStripeEvent(
+      ev("customer.subscription.created", {
+        id: "sub_abc",
+        status: "active",
+        customer: "cus_1",
+        metadata: { installation_id: "10" },
+        items: { data: [{ price: { id: "price_max" } }] },
+      }),
+      CFG,
+    )
+    expect(created).toMatchObject({ subscriptionId: "sub_abc" })
+    const deleted = interpretStripeEvent(
+      ev("customer.subscription.deleted", { id: "sub_abc", customer: "cus_1", metadata: { installation_id: "10" } }),
+      CFG,
+    )
+    expect(deleted).toMatchObject({ subscriptionId: "sub_abc", tier: "free" })
   })
 
   it("subscription.updated trialing → paid tier + trialing status (half volume, full features)", () => {

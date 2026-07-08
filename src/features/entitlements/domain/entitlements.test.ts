@@ -14,6 +14,19 @@ describe("ENTITLED_TIERS", () => {
   })
 })
 
+describe("core PR review is never gated (recall-safety)", () => {
+  // The paid boundary is EXACTLY these four surfaces. Core PR review is not among
+  // them and has no EntitledFeature member, so a free installation ALWAYS keeps
+  // its PR reviews — the gate can never block a review. If a "pr_review"-shaped
+  // feature is ever added here, this test fails loudly on purpose.
+  it("EntitledFeature is exactly {ci_triage, slack, linear, cli_byok} — no review member", () => {
+    expect([...ALL_FEATURES].sort()).toEqual(["ci_triage", "cli_byok", "linear", "slack"])
+    for (const feature of ALL_FEATURES) {
+      expect(String(feature)).not.toMatch(/review/i)
+    }
+  })
+})
+
 describe("normalizePlan", () => {
   it("lowercases and trims", () => {
     expect(normalizePlan("  Pro ")).toBe("pro")

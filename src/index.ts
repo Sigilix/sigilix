@@ -118,6 +118,7 @@ import {
 import { handleGitHubWebhook } from "@/src/index-github-webhook"
 import { handleGitLabWebhook } from "@/src/index-gitlab-webhook"
 import { handleStripeWebhookRoute } from "@/src/features/billing"
+import { tryHandleBillingRoute } from "@/src/lib/billing-checkout-route"
 import { handleLinearWebhook, handleManualTrigger } from "@/src/index-webhooks"
 import { dispatchJob } from "@/src/index-dispatch"
 import { handleSlackRequest } from "@/src/index-slack-webhook"
@@ -583,6 +584,8 @@ export default {
     // within the size budget; see that file's header.
     const accountResponse = await tryHandlePortalAccountRoute(request, env, ctx, url)
     if (accountResponse) return accountResponse
+    const billingResponse = await tryHandleBillingRoute(request, env, ctx, url) // sig-stripe-checkout
+    if (billingResponse) return billingResponse
     // sig-settings-backends: account controls (delete / export / logout-all).
     // Self-contained portal-CORS (own preflight + wrapping) like the dispatcher above.
     const accountControlsResponse = await tryHandleAccountRoute(request, env, ctx, url)

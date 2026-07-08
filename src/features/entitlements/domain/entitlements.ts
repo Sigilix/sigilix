@@ -6,10 +6,20 @@
 // one-file edit.
 //
 // POLICY (founder-confirmed 2026-07-02): CI-failure triage, the Slack assistant,
-// and Linear triage/agent are Pro/Teams/Max/Ultra ONLY. Free — and `individual`, and
-// any unknown/unset plan — get core PR reviews but NOT these three. `cli_byok`
-// (BYOK key entry in the CLI/portal) is included in the enum so the helper is
-// ready; its gating lands in a separate follow-up (sigilix-cli + portal).
+// Linear triage/agent, and CLI bring-your-own-model-key are Pro/Teams/Max/Ultra
+// ONLY. Free — and `individual`, and any unknown/unset plan — get core PR reviews
+// but NOT these four.
+//
+// cli_byok is enforced DIFFERENTLY from the other three. The three worker surfaces
+// have a server call site that branches on `resolveEntitlement(...).blocked`.
+// "Bring your own model key" never routes through the Worker — the CLI (the
+// opencode fork) talks to the user's own model provider directly, and the portal
+// has no server BYOK endpoint — so there is no server request to reject. Its
+// enforcement is therefore a DISPLAY/CONFIG gate: the CLI/portal read this same
+// policy (`isFeatureEntitled`) to disable the BYOK control and show `upsellFor`,
+// backed by the Terms. The policy lives here so that gate reads one source of
+// truth, and so a future server touchpoint is a one-line `resolveEntitlement`
+// call like the others.
 //
 // FAIL-CLOSED: the entitled set is an explicit ALLOWLIST. Anything we cannot
 // positively identify as one of {pro, teams, max, ultra} — free, individual, team,
@@ -24,8 +34,9 @@
  *   • ci_triage — CI-failure triage sticky comment (`handleCiTriage`).
  *   • slack     — the Slack app-mention assistant (`/slack/events`).
  *   • linear    — Linear triage + the assign→PR agent.
- *   • cli_byok  — bring-your-own-key entry in the CLI/portal (gating is a
- *                 follow-up; the helper is ready today).
+ *   • cli_byok  — bring-your-own model-key in the CLI/portal. Client-side only
+ *                 (no Worker request carries a user model key), so it is gated at
+ *                 the display/config layer + Terms, not a server call site.
  */
 export type EntitledFeature = "ci_triage" | "slack" | "linear" | "cli_byok"
 

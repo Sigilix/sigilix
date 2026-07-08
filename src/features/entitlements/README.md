@@ -11,18 +11,31 @@ reviews but NOT the three paid-only surfaces.
 | `ci_triage` | CI-failure triage sticky comment | `pro`, `teams`, `max`, `ultra` |
 | `slack` | Slack app-mention assistant | `pro`, `teams`, `max`, `ultra` |
 | `linear` | Linear triage + assign→PR agent | `pro`, `teams`, `max`, `ultra` |
-| `cli_byok` | BYOK key entry (CLI/portal) — **gating is a follow-up** | `pro`, `teams`, `max`, `ultra` |
+| `cli_byok` | BYO model-key in the CLI/portal — **display/config gate + Terms** (no server touchpoint) | `pro`, `teams`, `max`, `ultra` |
 
 `ENTITLED_TIERS = {pro, teams, max, ultra}` (teams is feature-complete). **Fail-closed**: anything not positively one of
 those four — `free`, `individual`, `team`, `enterprise`, `"default"`, unknown, unset,
 a typo — is NOT entitled.
+
+### How each feature is enforced
+
+`ci_triage`, `slack`, and `linear` have a **server call site** that resolves the
+installation's plan and branches on `resolveEntitlement(...).blocked` — the
+authoritative gate. `cli_byok` is different: "bring your own model key" never
+routes through the Worker (the CLI talks to the user's own model provider
+directly; the portal has no server BYOK endpoint), so there is no server request
+to reject. `cli_byok` is enforced at the **display/config layer** — the CLI/portal
+read this same `isFeatureEntitled` policy to disable the BYOK control and show
+`upsellFor("cli_byok")` — backed by the **Terms**. The policy is defined here so
+both the server gates and the client display gate read one source of truth (and a
+future server touchpoint is a one-line `resolveEntitlement` call).
 
 ## The boundary is one edit
 
 - `domain/entitlements.ts` — `ENTITLED_TIERS`, `EntitledFeature`, `isFeatureEntitled`.
   Change the tiers or open a feature to free HERE; surfaces never re-decide policy.
 - `domain/mode.ts` — `resolveEntitlementsMode` reads `OPENCLAW_ENTITLEMENTS_MODE`.
-- `domain/upsell.ts` — the human-facing upgrade copy (Slack/Linear).
+- `domain/upsell.ts` — the human-facing upgrade copy (Slack/Linear + the CLI BYOK notice).
 - `adapters/d1-plan-read.ts` — `readInstallationPlan`, fail-closed read of `tenant.tier`.
 - `adapters/gate.ts` — `resolveEntitlement(env, {installationId, feature})`, the ONE call
   every surface makes; returns `{ mode, plan, entitled, blocked, wouldBlock }`.

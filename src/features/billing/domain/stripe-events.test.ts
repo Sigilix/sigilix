@@ -7,7 +7,7 @@ import {
   type StripeEvent,
 } from "@/src/features/billing/domain/stripe-events"
 
-const CFG: PriceTierConfig = { pro: "price_pro", max: "price_max", ultra: "price_ultra" }
+const CFG: PriceTierConfig = { pro: "price_pro", teams: "price_teams", max: "price_max", ultra: "price_ultra" }
 
 describe("parseInstallationId", () => {
   it("accepts positive int number and numeric string", () => {
@@ -26,6 +26,7 @@ describe("parseInstallationId", () => {
 describe("mapPriceToTier", () => {
   it("maps by exact configured price id", () => {
     expect(mapPriceToTier({ id: "price_pro" }, CFG)).toBe("pro")
+    expect(mapPriceToTier({ id: "price_teams" }, CFG)).toBe("teams")
     expect(mapPriceToTier({ id: "price_max" }, CFG)).toBe("max")
     expect(mapPriceToTier({ id: "price_ultra" }, CFG)).toBe("ultra")
   })
@@ -34,6 +35,8 @@ describe("mapPriceToTier", () => {
     expect(mapPriceToTier({ id: "price_x", lookup_key: "sigilix_pro_monthly" }, CFG)).toBe("pro")
     expect(mapPriceToTier({ id: "price_x", nickname: "Pro plan" }, CFG)).toBe("pro")
     expect(mapPriceToTier({ id: "price_x", lookup_key: "max annual" }, {})).toBe("max")
+    expect(mapPriceToTier({ id: "price_x", lookup_key: "sigilix_teams_monthly" }, {})).toBe("teams")
+    expect(mapPriceToTier({ id: "price_x", nickname: "Teams plan" }, {})).toBe("teams")
   })
   it("returns null when nothing matches", () => {
     expect(mapPriceToTier({ id: "price_x", nickname: "starter" }, CFG)).toBeNull()

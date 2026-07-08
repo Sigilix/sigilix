@@ -82,6 +82,28 @@ export const DEFAULT_TRIAGE_RATE_LIMIT_CAP = 3
 // ─── resolveRateLimitCap ─────────────────────────────────────────────────────
 
 /**
+ * The Pro base cap (per rolling window) — the anchor of the paid-tier ladder. Every
+ * other paid tier is expressed as an integer MULTIPLE of this base, so the founder's
+ * confirmed ratios stay obvious in code rather than hidden in magic numbers.
+ */
+export const RATE_LIMIT_CAP_BASE = 5
+
+/**
+ * Per-tier multiplier of `RATE_LIMIT_CAP_BASE` — the founder-confirmed usage ladder:
+ *   pro   1×  → 5      (base)
+ *   teams 2×  → 10     (2× pro; feature-complete, top-tier entitlements)
+ *   max   5×  → 25     (5× pro)
+ *   ultra 50× → 250    (10× max = 50× pro — the highest paid tier)
+ * (Free is the DEFAULT_RATE_LIMIT_CAP floor, not a multiple of the base.)
+ */
+const TIER_CAP_MULTIPLIER: Record<"pro" | "teams" | "max" | "ultra", number> = {
+  pro: 1,
+  teams: 2,
+  max: 5,
+  ultra: 50,
+}
+
+/**
  * Return the per-rolling-window review cap for a given subscription tier.
  *
  * This is the seam that SIG-41 (Stripe) will replace with live tier data.
@@ -97,29 +119,25 @@ export const DEFAULT_TRIAGE_RATE_LIMIT_CAP = 3
  * with a hard `DEFAULT_RATE_LIMIT_CAP` floor so a trial is NEVER worse than Free and
  * never resolves to zero/negative. When the trial converts to `active`, the caller
  * passes `trialing = false` and the FULL tier cap is restored. Halved caps:
- * pro 5→3, max 10→5, ultra 20→10 (free 2→2, floored).
+ * pro 5→3, teams 10→5, max 25→13, ultra 250→125 (free 2→2, floored).
  *
  * TODO (SIG-41): replace the static map with Stripe entitlement lookup.
  */
 export function resolveRateLimitCap(tier?: string | null, trialing = false): number {
   const full = ((): number => {
-    switch (tier?.trim().toLowerCase()) {
-      case "oss":
-      case "cli":
-      case "free":
-        return 2
-      case "pro":
-        return 5
-      case "max":
-        return 10
+    const t = tier?.trim().toLowerCase()
+    if (t === "pro" || t === "teams" || t === "max" || t === "ultra") {
+      return RATE_LIMIT_CAP_BASE * TIER_CAP_MULTIPLIER[t]
+    }
+    switch (t) {
+      // Legacy, non-Stripe-writable tiers kept for back-compat (billing only ever
+      // writes free/pro/teams/max/ultra); explicit values, outside the base ladder.
       case "pro_plus":
       case "pro+":
         return 10
       case "enterprise":
         return 12
-      case "ultra":
-        // Highest paid consumer tier (see ENTITLED_TIERS = {pro, max, ultra}).
-        return 20
+      // oss / cli / free / unknown / null / undefined → the Free floor.
       default:
         return DEFAULT_RATE_LIMIT_CAP
     }

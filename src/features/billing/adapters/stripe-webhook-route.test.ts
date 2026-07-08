@@ -37,6 +37,7 @@ async function makeEnv(extra: Partial<Env> = {}) {
   const env = {
     SIGILIX_STRIPE_WEBHOOK_SECRET: SECRET,
     SIGILIX_STRIPE_PRICE_PRO: "price_pro",
+    SIGILIX_STRIPE_PRICE_TEAMS: "price_teams",
     SIGILIX_STRIPE_PRICE_MAX: "price_max",
     SIGILIX_STRIPE_PRICE_ULTRA: "price_ultra",
     SIGILIX_PLATFORM_DB: db,
@@ -166,6 +167,25 @@ describe("handleStripeWebhookRoute", () => {
     expect(res.status).toBe(200)
     expect(await readTier(db, 70)).toBe("pro")
     expect(await readStatus(db, 70)).toBe("active")
+  })
+
+  it("subscription.created active price_teams → tenant.tier upserted to 'teams' + status active", async () => {
+    const req = await signedReq({
+      id: "e_teams",
+      type: "customer.subscription.created",
+      data: {
+        object: {
+          status: "active",
+          customer: "cus_TEAMS",
+          metadata: { installation_id: "60" },
+          items: { data: [{ price: { id: "price_teams" } }] },
+        },
+      },
+    })
+    const res = await handleStripeWebhookRoute(req, env)
+    expect(res.status).toBe(200)
+    expect(await readTier(db, 60)).toBe("teams")
+    expect(await readStatus(db, 60)).toBe("active")
   })
 
   it("subscription.deleted → downgrade to free (installation resolved via KV link)", async () => {

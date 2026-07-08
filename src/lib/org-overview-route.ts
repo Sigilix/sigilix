@@ -79,7 +79,7 @@ const SEAT_SCAN_LIMIT = 1000
 const DEFAULT_PAGE_LIMIT = 50
 const MAX_PAGE_LIMIT = 200
 
-const ORG_PLANS = ["free", "pro", "max", "ultra", "team", "enterprise"] as const
+const ORG_PLANS = ["free", "pro", "teams", "max", "ultra", "team", "enterprise"] as const
 export type OrgPlan = (typeof ORG_PLANS)[number]
 
 export interface OrgSeat {

@@ -13,11 +13,12 @@
 // (its signature is verified, but a malformed-but-signed body must not throw).
 
 /** The Sigilix paid/free tiers this webhook drives (subset of tenant.tier's domain). */
-export type BillingTier = "free" | "pro" | "max" | "ultra"
+export type BillingTier = "free" | "pro" | "teams" | "max" | "ultra"
 
 /** Env-configured Stripe price ids → Sigilix tier. Any/all may be unset. */
 export interface PriceTierConfig {
   pro?: string | undefined
+  teams?: string | undefined
   max?: string | undefined
   ultra?: string | undefined
 }
@@ -121,8 +122,8 @@ function installationFromMetadata(meta: Record<string, unknown> | undefined): nu
  * Map a Stripe price to a Sigilix tier. FIRST by exact configured price-id match
  * (the authoritative signal — the founder pastes each price id into env), THEN a
  * fallback substring match on the price's lookup_key / nickname containing
- * `pro`/`max`/`ultra` (so a correctly-named price still maps before the ids are set).
- * Returns null when nothing matches — the caller must NOT grant a tier on a null.
+ * `pro`/`teams`/`max`/`ultra` (so a correctly-named price still maps before the ids
+ * are set). Returns null when nothing matches — the caller must NOT grant a tier on null.
  */
 export function mapPriceToTier(price: StripePrice | undefined, cfg: PriceTierConfig): BillingTier | null {
   if (!price) return null
@@ -130,6 +131,7 @@ export function mapPriceToTier(price: StripePrice | undefined, cfg: PriceTierCon
   if (id) {
     if (cfg.ultra && id === cfg.ultra) return "ultra"
     if (cfg.max && id === cfg.max) return "max"
+    if (cfg.teams && id === cfg.teams) return "teams"
     if (cfg.pro && id === cfg.pro) return "pro"
   }
   const key = `${asString(price.lookup_key) ?? ""} ${asString(price.nickname) ?? ""}`.toLowerCase()
@@ -138,6 +140,7 @@ export function mapPriceToTier(price: StripePrice | undefined, cfg: PriceTierCon
   // `sigilix_pro_monthly` match `pro`, while `approve`/`product`/`maximum` do NOT).
   if (hasTierToken(key, "ultra")) return "ultra"
   if (hasTierToken(key, "max")) return "max"
+  if (hasTierToken(key, "teams")) return "teams"
   if (hasTierToken(key, "pro")) return "pro"
   return null
 }

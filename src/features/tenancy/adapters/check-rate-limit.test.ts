@@ -394,6 +394,27 @@ describe("checkRateLimit", () => {
     expect(active.used).toBe(3)
   })
 
+  it("tier=teams → active cap=10 (2× pro); trialing → half cap=5", async () => {
+    const active = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 55,
+      authorLogin: "judy",
+      nowMs: NOW,
+      tier: "teams",
+      trialing: false,
+    })
+    expect(active.cap).toBe(10)
+    expect(active.allowed).toBe(true)
+
+    const trial = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 56,
+      authorLogin: "judy",
+      nowMs: NOW,
+      tier: "teams",
+      trialing: true,
+    })
+    expect(trial.cap).toBe(5)
+  })
+
   it("a Pro trial's halved cap (3) is still ≥ the Free cap (2) — a trial is never worse than Free", async () => {
     const proTrial = await checkRateLimit(makeEnv(db, "enforce"), {
       installationId: 53,

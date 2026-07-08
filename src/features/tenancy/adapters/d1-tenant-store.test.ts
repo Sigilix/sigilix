@@ -412,14 +412,16 @@ describe("migration 0011 subscription_status backfill", () => {
     await seed(203, "ultra")
     await seed(204, "free")
     await seed(205, "default")
+    await seed(206, "teams")
     // Apply the new migration (ALTER + backfill UPDATE) over the seeded rows.
     await db.exec(MIGRATION_0011_SQL)
   })
 
-  it("backfills paid tiers (pro/max/ultra) to 'active' so they keep FULL volume", async () => {
+  it("backfills paid tiers (pro/teams/max/ultra) to 'active' so they keep FULL volume", async () => {
     expect(await readTenantSubscriptionStatus(makeEnv(db), 201)).toBe("active")
     expect(await readTenantSubscriptionStatus(makeEnv(db), 202)).toBe("active")
     expect(await readTenantSubscriptionStatus(makeEnv(db), 203)).toBe("active")
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 206)).toBe("active")
   })
 
   it("leaves free/default rows NULL (fail-safe half, never fabricated full-paid)", async () => {

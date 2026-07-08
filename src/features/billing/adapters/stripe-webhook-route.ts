@@ -42,6 +42,7 @@ const MAX_BODY_BYTES = 1024 * 1024
 export function resolvePriceTierConfig(env: Env): PriceTierConfig {
   return {
     pro: env.SIGILIX_STRIPE_PRICE_PRO,
+    teams: env.SIGILIX_STRIPE_PRICE_TEAMS,
     max: env.SIGILIX_STRIPE_PRICE_MAX,
     ultra: env.SIGILIX_STRIPE_PRICE_ULTRA,
   }

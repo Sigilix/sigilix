@@ -11,13 +11,16 @@
 -- the terminal status on the next subscription.* event.
 ALTER TABLE tenant ADD COLUMN subscription_status TEXT;
 
--- Backfill EXISTING paid subscribers to 'active' so the trial cap does not silently
--- halve their volume the moment this migration lands. A row already holding a paid tier
--- (pro/teams/max/ultra — the only paid tiers the billing webhook writes) was set by the
--- pre-trial webhook, which granted a paid tier only for a live subscription. Trials do
--- not exist yet (Checkout's trial_period_days=14 is a separate follow-up), so every
--- current paid subscriber is genuinely `active` and keeps FULL volume. This is still
--- fail-safe: only rows that ALREADY proved a paid tier are marked active; every other
--- row (free/default/unknown) stays NULL → the restrictive half cap. Idempotent + a
--- no-op on a fresh DB.
-UPDATE tenant SET subscription_status = 'active' WHERE tier IN ('pro', 'teams', 'max', 'ultra');
+-- Backfill EXISTING full-cap subscribers to 'active' so the trial cap does not silently
+-- halve their volume the moment this migration lands. Any row already resolving to an
+-- above-free cap in resolveRateLimitCap was set before trials existed (Checkout's
+-- trial_period_days=14 is a separate follow-up), so it is genuinely `active` and keeps
+-- FULL volume. The set + normalization here MIRROR resolveRateLimitCap EXACTLY —
+-- `LOWER(TRIM(tier))` matches its `.trim().toLowerCase()` (so `MAX`/` Pro ` are covered)
+-- and the list includes the legacy non-Stripe full-cap tiers (pro_plus/pro+/enterprise)
+-- as well as the Stripe tiers (pro/teams/max/ultra) — otherwise those rows would fall to
+-- NULL → the restrictive half cap (a regression). Still fail-safe: only rows that ALREADY
+-- proved an above-free cap are marked active; free/oss/cli/default/unknown stay NULL
+-- (they resolve to the Free floor either way). Idempotent + a no-op on a fresh DB.
+UPDATE tenant SET subscription_status = 'active'
+WHERE LOWER(TRIM(tier)) IN ('pro', 'teams', 'max', 'ultra', 'pro_plus', 'pro+', 'enterprise');

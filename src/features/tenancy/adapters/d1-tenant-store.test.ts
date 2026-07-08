@@ -413,6 +413,13 @@ describe("migration 0011 subscription_status backfill", () => {
     await seed(204, "free")
     await seed(205, "default")
     await seed(206, "teams")
+    // Legacy + case/space variants that resolveRateLimitCap still gives a full cap —
+    // the backfill must reach these too, or they'd fall to NULL → halved (regression).
+    await seed(207, "enterprise")
+    await seed(208, "pro_plus")
+    await seed(209, "MAX")
+    await seed(210, " Pro ")
+    await seed(211, "oss")
     // Apply the new migration (ALTER + backfill UPDATE) over the seeded rows.
     await db.exec(MIGRATION_0011_SQL)
   })
@@ -424,8 +431,16 @@ describe("migration 0011 subscription_status backfill", () => {
     expect(await readTenantSubscriptionStatus(makeEnv(db), 206)).toBe("active")
   })
 
-  it("leaves free/default rows NULL (fail-safe half, never fabricated full-paid)", async () => {
-    expect(await readTenantSubscriptionStatus(makeEnv(db), 204)).toBeNull()
-    expect(await readTenantSubscriptionStatus(makeEnv(db), 205)).toBeNull()
+  it("backfills legacy + case/space-variant full-cap tiers too (mirrors the resolver's normalization)", async () => {
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 207)).toBe("active") // enterprise
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 208)).toBe("active") // pro_plus
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 209)).toBe("active") // "MAX"
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 210)).toBe("active") // " Pro "
+  })
+
+  it("leaves free/default/oss rows NULL (they resolve to the Free floor either way)", async () => {
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 204)).toBeNull() // free
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 205)).toBeNull() // default
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 211)).toBeNull() // oss (free-floor tier)
   })
 })

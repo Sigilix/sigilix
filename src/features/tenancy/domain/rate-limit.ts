@@ -91,29 +91,56 @@ export const DEFAULT_TRIAGE_RATE_LIMIT_CAP = 3
  * Tier matching is case-insensitive. Unknown, null, or undefined tiers
  * fall back to `DEFAULT_RATE_LIMIT_CAP` (the free-tier floor).
  *
+ * TRIAL CAP (sig-trial-cap): during a 14-day trial a subscriber gets the tier's
+ * FEATURES (gated elsewhere, unchanged) but HALF the tier's usage VOLUME. Passing
+ * `trialing = true` halves the resolved cap deterministically — `round(full / 2)` —
+ * with a hard `DEFAULT_RATE_LIMIT_CAP` floor so a trial is NEVER worse than Free and
+ * never resolves to zero/negative. When the trial converts to `active`, the caller
+ * passes `trialing = false` and the FULL tier cap is restored. Halved caps:
+ * pro 5→3, max 10→5, ultra 20→10 (free 2→2, floored).
+ *
  * TODO (SIG-41): replace the static map with Stripe entitlement lookup.
  */
-export function resolveRateLimitCap(tier?: string | null): number {
-  switch (tier?.trim().toLowerCase()) {
-    case "oss":
-    case "cli":
-    case "free":
-      return 2
-    case "pro":
-      return 5
-    case "max":
-      return 10
-    case "pro_plus":
-    case "pro+":
-      return 10
-    case "enterprise":
-      return 12
-    case "ultra":
-      // Highest paid consumer tier (see ENTITLED_TIERS = {pro, max, ultra}).
-      return 20
-    default:
-      return DEFAULT_RATE_LIMIT_CAP
-  }
+export function resolveRateLimitCap(tier?: string | null, trialing = false): number {
+  const full = ((): number => {
+    switch (tier?.trim().toLowerCase()) {
+      case "oss":
+      case "cli":
+      case "free":
+        return 2
+      case "pro":
+        return 5
+      case "max":
+        return 10
+      case "pro_plus":
+      case "pro+":
+        return 10
+      case "enterprise":
+        return 12
+      case "ultra":
+        // Highest paid consumer tier (see ENTITLED_TIERS = {pro, max, ultra}).
+        return 20
+      default:
+        return DEFAULT_RATE_LIMIT_CAP
+    }
+  })()
+  if (!trialing) return full
+  // Trial → HALF the tier's volume, deterministic + floored at the Free cap so a
+  // trial is never below Free and never zero/negative/unlimited.
+  return Math.max(DEFAULT_RATE_LIMIT_CAP, Math.round(full / 2))
+}
+
+/**
+ * True ONLY when the subscription status positively proves a fully-paid `active`
+ * subscription — the sole state that earns a tier's FULL usage volume. Every other
+ * value ('trialing', null, unknown, blank, 'past_due', 'canceled', …) returns false,
+ * so the caller applies the halved trial volume.
+ *
+ * FAIL-SAFE RESTRICTIVE: absence of proof of `active` never grants full paid volume —
+ * an unknown/missing status is treated as a trial (half), never as a paid subscriber.
+ */
+export function isFullPaidStatus(status: string | null | undefined): boolean {
+  return status?.trim().toLowerCase() === "active"
 }
 
 // ─── decideRateLimit ─────────────────────────────────────────────────────────

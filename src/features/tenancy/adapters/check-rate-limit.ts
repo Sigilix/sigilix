@@ -56,11 +56,13 @@ export async function checkRateLimit(
     authorLogin: string | undefined
     nowMs: number
     tier?: string | null
+    /** sig-trial-cap: true → the tier's HALF (trial) cap; false/absent → full tier cap. */
+    trialing?: boolean
     bypassReason?: string
   },
 ): Promise<RateLimitDecision> {
   const mode = resolveRateLimitMode(env)
-  const cap = resolveRateLimitCap(args.tier)
+  const cap = resolveRateLimitCap(args.tier, args.trialing)
   const burst = RATE_LIMIT_BURST
 
   /** Convenience: always-allowed response with optional usage fields. */

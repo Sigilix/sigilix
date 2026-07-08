@@ -73,22 +73,32 @@ export async function upsertTenantAndRepo(
  * availability here, so the webhook route surfaces a 5xx on `ok:false` and lets Stripe
  * redeliver. Returns `{ ok: false }` (never throws) when the binding is absent or the
  * write fails. `installationId` is validated positive-integer.
+ *
+ * sig-trial-cap: `subscriptionStatus` (Stripe's normalized status — 'active' /
+ * 'trialing' / a terminal status / null) is written in the SAME UPSERT so the tier and
+ * the state that decides FULL-vs-HALF usage volume (see resolveRateLimitCap) can never
+ * drift apart. It is ALWAYS written alongside the tier: converting a trial→active
+ * overwrites the column to 'active', so no lingering half-cap survives the conversion.
  */
 export async function upsertTenantTier(
   env: Pick<Env, "SIGILIX_PLATFORM_DB">,
   installationId: number,
   tier: string,
   nowIso: string,
+  subscriptionStatus: string | null = null,
 ): Promise<{ ok: boolean }> {
   if (!env.SIGILIX_PLATFORM_DB) return { ok: false }
   if (!Number.isInteger(installationId) || installationId <= 0) return { ok: false }
   try {
     await env.SIGILIX_PLATFORM_DB.prepare(
-      "INSERT INTO tenant (installation_id, tier, created_at, updated_at)" +
-        " VALUES (?, ?, ?, ?)" +
-        " ON CONFLICT(installation_id) DO UPDATE SET tier = excluded.tier, updated_at = excluded.updated_at",
+      "INSERT INTO tenant (installation_id, tier, subscription_status, created_at, updated_at)" +
+        " VALUES (?, ?, ?, ?, ?)" +
+        " ON CONFLICT(installation_id) DO UPDATE SET" +
+        " tier = excluded.tier," +
+        " subscription_status = excluded.subscription_status," +
+        " updated_at = excluded.updated_at",
     )
-      .bind(installationId, tier, nowIso, nowIso)
+      .bind(installationId, tier, subscriptionStatus, nowIso, nowIso)
       .run()
     return { ok: true }
   } catch (error) {
@@ -101,6 +111,42 @@ export async function upsertTenantTier(
       }),
     )
     return { ok: false }
+  }
+}
+
+/**
+ * sig-trial-cap: read the tenant's Stripe `subscription_status` (migration 0011) — the
+ * signal that decides FULL (active) vs HALF (trialing/unknown) usage volume. Returns the
+ * raw status string, or null when the binding is absent, the row/column is NULL, or a D1
+ * fault occurs.
+ *
+ * FAIL-SAFE RESTRICTIVE (never throws): a null return is interpreted by
+ * `isFullPaidStatus` as NOT fully paid → the trial (half) cap — so a read fault, a
+ * missing row, or a pre-migration NULL can never silently grant full paid volume.
+ */
+export async function readTenantSubscriptionStatus(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  installationId: number,
+): Promise<string | null> {
+  if (!env.SIGILIX_PLATFORM_DB) return null
+  if (!Number.isInteger(installationId) || installationId <= 0) return null
+  try {
+    const row = await env.SIGILIX_PLATFORM_DB.prepare(
+      "SELECT subscription_status FROM tenant WHERE installation_id = ?",
+    )
+      .bind(installationId)
+      .first<{ subscription_status: unknown }>()
+    if (row == null) return null
+    return typeof row.subscription_status === "string" ? row.subscription_status : null
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "d1-tenant-subscription-status-read-failed",
+        installationId,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return null
   }
 }
 

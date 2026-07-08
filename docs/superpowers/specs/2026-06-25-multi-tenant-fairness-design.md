@@ -224,6 +224,7 @@ that depends on them. This section is the **living ledger** — every migration 
 | 2 | B (SIG-455) | DO | `tag = "sig-455-provider-cooldown-v1"`, `new_classes=["ProviderCooldownDO"]` | Registers the shared cooldown DO | auto on deploy |
 | 3 | C (SIG-343) | D1 | `migrations/0001_create_tenant_repo_usage.sql` | `tenant`, `repo`, `usage_ledger` tables + indexes | `wrangler d1 migrations apply` (pre-deploy) |
 | 4 | D (SIG-543) | D1 | `migrations/0002_*.sql` (if shadow-quota needs an aggregate view/index) | quota-check read support | `wrangler d1 migrations apply` (pre-deploy) |
+| 5 | sig-trial-cap | D1 | `migrations/0011_add_tenant_subscription_status.sql` | Adds `tenant.subscription_status` (trialing vs active) driving the half-volume trial cap; backfills existing paid tenants to `active` | `wrangler d1 migrations apply` (pre-deploy) |
 
 > Rule: a PR that adds a DO bumps the `[[migrations]]` list (never reorders existing tags); a PR that
 > touches D1 schema adds the next-numbered SQL file (never edits a prior one) and updates this ledger.

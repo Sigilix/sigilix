@@ -10,13 +10,21 @@ import {
   upsertTenantAndRepo,
   upsertTenantTier,
   readTenantConfig,
+  readTenantSubscriptionStatus,
 } from "@/src/features/tenancy/adapters/d1-tenant-store"
 import type { Env } from "@/src/shared/types/env"
 
-const MIGRATION_SQL = readFileSync(
+// sig-trial-cap: apply 0001 (tenant table) + 0011 (subscription_status column) so the
+// shim schema matches production, which the tier UPSERT + status read both depend on.
+const MIGRATION_0001_SQL = readFileSync(
   new URL("../../../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_0011_SQL = readFileSync(
+  new URL("../../../../migrations/0011_add_tenant_subscription_status.sql", import.meta.url),
+  "utf8",
+)
+const MIGRATION_SQL = [MIGRATION_0001_SQL, MIGRATION_0011_SQL].join("\n")
 
 function makeEnv(db: D1Database): Pick<Env, "SIGILIX_PLATFORM_DB"> {
   return { SIGILIX_PLATFORM_DB: db }
@@ -313,5 +321,109 @@ describe("upsertTenantTier", () => {
     ).resolves.toEqual({
       ok: false,
     })
+  })
+
+  // sig-trial-cap — subscription_status is co-written with the tier.
+  it("writes the subscription_status alongside the tier (trialing)", async () => {
+    const res = await upsertTenantTier(makeEnv(db), 90, "pro", "2026-01-01T00:00:00Z", "trialing")
+    expect(res).toEqual({ ok: true })
+    const row = await db
+      .prepare("SELECT tier, subscription_status FROM tenant WHERE installation_id = ?")
+      .bind(90)
+      .first<{ tier: string; subscription_status: string }>()
+    expect(row).toEqual({ tier: "pro", subscription_status: "trialing" })
+  })
+
+  it("a trial→active conversion overwrites subscription_status to 'active' (no lingering trialing)", async () => {
+    await upsertTenantTier(makeEnv(db), 91, "max", "2026-01-01T00:00:00Z", "trialing")
+    await upsertTenantTier(makeEnv(db), 91, "max", "2026-02-02T00:00:00Z", "active")
+    const row = await db
+      .prepare("SELECT tier, subscription_status FROM tenant WHERE installation_id = ?")
+      .bind(91)
+      .first<{ tier: string; subscription_status: string }>()
+    expect(row).toEqual({ tier: "max", subscription_status: "active" })
+  })
+
+  it("omitting subscription_status writes NULL (default)", async () => {
+    await upsertTenantTier(makeEnv(db), 92, "free", "2026-01-01T00:00:00Z")
+    const row = await db
+      .prepare("SELECT subscription_status FROM tenant WHERE installation_id = ?")
+      .bind(92)
+      .first<{ subscription_status: string | null }>()
+    expect(row?.subscription_status).toBeNull()
+  })
+})
+
+describe("readTenantSubscriptionStatus", () => {
+  let db: D1Database
+  beforeEach(async () => {
+    db = makeD1()
+    await db.exec(MIGRATION_SQL)
+  })
+
+  it("returns the stored status for a trialing tenant", async () => {
+    await upsertTenantTier(makeEnv(db), 80, "pro", "2026-01-01T00:00:00Z", "trialing")
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 80)).toBe("trialing")
+  })
+
+  it("returns 'active' after a trial converts", async () => {
+    await upsertTenantTier(makeEnv(db), 81, "ultra", "2026-01-01T00:00:00Z", "active")
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 81)).toBe("active")
+  })
+
+  it("returns null for a NULL column (pre-migration / never-billed row)", async () => {
+    await upsertTenantTier(makeEnv(db), 82, "free", "2026-01-01T00:00:00Z")
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 82)).toBeNull()
+  })
+
+  it("returns null for an unknown (missing) tenant", async () => {
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 99999)).toBeNull()
+  })
+
+  it("returns null (never throws) on an absent binding", async () => {
+    await expect(readTenantSubscriptionStatus(makeAbsentEnv(), 1)).resolves.toBeNull()
+  })
+
+  it("returns null (never throws, fail-safe) for a non-positive / non-integer id", async () => {
+    await expect(readTenantSubscriptionStatus(makeEnv(db), 0)).resolves.toBeNull()
+    await expect(readTenantSubscriptionStatus(makeEnv(db), 1.5)).resolves.toBeNull()
+  })
+
+  it("returns null (never throws, fail-safe) on a genuine D1 fault", async () => {
+    await expect(readTenantSubscriptionStatus({ SIGILIX_PLATFORM_DB: makeBrokenDb() }, 1)).resolves.toBeNull()
+  })
+})
+
+// sig-trial-cap — migration 0011 backfill: existing PAID tenants must become 'active'
+// (keep full volume) while free/default rows stay NULL (fail-safe half). Applies 0001,
+// seeds rows on the OLD schema, THEN applies 0011 to exercise the backfill UPDATE.
+describe("migration 0011 subscription_status backfill", () => {
+  let db: D1Database
+  beforeEach(async () => {
+    db = makeD1()
+    await db.exec(MIGRATION_0001_SQL)
+    const seed = (installationId: number, tier: string) =>
+      db
+        .prepare("INSERT INTO tenant (installation_id, tier, created_at, updated_at) VALUES (?, ?, ?, ?)")
+        .bind(installationId, tier, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+        .run()
+    await seed(201, "pro")
+    await seed(202, "max")
+    await seed(203, "ultra")
+    await seed(204, "free")
+    await seed(205, "default")
+    // Apply the new migration (ALTER + backfill UPDATE) over the seeded rows.
+    await db.exec(MIGRATION_0011_SQL)
+  })
+
+  it("backfills paid tiers (pro/max/ultra) to 'active' so they keep FULL volume", async () => {
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 201)).toBe("active")
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 202)).toBe("active")
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 203)).toBe("active")
+  })
+
+  it("leaves free/default rows NULL (fail-safe half, never fabricated full-paid)", async () => {
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 204)).toBeNull()
+    expect(await readTenantSubscriptionStatus(makeEnv(db), 205)).toBeNull()
   })
 })

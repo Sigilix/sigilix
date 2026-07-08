@@ -76,6 +76,7 @@ import { runMemoryDecayPass } from "@/src/lib/memory-decay"
 import { handleReviewStatusRoute } from "@/src/do/status-route"
 import { handleAuthRoutes } from "@/src/lib/auth-routes"
 import { handleCreateApiKeyRoute, handleListApiKeysRoute, handleRevokeApiKeyRoute } from "@/src/lib/api-keys-route"
+import { tryHandleCliLoginRoute } from "@/src/lib/cli-login-route"
 import { handleOnboardingContextRoute } from "@/src/lib/onboarding-context-route"
 import { handleOnboardingSubmitRoute } from "@/src/lib/onboarding-submit-route"
 import { handleWorkspacePrsRoute, handleWorkspacePrReviewRoute } from "@/src/lib/workspace-prs-route"
@@ -545,8 +546,7 @@ export default {
 
     const mcpResponse = await tryHandleMcpRoute(request, env, ctx, url)
     if (mcpResponse) return mcpResponse
-    // #155 onboarding-backend FOUNDATION (slice 1 of 2): key management —
-    // mint/revoke per-installation API keys.
+    if (url.pathname.startsWith("/v1/cli/")) return tryHandleCliLoginRoute(request, env, ctx, url) // sig-cli-login
     if (request.method === "POST" && url.pathname === "/v1/keys") {
       return withPortalCors(request, await handleCreateApiKeyRoute(request, env, ctx), env)
     }

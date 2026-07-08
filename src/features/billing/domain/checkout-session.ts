@@ -1,0 +1,122 @@
+// sig-stripe-checkout: PURE construction + validation of a Stripe Checkout Session
+// for a paid Sigilix subscription. No IO — the adapter resolves the session/admin
+// gate, the Stripe customer, and POSTs the built form to Stripe.
+//
+// Recall-safety / anti-spoof is enforced by the ADAPTER (it only ever passes a
+// server-verified installation id here). This file's job is the deterministic,
+// unit-testable shape: which tiers are purchasable, the per-tier seat bounds, and
+// the exact Stripe form fields (trial_period_days=14, client_reference_id=the
+// installation, adjustable_quantity min/max) — so those invariants are provable in
+// isolation and can never silently drift.
+
+import type { PriceTierConfig } from "@/src/features/billing/domain/stripe-events"
+
+/** The tiers a customer can actually subscribe to (free/enterprise are NOT purchasable here). */
+export type PaidTier = "pro" | "teams" | "max" | "ultra"
+
+/** Per-tier seat bounds enforced SERVER-SIDE (never trust the client). Teams is a
+ *  team plan — a minimum of 10 seats, capped at 150; the individual tiers start at 1. */
+export interface SeatBounds {
+  min: number
+  max: number
+}
+
+export const SEAT_BOUNDS: Record<PaidTier, SeatBounds> = {
+  pro: { min: 1, max: 500 },
+  teams: { min: 10, max: 150 },
+  max: { min: 1, max: 500 },
+  ultra: { min: 1, max: 500 },
+}
+
+const PAID_TIERS: readonly PaidTier[] = ["pro", "teams", "max", "ultra"]
+
+/** True for a tier a customer may check out. Narrows unknown/free/enterprise out. */
+export function isPaidTier(v: unknown): v is PaidTier {
+  return typeof v === "string" && (PAID_TIERS as readonly string[]).includes(v)
+}
+
+/** A validated checkout request, or a typed rejection carrying the HTTP status. */
+export type CheckoutValidation =
+  | { ok: true; tier: PaidTier; seats: number; bounds: SeatBounds }
+  | { ok: false; status: 400; error: string }
+
+/**
+ * Validate the request body into a purchasable {tier, seats}. Rejects a
+ * non-purchasable tier (free/enterprise/unknown) and any seat count that is not an
+ * integer within the tier's bounds. When `seats` is omitted it defaults to the
+ * tier minimum (so a bare `{tier:"teams"}` is a valid 10-seat checkout).
+ */
+export function validateCheckoutRequest(body: { tier?: unknown; seats?: unknown }): CheckoutValidation {
+  const { tier } = body
+  if (!isPaidTier(tier)) {
+    return { ok: false, status: 400, error: "invalid_tier" }
+  }
+  const bounds = SEAT_BOUNDS[tier]
+
+  const rawSeats = body.seats
+  let seats: number
+  if (rawSeats === undefined || rawSeats === null) {
+    seats = bounds.min
+  } else if (typeof rawSeats === "number" && Number.isInteger(rawSeats)) {
+    seats = rawSeats
+  } else {
+    return { ok: false, status: 400, error: "invalid_seats" }
+  }
+
+  if (seats < bounds.min || seats > bounds.max) {
+    return { ok: false, status: 400, error: "seats_out_of_range" }
+  }
+  return { ok: true, tier, seats, bounds }
+}
+
+/**
+ * Resolve a purchasable tier to its configured Stripe price id (reusing the SAME
+ * env-config the webhook maps prices back FROM, so the two directions can never
+ * disagree). Returns null when the founder hasn't set that tier's price id — the
+ * caller returns 503 rather than guessing.
+ */
+export function resolvePriceForTier(tier: PaidTier, cfg: PriceTierConfig): string | null {
+  const id = cfg[tier]
+  return typeof id === "string" && id.length > 0 ? id : null
+}
+
+export interface CheckoutFormInput {
+  priceId: string
+  seats: number
+  bounds: SeatBounds
+  /** SERVER-VERIFIED installation id (admin-gated) — the anti-spoof link the webhook reads. */
+  installationId: number
+  /** The Stripe customer carrying metadata[installation_id] — resolved/created by the adapter. */
+  customerId: string
+  successUrl: string
+  cancelUrl: string
+}
+
+/**
+ * Build the x-www-form-urlencoded body for `POST /v1/checkout/sessions`. Every
+ * value is a string (Stripe's form API); nested params use Stripe's bracket
+ * notation. The three security-critical fields — client_reference_id (the
+ * installation), subscription_data[metadata][installation_id], and the adjustable
+ * quantity bounds — are set HERE from the validated/verified inputs only.
+ */
+export function buildCheckoutForm(input: CheckoutFormInput): URLSearchParams {
+  const form = new URLSearchParams()
+  form.set("mode", "subscription")
+  form.set("line_items[0][price]", input.priceId)
+  form.set("line_items[0][quantity]", String(input.seats))
+  // Let the buyer nudge the seat count on Stripe's page, but pin the same bounds we
+  // validated server-side so they can't drop Teams below 10 or past 150.
+  form.set("line_items[0][adjustable_quantity][enabled]", "true")
+  form.set("line_items[0][adjustable_quantity][minimum]", String(input.bounds.min))
+  form.set("line_items[0][adjustable_quantity][maximum]", String(input.bounds.max))
+  // 14-day trial → the subscription lands 'trialing' → the trial-cap layer serves
+  // HALF volume until it converts to 'active' (already wired in the webhook).
+  form.set("subscription_data[trial_period_days]", "14")
+  form.set("subscription_data[metadata][installation_id]", String(input.installationId))
+  // The anti-spoof link the webhook reads FIRST (server-side, never from the body).
+  form.set("client_reference_id", String(input.installationId))
+  form.set("customer", input.customerId)
+  form.set("success_url", input.successUrl)
+  form.set("cancel_url", input.cancelUrl)
+  return form
+}

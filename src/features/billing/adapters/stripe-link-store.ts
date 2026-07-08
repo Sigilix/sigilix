@@ -75,6 +75,38 @@ export async function resolveInstallationForCustomer(
   }
 }
 
+/**
+ * Resolve a Sigilix installation id to its EXISTING Stripe customer id (the
+ * reverse of {@link resolveInstallationForCustomer}). The checkout flow reads this
+ * FIRST so a returning org reuses its one customer instead of minting a duplicate.
+ *
+ * Discriminated like the forward lookup so the caller can tell a definite MISS (no
+ * customer on file — mint one) from a transient storage ERROR. A checkout MUST NOT
+ * treat an ERROR as "no customer" — that would create a second customer for an org
+ * that already has one; the caller returns 503 so the client retries.
+ */
+export type InstallationCustomerResult = { kind: "hit"; customerId: string } | { kind: "miss" } | { kind: "error" }
+
+export async function resolveCustomerForInstallation(
+  env: Pick<Env, "OPENCLAW_STATE">,
+  installationId: number,
+): Promise<InstallationCustomerResult> {
+  try {
+    const raw = await env.OPENCLAW_STATE.get(INSTALLATION_LINK_PREFIX + String(installationId))
+    if (!raw || raw.length === 0) return { kind: "miss" }
+    return { kind: "hit", customerId: raw }
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "stripe-installation-link-read-failed",
+        installationId,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    return { kind: "error" }
+  }
+}
+
 /** True when this event id was already processed (a Stripe retry). Fail-soft → false. */
 export async function wasStripeEventProcessed(env: Pick<Env, "OPENCLAW_STATE">, eventId: string): Promise<boolean> {
   try {

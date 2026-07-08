@@ -3,7 +3,8 @@
 // usage-route.ts / org-routes.ts) because it composes the session + GitHub admin gate
 // helpers here with the billing feature's Stripe helpers (imported via its barrel).
 //
-//   POST /v1/billing/checkout → { url }   (start a subscription — 14-day trial)
+//   POST /v1/billing/checkout → { url }   (start a subscription — Pro gets a 14-day
+//                                          trial; Teams/Max/Ultra are paid immediately)
 //   POST /v1/billing/portal   → { url }   (manage/cancel an existing subscription)
 //
 // Security spine (mirrors /v1/usage's admin gate):
@@ -258,7 +259,7 @@ async function resolveOrCreateCustomer(
   return { ok: true, customerId: created.customerId }
 }
 
-/** POST /v1/billing/checkout — start a paid subscription (14-day trial). See file header. */
+/** POST /v1/billing/checkout — start a paid subscription (Pro-only 14-day trial). See file header. */
 export async function handleBillingCheckoutRoute(
   request: Request,
   env: Env,
@@ -305,6 +306,7 @@ export async function handleBillingCheckoutRoute(
     priceId,
     seats: validation.seats,
     bounds: validation.bounds,
+    tier: validation.tier,
     installationId: admin.installationId,
     customerId: customer.customerId,
     successUrl: `${base}/org?checkout=success`,

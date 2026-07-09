@@ -31,6 +31,16 @@ const CODEBASE_PATTERNS: RegExp[] = [
   /\bthe\s+(repo|repository|code\s?base)\b/i,
 ]
 
+// A narrow implicit implementation-location shape for code questions that do not
+// repeat "our repo" on every turn. Keep both halves conjunctive: descriptive
+// location grammar + a code-specific target + a small implementation-verb set.
+// Advisory/modal questions remain web/conversational questions.
+const IMPLICIT_CODE_LOCATION =
+  /\bwhere\s+(?:does|do|is|are)\b(?=[^?]{0,160}\b(?:rate[- ]limit|quota|cap|function|method|class|module|file|route|handler|middleware|constant|config|auth|token|indexer|indexing|queue|webhook|cache|database|table)\b)[^?]{0,160}\b(?:get\s+)?(?:computed|defined|implemented|resolved)\b/i
+const ADVISORY_CUE = /\b(?:should|could|would|best|recommend(?:ed|ation)?)\b/i
+const EXTERNAL_REFERENCE_CUE =
+  /\b(?:in|inside|on|for|from|of|by)\s+(?:the\s+)?(?:[\w.-]+\s+){0,3}(?:api|sdk|service|platform|library|framework|package|docs?|documentation)\b/i
+
 /**
  * Whether a question is asking about the caller's own codebase (so repo grounding
  * should take priority, and a missing indexed repo should prompt them to connect
@@ -39,7 +49,9 @@ const CODEBASE_PATTERNS: RegExp[] = [
 export function isCodebaseQuestion(question: string): boolean {
   const q = question.trim()
   if (!q) return false
-  return CODEBASE_PATTERNS.some((re) => re.test(q))
+  if (CODEBASE_PATTERNS.some((re) => re.test(q))) return true
+  if (ADVISORY_CUE.test(q) || EXTERNAL_REFERENCE_CUE.test(q)) return false
+  return IMPLICIT_CODE_LOCATION.test(q)
 }
 
 // sig-chat-conversational-mode — greeting / small-talk / acknowledgement messages

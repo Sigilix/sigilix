@@ -7,8 +7,8 @@
 // citations.
 //
 // Two concerns, kept apart:
-//   resolveRepoTarget — cheap identity → indexed-repo resolution (KV-only). Run
-//     in the ROUTE where the caller's session/tenant identity is known.
+//   resolveRepoTarget — authorized repo scope → indexed-repo resolution. Run in
+//     the ROUTE where the caller's session/tenant identity is known.
 //   gatherRepoGrounding — the heavier retrieval (embed + Vectorize + graph +
 //     learnings + a GitHub file fetch for symbol bodies). Run in the DO where
 //     the run has a time budget.
@@ -20,11 +20,12 @@
 import type { Env } from "@/src/shared/types/env"
 import type { RepoGrounding, ResearchSource } from "./types"
 import { listIndexedRepos, resolveInstallation } from "@/src/shared/adapters/github/github-installation"
-import { callerOwnsRepo } from "@/src/lib/api-key-resolver"
+import { LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import { gatherAgentContext, indexNamespaceFor } from "@/src/lib/agent-context"
 import { retrieveChunks, type RetrievedChunk } from "@/src/lib/retrieval"
 import { loadLearnings, type LearningEntry } from "@/src/features/learnings"
+import { listRepoFullNamesForInstallation } from "@/src/features/tenancy"
 
 /** Max repo files to surface as citations (keep the source list tight). */
 const MAX_REPO_SOURCES = 12
@@ -45,10 +46,16 @@ export interface ResolveRepoTargetOptions {
   /** An explicit repo the caller (portal) named for this run, if any. */
   explicitOwner?: string | undefined
   explicitRepo?: string | undefined
-  /** The GitHub login of a portal-session caller (a personal-account owner hint). */
-  sessionLogin?: string | undefined
+  /** Exact repos visible through the session user's GitHub App installations. */
+  sessionRepos?: GithubUserInstallationRepoScope[] | undefined
   /** An API-key caller's installation id (0/undefined ⇒ none). */
   installationId?: number | undefined
+}
+
+export interface GithubUserInstallationRepoScope {
+  installationId: number
+  owner: string
+  repo: string
 }
 
 export interface RepoTargetResolution {
@@ -70,98 +77,114 @@ function splitNamespace(ns: string): { owner: string; repo: string } | null {
   return { owner, repo }
 }
 
-/**
- * The owner logins an installation id covers, read from the installation map
- * (`OPENCLAW_GITHUB_INSTALLATION_MAP`, `{ "<owner>/<repo>"|"<owner>": id }`).
- * Used to owner-scope `listIndexedRepos` for an API-key (tenant) caller. Bad /
- * absent JSON ⇒ [].
- */
-export function ownersForInstallation(mapJson: string | undefined, installationId: number): string[] {
-  if (!mapJson || !Number.isInteger(installationId) || installationId <= 0) return []
-  let parsed: unknown
+const DEFAULT_REPO_KEY_PREFIX = "deep-research-default-repo:"
+
+function normalizedNamespace(owner: string, repo: string): string {
+  return `${owner}/${repo}`.toLowerCase()
+}
+
+async function readDefaultRepo(
+  state: KVNamespace,
+  installationId: number,
+): Promise<{ owner: string; repo: string } | null> {
   try {
-    parsed = JSON.parse(mapJson)
+    const raw = await state.get(`${DEFAULT_REPO_KEY_PREFIX}${installationId}`)
+    return raw === null ? null : splitNamespace(raw.trim())
   } catch {
-    return []
+    return null
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return []
-  const owners = new Set<string>()
-  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-    const id = typeof value === "string" ? (/^\d+$/.test(value) ? Number(value) : NaN) : value
-    if (id !== installationId) continue
-    const owner = key.includes("/") ? key.slice(0, key.indexOf("/")) : key
-    if (owner) owners.add(owner)
-  }
-  return [...owners]
 }
 
 /**
- * Resolve which repo to ground this run against, cheaply (KV manifest reads only).
+ * Resolve which authorized, indexed repo to ground this run against.
  *
  * Precedence:
- *  1. An explicit `owner`/`repo` the caller named (the portal's connected-repo
- *     selection) — accepted ONLY when the caller's identity is authorized for it
- *     (a tenant key that owns it, or a session whose login is that owner). This
- *     is the cross-tenant guard: a caller must NEVER ground against a repo they
- *     don't own just by naming it. An unauthorized explicit repo is ignored and
- *     we fall back to the caller's own indexed repo.
- *  2. Otherwise the first indexed repo owned by a candidate owner (the session
- *     login, and every owner the tenant's installation covers) — inherently
- *     scoped to the caller.
+ *  1. An explicit `owner`/`repo`, only when exact auth scope AND a current index
+ *     manifest both contain it.
+ *  2. A per-installation default from KV, under the same two checks.
+ *  3. The only authorized indexed repo, when the choice is unambiguous.
+ * Multiple eligible repos without one declared default deliberately yield no
+ * target — lexical/KV order is not a product selection rule.
  *
  * `hasIndexedRepo` reflects whether ANY candidate owner has an indexed repo, so
  * the engine can tell a never-connected caller to connect one instead of
  * answering a codebase question from generic knowledge.
  */
 export async function resolveRepoTarget(env: Env, opts: ResolveRepoTargetOptions): Promise<RepoTargetResolution> {
-  // The owners this caller's identity covers (case-insensitive; namespaces are
-  // lowercased). A session caller's own login + every owner a tenant key's
-  // installation covers.
-  const candidateOwners = new Set<string>()
-  if (opts.sessionLogin?.trim()) candidateOwners.add(opts.sessionLogin.trim().toLowerCase())
-  if (opts.installationId) {
-    for (const o of ownersForInstallation(env.OPENCLAW_GITHUB_INSTALLATION_MAP, opts.installationId)) {
-      candidateOwners.add(o.toLowerCase())
+  if (!env.OPENCLAW_STATE) return { target: null, hasIndexedRepo: false }
+
+  let indexed: string[]
+  try {
+    indexed = await listIndexedRepos({ OPENCLAW_STATE: env.OPENCLAW_STATE })
+  } catch {
+    return { target: null, hasIndexedRepo: false }
+  }
+  const indexedNamespaces = new Set(indexed.map((namespace) => namespace.toLowerCase()))
+
+  const authorized = new Map<string, { target: { owner: string; repo: string }; installationId: number | null }>()
+  const addAuthorized = (owner: string, repo: string, installationId: number | null): void => {
+    const namespace = normalizedNamespace(owner, repo)
+    if (!indexedNamespaces.has(namespace)) return
+    authorized.set(namespace, { target: { owner, repo }, installationId })
+  }
+
+  // A completed live session scope is exact (including selected-repository
+  // installations). Undefined or failed scope grants nothing: matching a GitHub
+  // login to an indexed owner is not authorization and would ignore revocation.
+  if (opts.sessionRepos !== undefined) {
+    for (const repo of opts.sessionRepos) {
+      if (!Number.isInteger(repo.installationId) || repo.installationId <= 0) continue
+      if (!repo.owner.trim() || !repo.repo.trim()) continue
+      addAuthorized(repo.owner.trim(), repo.repo.trim(), repo.installationId)
     }
   }
 
-  // (1) An authorized explicit repo wins. Authorization: a tenant key that owns
-  // the repo (installation match, legacy global key stays broad — same rule as
-  // /v1/context), OR a session whose login is the repo owner. Unauthorized ⇒
-  // ignore it and fall through (never ground against someone else's repo).
+  // Installation-bound API keys use D1's exact repo→installation registry. The
+  // legacy global sentinel intentionally gets ZERO grounding scope here.
+  if (
+    opts.installationId !== undefined &&
+    Number.isInteger(opts.installationId) &&
+    opts.installationId > 0 &&
+    opts.installationId !== LEGACY_TENANT_INSTALLATION_ID
+  ) {
+    const fullNames = await listRepoFullNamesForInstallation(env, opts.installationId)
+    for (const fullName of fullNames) {
+      const parsed = splitNamespace(fullName)
+      if (parsed) addAuthorized(parsed.owner, parsed.repo, opts.installationId)
+    }
+  }
+
+  const hasIndexedRepo = authorized.size > 0
+
+  // (1) An exact, authorized, indexed explicit repo wins.
   const explicitOwner = opts.explicitOwner?.trim()
   const explicitRepo = opts.explicitRepo?.trim()
   if (explicitOwner && explicitRepo) {
-    const tenantOwns =
-      opts.installationId !== undefined &&
-      callerOwnsRepo(opts.installationId, explicitOwner, explicitRepo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
-    const sessionOwns = candidateOwners.has(explicitOwner.toLowerCase())
-    if (tenantOwns || sessionOwns) {
+    if (authorized.has(normalizedNamespace(explicitOwner, explicitRepo))) {
       return { target: { owner: explicitOwner, repo: explicitRepo }, hasIndexedRepo: true }
     }
   }
 
-  if (!env.OPENCLAW_STATE || candidateOwners.size === 0) return { target: null, hasIndexedRepo: false }
+  if (!hasIndexedRepo) return { target: null, hasIndexedRepo: false }
 
-  // (2) Fall back to the caller's OWN indexed repo(s), owner-scoped so retrieval
-  // can only ever reach repos the caller owns.
-  let target: { owner: string; repo: string } | null = null
-  let hasIndexedRepo = false
-  for (const owner of candidateOwners) {
-    let indexed: string[]
-    try {
-      indexed = await listIndexedRepos({ OPENCLAW_STATE: env.OPENCLAW_STATE }, { owner })
-    } catch {
-      continue
-    }
-    if (indexed.length === 0) continue
-    hasIndexedRepo = true
-    if (!target) {
-      const parsed = splitNamespace(indexed[0]!)
-      if (parsed) target = parsed
-    }
+  // (2) A declared default is valid only within the exact authorized/indexed set.
+  const installationIds = [
+    ...new Set([...authorized.values()].map((entry) => entry.installationId).filter((id): id is number => id !== null)),
+  ].sort((a, b) => a - b)
+  const defaults = new Map<string, { owner: string; repo: string }>()
+  for (const installationId of installationIds) {
+    const target = await readDefaultRepo(env.OPENCLAW_STATE, installationId)
+    if (!target) continue
+    const namespace = normalizedNamespace(target.owner, target.repo)
+    const authorizedTarget = authorized.get(namespace)
+    if (authorizedTarget?.installationId === installationId) defaults.set(namespace, target)
   }
-  return { target, hasIndexedRepo }
+  if (defaults.size === 1) return { target: [...defaults.values()][0]!, hasIndexedRepo: true }
+  if (defaults.size > 1) return { target: null, hasIndexedRepo: true }
+
+  // (3) No guessing across multiple repos.
+  if (authorized.size === 1) return { target: [...authorized.values()][0]!.target, hasIndexedRepo: true }
+  return { target: null, hasIndexedRepo: true }
 }
 
 // ── repo target → grounded context ────────────────────────────────────────

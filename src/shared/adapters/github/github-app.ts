@@ -333,6 +333,129 @@ export async function listAppInstallationIds(appId: string, privateKeyPem: strin
   }
 }
 
+/**
+ * An App installation with the account it targets. `accountId` is the IMMUTABLE
+ * numeric GitHub id (never reused/renamed — the safe principal to match a user
+ * on); `accountLogin` is the mutable handle (kept for the org-members roster URL
+ * + logging).
+ */
+export interface AppInstallation {
+  id: number
+  accountId: number
+  accountLogin: string
+  accountType: string
+}
+
+/**
+ * sig-cli-login-org: list every App installation WITH its account (id + login +
+ * type) via the App JWT (`GET /app/installations`, paginated). Same server-to-
+ * server credential + fail-soft `complete` contract as {@link listAppInstallationIds}
+ * — the difference is it keeps `account.id` / `account.login` / `account.type` so
+ * a caller can match a user to the org/personal install they belong to WITHOUT
+ * the user's own OAuth token (which may be expired). Fail-soft: returns whatever
+ * pages succeeded plus `complete=false` on any error / cap hit.
+ */
+export async function listAppInstallations(
+  appId: string,
+  privateKeyPem: string,
+): Promise<ListingResult<AppInstallation>> {
+  const items: AppInstallation[] = []
+  try {
+    const jwt = await signGitHubAppJwt(appId, privateKeyPem)
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const res = await fetch(`https://api.github.com/app/installations?per_page=100&page=${page}`, {
+        headers: GH_API_HEADERS(`Bearer ${jwt}`),
+      })
+      if (!res.ok) {
+        console.warn(JSON.stringify({ event: "list-app-installations-acct-failed", page, status: res.status }))
+        return { items, complete: false }
+      }
+      const arr = (await res.json()) as Array<{
+        id?: unknown
+        account?: { id?: unknown; login?: unknown; type?: unknown } | null
+      }>
+      if (!Array.isArray(arr) || arr.length === 0) return { items, complete: true }
+      for (const inst of arr) {
+        if (typeof inst.id !== "number") continue
+        const accountId = typeof inst.account?.id === "number" ? inst.account.id : 0
+        const login = typeof inst.account?.login === "string" ? inst.account.login : ""
+        const type = typeof inst.account?.type === "string" ? inst.account.type : ""
+        items.push({ id: inst.id, accountId, accountLogin: login, accountType: type })
+      }
+      if (arr.length < 100) return { items, complete: true }
+      if (page === MAX_PAGES) {
+        console.warn(JSON.stringify({ event: "list-app-installations-acct-truncated", max_pages: MAX_PAGES }))
+        return { items, complete: false }
+      }
+    }
+    return { items, complete: false }
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "list-app-installations-acct-error",
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    return { items, complete: false }
+  }
+}
+
+/**
+ * sig-cli-login-org: the IMMUTABLE numeric ids of an organization's members via
+ * the App installation token (`GET /orgs/{org}/members`, paginated). A sibling of
+ * {@link listOrgMembers} that returns `id` (not login) so membership can be
+ * checked against a session's immutable `githubUserId` rather than a mutable
+ * handle. Fail-soft + `complete` flag; a 403/404 (App lacks "Members" read, or
+ * not an org) yields `{ items: [], complete: false }`.
+ */
+export async function listOrgMemberIds(
+  kv: KVNamespace,
+  appId: string,
+  privateKey: string,
+  installationId: number,
+  orgLogin: string,
+): Promise<ListingResult<number>> {
+  const items: number[] = []
+  try {
+    const token = await getInstallationToken({ kv, appId, privateKey, installationId })
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const res = await fetch(
+        `https://api.github.com/orgs/${encodeURIComponent(orgLogin)}/members?per_page=100&page=${page}`,
+        { headers: GH_API_HEADERS(`token ${token}`) },
+      )
+      if (!res.ok) {
+        console.warn(
+          JSON.stringify({
+            event: "list-org-member-ids-failed",
+            installation_id: installationId,
+            page,
+            status: res.status,
+          }),
+        )
+        return { items, complete: false }
+      }
+      const arr = (await res.json()) as Array<{ id?: unknown }>
+      if (!Array.isArray(arr) || arr.length === 0) return { items, complete: true }
+      for (const m of arr) if (typeof m.id === "number") items.push(m.id)
+      if (arr.length < 100) return { items, complete: true }
+      if (page === MAX_PAGES) {
+        console.warn(JSON.stringify({ event: "list-org-member-ids-truncated", installation_id: installationId }))
+        return { items, complete: false }
+      }
+    }
+    return { items, complete: false }
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "list-org-member-ids-error",
+        installation_id: installationId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    return { items, complete: false }
+  }
+}
+
 /** A GitHub account (org member or repo collaborator) as the org page needs it. */
 export interface GitHubMember {
   login: string

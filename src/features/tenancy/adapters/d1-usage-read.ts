@@ -37,7 +37,7 @@ export async function readTenantUsageSince(
   env: Pick<Env, "SIGILIX_PLATFORM_DB">,
   installationId: number,
   sinceIso: string,
-): Promise<{ ok: true; modelCalls: number; tokens: number; reviews: number } | { ok: false }> {
+): Promise<{ ok: true; modelCalls: number; tokens: number; reviews: number; costUsd: number } | { ok: false }> {
   if (!env.SIGILIX_PLATFORM_DB) return { ok: false }
   const db = env.SIGILIX_PLATFORM_DB
   try {
@@ -45,17 +45,19 @@ export async function readTenantUsageSince(
       .prepare(
         "SELECT COALESCE(SUM(model_calls), 0) AS modelCalls," +
           " COALESCE(SUM(tokens), 0) AS tokens," +
+          " COALESCE(SUM(cost_usd), 0) AS costUsd," +
           " COUNT(*) AS reviews" +
           " FROM usage_ledger" +
           " WHERE installation_id = ? AND created_at >= ?",
       )
       .bind(installationId, sinceIso)
-      .first<{ modelCalls: unknown; tokens: unknown; reviews: unknown }>()
+      .first<{ modelCalls: unknown; tokens: unknown; reviews: unknown; costUsd: unknown }>()
     return {
       ok: true,
       modelCalls: Number(row?.modelCalls) || 0,
       tokens: Number(row?.tokens) || 0,
       reviews: Number(row?.reviews) || 0,
+      costUsd: Number(row?.costUsd) || 0,
     }
   } catch (error) {
     console.warn(

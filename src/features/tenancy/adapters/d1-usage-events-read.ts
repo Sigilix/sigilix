@@ -60,6 +60,50 @@ export async function readUsageEventCount(
 }
 
 /**
+ * SUM the `cost_usd` (blended model spend, migration 0015) of usage_events rows for
+ * a meter in the window [sinceIso, now]. Same scope selectors as `readUsageEventCount`
+ * (installationId → ORG pool; userKey → SEAT pool; both → per-member drill). Powers
+ * the cost dimension of /v1/usage for the CLI (coding_agent) + chatbot surfaces.
+ *
+ * `COALESCE(SUM(cost_usd),0)` so a window with only pre-column rows (default 0) or no
+ * rows reads 0.0, never NULL. Returns {ok:false} on a missing binding / D1 fault —
+ * a fault sentinel, NOT "zero cost". FAILS OPEN — never throws.
+ */
+export async function readUsageEventCostSince(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  args: { meter: UsageEventMeter; installationId?: number; userKey?: string; sinceIso: string },
+): Promise<{ ok: true; costUsd: number } | { ok: false }> {
+  if (!env.SIGILIX_PLATFORM_DB) return { ok: false }
+  const db = env.SIGILIX_PLATFORM_DB
+  const clauses = ["meter = ?", "created_at >= ?"]
+  const binds: (string | number)[] = [args.meter, args.sinceIso]
+  if (args.installationId !== undefined) {
+    clauses.push("installation_id = ?")
+    binds.push(args.installationId)
+  }
+  if (args.userKey !== undefined) {
+    clauses.push("user_key = ?")
+    binds.push(args.userKey)
+  }
+  try {
+    const row = await db
+      .prepare(`SELECT COALESCE(SUM(cost_usd), 0) AS cost FROM usage_events WHERE ${clauses.join(" AND ")}`)
+      .bind(...binds)
+      .first<{ cost: unknown }>()
+    return { ok: true, costUsd: Number(row?.cost) || 0 }
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "d1-usage-events-cost-read-failed",
+        meter: args.meter,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return { ok: false }
+  }
+}
+
+/**
  * Per-author breakdown of ORG-pool events for a meter within an installation +
  * window: `[{ userKey, count }]` sorted desc by count. Powers the org
  * "who triggered it" drill-down. Rows with a NULL user_key are bucketed under the

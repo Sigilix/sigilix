@@ -23,7 +23,13 @@
 import type { Env } from "@/src/shared/types/env"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
-import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
+import {
+  appendUsageEvent,
+  checkUsagePool,
+  readTenantSubscriptionStatus,
+  isFullPaidStatus,
+} from "@/src/features/tenancy"
+import { resolveInstallationPlan } from "@/src/lib/resolve-plan"
 import { runGatewayChain } from "./fallback-chain"
 
 // Chat bodies carry the full prompt/history, so the cap is generous (vs the tiny
@@ -125,7 +131,29 @@ export async function handleVertexChatRoute(
   // Behind SIGILIX_USAGE_METER_MODE (default shadow → never blocks). Fail-open.
   const seatKey = auth.caller.createdBy ? `gh:${auth.caller.createdBy}` : `inst:${auth.caller.installationId}`
   const now = Date.now()
-  const meterDecision = await checkUsagePool(env, { pool: "seat", userKey: seatKey, nowMs: now })
+  // sig-cost-based-metering: resolve the caller's tier so the SEAT pool is COST-capped
+  // (the same $ budget as the org PR pool) — this is what caps a FREE user's CLI usage.
+  // The legacy global key has no real org → tier resolves to the deployment default
+  // (free). The two reads are independent → issued in ONE round-trip (Promise.all).
+  //
+  // FAULT DIRECTION (deliberate, matches the PR rate-limit gate): a D1 blip or an
+  // unresolvable tenant degrades tier→free / status→not-active, i.e. the TIGHTEST
+  // budget — the spend-protective direction (never widen a cap on a fault). This is
+  // fail-CLOSED for the customer (a paid tenant could be under-served during a blip),
+  // NOT fail-open — accepted here exactly as index-dispatch-rate-limit-gate.ts accepts
+  // it for the PR path, and latent while SIGILIX_USAGE_METER_MODE defaults to shadow.
+  //
+  // NOTE (deferred): `coding_agent` cost is NOT yet populated — the gateway is a
+  // founder-locked streaming passthrough (never inspects the body), so per-request
+  // CLI token/cost capture is a separate follow-up. Until then the seat cost gate
+  // binds on chatbot spend only; the schema/read/enforce path is ready for CLI cost.
+  const orgId = auth.caller.installationId === LEGACY_TENANT_INSTALLATION_ID ? 0 : auth.caller.installationId
+  const [tier, subStatus] = await Promise.all([
+    resolveInstallationPlan(env, orgId),
+    readTenantSubscriptionStatus(env, orgId),
+  ])
+  const trialing = !isFullPaidStatus(subStatus)
+  const meterDecision = await checkUsagePool(env, { pool: "seat", userKey: seatKey, nowMs: now, tier, trialing })
   if (!meterDecision.allowed) return json({ error: "usage_limit_exceeded", pool: "seat" }, 429)
 
   // Daily cost ceiling — checked AFTER auth but BEFORE the token mint / Vertex call, so

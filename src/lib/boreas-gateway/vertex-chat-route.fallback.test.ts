@@ -26,6 +26,7 @@ import {
 import { makeEnv, makeCtx } from "@/src/lib/boreas-gateway/boreas-gateway.test-helpers"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
 import { readUsageEventCount } from "@/src/features/tenancy"
 import { insertApiKey } from "@/src/lib/api-key-store"
 import { sha256Hex } from "@/src/lib/auth-bearer"
@@ -539,6 +540,7 @@ describe("gateway coding_agent SEAT metering — SIG-303", () => {
     await d.exec(M1)
     await d.exec(M3) // api_key table so the legacy-global-key fallback path resolves (not fail-closed)
     await d.exec(M4)
+    await applyCostMigrations(d)
     return d
   }
 

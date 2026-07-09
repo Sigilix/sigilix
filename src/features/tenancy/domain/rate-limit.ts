@@ -171,6 +171,156 @@ export function isFullPaidStatus(status: string | null | undefined): boolean {
   return status?.trim().toLowerCase() === "active"
 }
 
+// ─── Cost-based budgets (sig-cost-based-metering) ─────────────────────────────
+//
+// The count cap above answers "how MANY reviews per window"; this answers "how
+// many DOLLARS of model spend per window". A single 200K-token ensemble review
+// costs far more than a 5K-token one, so a flat request count over- or under-
+// charges the tenant relative to real spend. The rate-limit read now SUMs the
+// per-review `cost_usd` in the window (migration 0014) and the enforcer gates on
+// it: cost is the PRIMARY enforced dimension; the count cap stays as a cheap
+// secondary guardrail against abuse (many tiny requests). See check-rate-limit.ts.
+//
+// ─────────────────────── THE FOUNDER'S BUSINESS DECISION ───────────────────────
+// The numbers in `TIER_COST_BUDGET_USD` are a MARGIN/positioning decision, not an
+// engineering one. Edit THIS ONE TABLE (or the env overrides) to tune them; nothing
+// else changes. They are per-DEVELOPER (the rate limit is keyed by author_login, and
+// the self-serve tiers are per-seat), USD of blended model spend, and PROVISIONAL —
+// starting points pending calibration against real-usage data.
+//
+// FOUNDER-SPECIFIED GENEROSITY LADDER (the source of truth for these defaults):
+//     Free  ≪  Pro  <  Teams  <  Max  <  Ultra  ≪  Enterprise(∞)
+//   • FREE is TIGHT — a taste. Model/CLI use is low, but a PR review is costly
+//     (~$0.35 avg, large ones more), so a single big review can legitimately
+//     one-shot the free budget — intended, and it protects the AWS/GCP credits.
+//   • TEAMS sits ABOVE Pro on purpose: it is a per-SEAT volume play ($20/seat), and
+//     orgs don't max every seat, so per-seat generosity can exceed Pro ($30) even
+//     though the per-seat price is lower. (This is why the cost ladder does NOT
+//     match the count-cap ladder — don't "fix" it to match.)
+//   • ENTERPRISE is a signed CONTRACT tier (billed separately) → `null` = UNBOUNDED.
+//
+// The founder's targets are the WEEKLY headline budget (the generosity a user feels):
+//   Free ~$1.5 · Pro ~$15 · Teams ~$22/seat · Max ~$40 · Ultra ~$70 · Enterprise ∞.
+// The SESSION column is the 5h rolling window; it is seeded at ≈ weekly ÷ 4 as a burst
+// guard (not a full week's spend in one sitting). ENFORCEMENT differs by pool:
+//   • PR pool (check-rate-limit.ts) enforces the SESSION window only — its existing
+//     single rolling read. WEEKLY there is display-only (/v1/usage); until PR-pool
+//     weekly enforcement lands, a maximally-active seat can exceed the PR weekly
+//     figure (a known roadmap gap, verify-math §3).
+//   • SEAT pool (check-usage-pool.ts) already reads BOTH windows for counts, so it
+//     enforces BOTH the session AND weekly cost budgets (CLI + chatbot).
+//
+// TUNING NOTE: a POSITIVE number is a budget; a NEGATIVE env override means "no cap"
+// (unbounded); an env override of "0" is a valid budget of $0 → blocks every request
+// (a kill switch, NOT "unlimited" — unlimited is a negative override).
+
+export type CostBudgetWindow = "session" | "weekly"
+
+/**
+ * Per-tier USD budget of blended model spend per window, per developer.
+ * `null` = UNBOUNDED (no cost gate). Edit these numbers to tune margin/positioning.
+ * session ≈ weekly ÷ 4 (the enforced 5h burst guard); weekly = the founder's headline.
+ */
+export const TIER_COST_BUDGET_USD: Readonly<
+  Record<"free" | "pro" | "teams" | "max" | "ultra" | "enterprise", Record<CostBudgetWindow, number | null>>
+> = {
+  free: { session: 0.375, weekly: 1.5 },
+  pro: { session: 3.75, weekly: 15.0 },
+  teams: { session: 5.5, weekly: 22.0 }, // per-seat volume play → above Pro (intended)
+  max: { session: 10.0, weekly: 40.0 },
+  ultra: { session: 17.5, weekly: 70.0 },
+  enterprise: { session: null, weekly: null }, // contract tier → unbounded
+}
+
+/** The Free-tier budget floor a trial can never fall below (mirrors the count-cap floor). */
+const COST_BUDGET_FLOOR = TIER_COST_BUDGET_USD.free
+
+/**
+ * Env override for each (self-serve tier × window). A valid non-negative number
+ * overrides the table; a NEGATIVE override means "no cap" (→ `null`, unbounded);
+ * a blank/non-numeric override is ignored (falls back to the table). Enterprise
+ * has no override row — it is always unbounded.
+ */
+const COST_BUDGET_ENV: Record<"free" | "pro" | "teams" | "max" | "ultra", Record<CostBudgetWindow, keyof Env>> = {
+  free: { session: "SIGILIX_COST_BUDGET_FREE_SESSION", weekly: "SIGILIX_COST_BUDGET_FREE_WEEKLY" },
+  pro: { session: "SIGILIX_COST_BUDGET_PRO_SESSION", weekly: "SIGILIX_COST_BUDGET_PRO_WEEKLY" },
+  teams: { session: "SIGILIX_COST_BUDGET_TEAMS_SESSION", weekly: "SIGILIX_COST_BUDGET_TEAMS_WEEKLY" },
+  max: { session: "SIGILIX_COST_BUDGET_MAX_SESSION", weekly: "SIGILIX_COST_BUDGET_MAX_WEEKLY" },
+  ultra: { session: "SIGILIX_COST_BUDGET_ULTRA_SESSION", weekly: "SIGILIX_COST_BUDGET_ULTRA_WEEKLY" },
+}
+
+/** Normalize a tier string to a known budget key, or `null` for unknown/free-ish. */
+function normalizeBudgetTier(tier?: string | null): "free" | "pro" | "teams" | "max" | "ultra" | "enterprise" {
+  const t = tier?.trim().toLowerCase()
+  if (t === "pro" || t === "teams" || t === "max" || t === "ultra" || t === "enterprise") return t
+  if (t === "team") return "teams" // PLAN_NAMES carries both "team" and "teams" — same budget row.
+  // oss / cli / free / pro_plus / unknown / null → the Free floor (pro_plus is a
+  // legacy count-cap tier with no cost-budget row; treat as Free for cost).
+  return "free"
+}
+
+/**
+ * Resolve the effective per-window USD cost budget for a tier.
+ *
+ * Precedence: env override (valid number) → `TIER_COST_BUDGET_USD` table.
+ * Returns `null` for an UNBOUNDED budget (enterprise, or a negative override).
+ *
+ * TRIAL (sig-trial-cap parity): during a 14-day trial a subscriber gets HALF the
+ * tier's spend volume — `budget / 2`, floored at the Free budget so a trial is
+ * never below Free and never zero. ENTERPRISE ignores `trialing` (contract tier,
+ * never on a trial) and always resolves to `null` (unbounded).
+ *
+ * Env is INJECTED (never imported) — the domain-layer contract; the caller passes
+ * the Worker env, mirroring `resolveUsagePoolCap`.
+ */
+export function resolveTierCostBudgetUsd(
+  env: Partial<Env>,
+  tier: string | null | undefined,
+  window: CostBudgetWindow,
+  trialing = false,
+): number | null {
+  const key = normalizeBudgetTier(tier)
+  // Enterprise = unbounded, regardless of env or trial.
+  if (key === "enterprise") return null
+
+  // Base = env override (when a valid number) else the table.
+  let base: number | null = TIER_COST_BUDGET_USD[key][window]
+  const raw = env[COST_BUDGET_ENV[key][window]]
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const n = Number(raw.trim())
+    if (Number.isFinite(n)) base = n < 0 ? null : n
+  }
+  if (base === null) return null // explicit "no cap" override
+
+  if (!trialing) return base
+  // Trial → half the spend volume, floored at the Free budget for this window so a
+  // trial is never below Free and never zero/negative, and CLAMPED at `base` so it
+  // can never EXCEED the full (non-trial) budget — the outer `Math.min(base, …)`
+  // guards the pathological case where an operator overrides this tier BELOW the
+  // Free floor (without it, `max(floor, base/2)` could hand a trialing dev a larger
+  // budget than a paid one on the same tier — verify-math §2 warning).
+  const floor = COST_BUDGET_FLOOR[window] ?? 0
+  return Math.min(base, Math.max(floor, base / 2))
+}
+
+/**
+ * Return `true` (allowed) when the window's consumed cost is under the budget.
+ *
+ * Mirrors `decideRateLimit`'s fail-open discipline:
+ *   • `budgetUsd === null`  → UNBOUNDED → always allowed.
+ *   • non-finite `consumedUsd` / `budgetUsd` → allowed (a read fault never blocks).
+ *   • otherwise blocks only on clear, finite evidence: `consumedUsd >= budgetUsd`.
+ *
+ * `>=` (not `>`): the budget is a ceiling on ALREADY-consumed spend measured at
+ * admission — once a developer has spent their full budget in the window, the next
+ * review is denied (parity with `decideUsagePool`, which also blocks at `used >= cap`).
+ */
+export function decideCostBudget(consumedUsd: number, budgetUsd: number | null): boolean {
+  if (budgetUsd === null) return true
+  if (!Number.isFinite(consumedUsd) || !Number.isFinite(budgetUsd)) return true
+  return consumedUsd < budgetUsd
+}
+
 // ─── decideRateLimit ─────────────────────────────────────────────────────────
 
 /**

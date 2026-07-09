@@ -1280,6 +1280,23 @@ export interface Env {
   //   "enforce" — reviews are rejected when a tenant exceeds their rolling-window cap.
   SIGILIX_RATE_LIMIT_MODE?: string
 
+  // sig-cost-based-metering: per-tier, per-window USD cost budgets that override the
+  // TIER_COST_BUDGET_USD table in domain/rate-limit.ts (the founder's margin decision).
+  // Each is a number of USD; a NEGATIVE value = "no cap" (unbounded); blank/non-numeric
+  // is ignored (falls back to the table). SESSION is the enforced 5h rolling-window
+  // budget (check-rate-limit gates on it); WEEKLY is surfaced by /v1/usage. Enterprise
+  // has no override — it is always unbounded. Unset → the table defaults.
+  SIGILIX_COST_BUDGET_FREE_SESSION?: string
+  SIGILIX_COST_BUDGET_FREE_WEEKLY?: string
+  SIGILIX_COST_BUDGET_PRO_SESSION?: string
+  SIGILIX_COST_BUDGET_PRO_WEEKLY?: string
+  SIGILIX_COST_BUDGET_TEAMS_SESSION?: string
+  SIGILIX_COST_BUDGET_TEAMS_WEEKLY?: string
+  SIGILIX_COST_BUDGET_MAX_SESSION?: string
+  SIGILIX_COST_BUDGET_MAX_WEEKLY?: string
+  SIGILIX_COST_BUDGET_ULTRA_SESSION?: string
+  SIGILIX_COST_BUDGET_ULTRA_WEEKLY?: string
+
   // sig-free-tier-entitlements: master rollout switch for the paid-only feature
   // gate (CI-failure triage, the Slack assistant, Linear triage/agent are
   // Pro/Teams/Max/Ultra/Enterprise only). "off" (default/unset/unknown) — NO gating, byte-identical

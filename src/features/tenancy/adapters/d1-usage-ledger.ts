@@ -20,6 +20,13 @@ import type { Env } from "@/src/shared/types/env"
  *
  * `authorLogin` is supplementary attribution — NOT part of the identity key.
  *
+ * `costUsd` (sig-cost-based-metering) is the blended per-review model spend in
+ * USD (`computeReviewCost(...).totalUsd`). Optional for back-compat with callers
+ * that predate the column; a missing/non-finite/negative value is coerced to 0 (a
+ * 0 cost fails safe — it can only UNDER-count a window's spend against a budget,
+ * never wrongly block). It is NOT part of the identity guard: a torn-cost review
+ * is still worth metering for its tokens/count.
+ *
  * FAILS OPEN — any error logs a warn and returns void; never throws.
  */
 export async function appendUsage(
@@ -31,6 +38,7 @@ export async function appendUsage(
     headSha: string
     modelCalls: number
     tokens: number
+    costUsd?: number
     authorLogin?: string | null
     nowIso: string
   },
@@ -46,13 +54,17 @@ export async function appendUsage(
   ) {
     return
   }
+  // Cost is not an identity/skip guard — coerce a missing/non-finite/negative
+  // value to 0 (fail-safe: 0 never inflates window spend against a budget).
+  const costUsd =
+    typeof args.costUsd === "number" && Number.isFinite(args.costUsd) && args.costUsd > 0 ? args.costUsd : 0
   const db = env.SIGILIX_PLATFORM_DB
   try {
     await db
       .prepare(
         "INSERT OR IGNORE INTO usage_ledger" +
-          " (installation_id, repo_id, pr_number, head_sha, model_calls, tokens, author_login, created_at)" +
-          " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          " (installation_id, repo_id, pr_number, head_sha, model_calls, tokens, cost_usd, author_login, created_at)" +
+          " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .bind(
         args.installationId,
@@ -61,6 +73,7 @@ export async function appendUsage(
         args.headSha,
         args.modelCalls,
         args.tokens,
+        costUsd,
         args.authorLogin ?? null,
         args.nowIso,
       )

@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach } from "vitest"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
 import { checkRateLimit } from "@/src/features/tenancy/adapters/check-rate-limit"
 import { checkTriageRateLimit } from "@/src/features/tenancy/adapters/check-triage-rate-limit"
 import { DEFAULT_RATE_LIMIT_CAP, DEFAULT_TRIAGE_RATE_LIMIT_CAP } from "@/src/features/tenancy/domain/rate-limit"
@@ -51,6 +52,7 @@ describe("PR-review rate-limit cap vs Linear-triage rate-limit cap — independe
     db = makeD1()
     await db.exec(PR_MIGRATION_SQL)
     await db.exec(TRIAGE_MIGRATION_SQL)
+    await applyCostMigrations(db)
     env = { SIGILIX_PLATFORM_DB: db, SIGILIX_RATE_LIMIT_MODE: "enforce" }
   })
 

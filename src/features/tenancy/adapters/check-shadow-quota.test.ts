@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
 import { checkShadowQuota } from "@/src/features/tenancy/adapters/check-shadow-quota"
 import * as quotaDomain from "@/src/features/tenancy/domain/quota"
 import type { Env } from "@/src/shared/types/env"
@@ -140,6 +141,7 @@ describe("checkShadowQuota", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await applyCostMigrations(db)
   })
 
   // ── mode = off ───────────────────────────────────────────────────────────────

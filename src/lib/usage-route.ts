@@ -33,9 +33,11 @@ import { resolveGithubAuthors } from "@/src/shared/adapters/github/resolve-autho
 import {
   resolveUsageMeterMode,
   resolveUsagePoolCap,
+  resolveTierCostBudgetUsd,
   usagePct,
   readTenantUsageSince,
   readUsageEventCount,
+  readUsageEventCostSince,
   readUsageEventAuthorBreakdown,
   readRollingReviewCount,
   ORG_METERS,
@@ -46,6 +48,12 @@ import {
   USAGE_WINDOW_LABEL,
 } from "@/src/features/tenancy"
 import type { UsageMeter, UsageMeterMode, UsagePool } from "@/src/features/tenancy"
+import {
+  modelBurnTable,
+  approxTasksRemaining,
+  usageUpsellHint,
+  type ModelBurn,
+} from "@/src/shared/domain/sigilix-model-burn"
 import type { Env } from "@/src/shared/types/env"
 
 const MAX_INSTALLATION_PAGES = 20
@@ -68,6 +76,29 @@ export interface UsageMeterBars {
   weekly: UsageMeterWindow
 }
 
+/** sig-cost-based-metering — the COST dimension of a window: real spend vs the
+ *  tier's USD budget. `budget_usd: null` ⇒ UNBOUNDED (enterprise) → the UI shows
+ *  "Unlimited" and all pct/remaining fields are null. */
+export interface UsageCostWindow {
+  /** Blended model spend consumed in the window (USD), rounded to 4 dp. */
+  used_usd: number
+  /** The tier's per-window USD budget, or null when unbounded. */
+  budget_usd: number | null
+  /** max(0, budget − used), or null when unbounded. */
+  remaining_usd: number | null
+  /** 0–100 % of the budget CONSUMED; null when unbounded. */
+  pct: number | null
+  /** 0–100 % of the budget REMAINING (100 − pct); null when unbounded. */
+  remaining_pct: number | null
+  /** Intuitive "≈ N Boreas tasks left" from remaining_usd; null when unbounded. */
+  approx_boreas_tasks_remaining: number | null
+}
+
+export interface UsageCost {
+  session: UsageCostWindow
+  weekly: UsageCostWindow
+}
+
 /** Contract scope label: "user" ⇒ SEAT pool, "org" ⇒ ORG pool. */
 export type UsageScope = "user" | "org"
 
@@ -84,6 +115,16 @@ export interface UsageResponse {
   meters: Partial<Record<UsageMeter, UsageMeterBars>>
   /** The pool aggregate — the enforced total (sum of the pool's meters vs the shared cap). */
   totals: UsageMeterBars & { since_session: string; since_weekly: string }
+  /** sig-cost-based-metering — the pool's real model spend vs the tier's USD budget
+   *  per window. This is what cost enforcement actually gates on (the session window)
+   *  and what the "% of budget left" widgets should key on. */
+  cost: UsageCost
+  /** Per-model RELATIVE burn rate (cheapest = 1.0×) so the user understands why a
+   *  premium-model session drains the budget faster. Every model is available on
+   *  every tier — this is transparency, not a gate. */
+  model_burn: ModelBurn[]
+  /** Soft upsell nudge when the (enforced session) budget runs low, else null. */
+  hint: string | null
   /** Optional admin breakdown of who triggered ORG usage (scope=org only). */
   authors?: Array<{ user_key: string; session: number; weekly: number }>
   generated_at: string
@@ -245,6 +286,68 @@ async function readSeatMeter(
 }
 
 /**
+ * sig-cost-based-metering — sum the USD model spend of ONE meter for the resolved
+ * scope in [since, now]. Mirrors readOrgMeter/readSeatMeter's scoping exactly, but
+ * returns cost instead of a count:
+ *   • pr_reviews (org)          → usage_ledger cost (per-author when an admin drill
+ *                                 filter is set, else installation-wide).
+ *   • linear_triage/slack (org) → usage_events cost (0 until those surfaces report it).
+ *   • coding_agent/chatbot (seat)→ usage_events cost for the seat.
+ * Returns null on a read fault; the caller's `costCell` renders null as 0 (the SAFE
+ * direction — a fault never inflates spend against a budget, so it can't wrongly block).
+ */
+async function readMeterCost(
+  env: Env,
+  meter: UsageMeter,
+  resolved: ResolvedScope,
+  pool: UsagePool,
+  sinceIso: string,
+): Promise<number | null> {
+  if (pool === "org") {
+    if (meter === "pr_reviews") {
+      if (resolved.authorFilter) {
+        const res = await readRollingReviewCount(env, {
+          installationId: resolved.installationId,
+          authorLogin: resolved.authorFilter,
+          sinceIso,
+          limit: 1,
+        })
+        return res.ok ? res.costUsd : null
+      }
+      const res = await readTenantUsageSince(env, resolved.installationId, sinceIso)
+      return res.ok ? res.costUsd : null
+    }
+    if (meter === "linear_triage" || meter === "slack") {
+      const res = await readUsageEventCostSince(env, {
+        meter,
+        installationId: resolved.installationId,
+        ...(resolved.authorFilter ? { userKey: resolved.authorFilter } : {}),
+        sinceIso,
+      })
+      return res.ok ? res.costUsd : null
+    }
+    return null
+  }
+  // seat pool
+  if (meter === "coding_agent" || meter === "chatbot") {
+    if (!resolved.seatKey) return 0
+    const res = await readUsageEventCostSince(env, {
+      meter,
+      userKey: resolved.seatKey,
+      ...(resolved.seatInstallationScope !== undefined ? { installationId: resolved.seatInstallationScope } : {}),
+      sinceIso,
+    })
+    return res.ok ? res.costUsd : null
+  }
+  return null
+}
+
+/** Round a USD figure to 4 dp so the JSON never carries float64 dust. */
+function round4(n: number): number {
+  return Number.isFinite(n) ? Math.round(n * 1e4) / 1e4 : 0
+}
+
+/**
  * Build a { used, limit, pct } window cell. A null `used` (a read fault) collapses
  * to 0 here — deliberately the SAFE direction: a fault shows 0 usage rather than a
  * fabricated high number, so a display read can never overstate consumption against
@@ -396,6 +499,9 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
   const metersOut: Partial<Record<UsageMeter, UsageMeterBars>> = {}
   let sumSession = 0
   let sumWeekly = 0
+  // sig-cost-based-metering: pool COST spend (USD) alongside the counts.
+  let costSession = 0
+  let costWeekly = 0
 
   const meterList = pool === "org" ? ORG_METERS : SEAT_METERS
   for (const meter of meterList) {
@@ -418,7 +524,43 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
     metersOut[meter] = { session: cell(usedS, capSession), weekly: cell(usedW, capWeekly) }
     sumSession += usedS ?? 0
     sumWeekly += usedW ?? 0
+
+    // Cost for the same meter/scope/windows (null fault → 0, the safe direction).
+    const [costS, costW] = await Promise.all([
+      readMeterCost(env, meter, resolved, pool, sinceSession),
+      readMeterCost(env, meter, resolved, pool, sinceWeekly),
+    ])
+    costSession += costS ?? 0
+    costWeekly += costW ?? 0
   }
+
+  // The tier's per-window USD cost budgets (null = UNBOUNDED, e.g. enterprise). Full
+  // (non-trial) budget for DISPLAY — parity with the count caps above, which also use
+  // the full pool cap rather than the trial-halved enforcement value.
+  const costBudgetSession = resolveTierCostBudgetUsd(env, plan, "session")
+  const costBudgetWeekly = resolveTierCostBudgetUsd(env, plan, "weekly")
+  const costWindow = (used: number, budget: number | null): UsageCostWindow => {
+    const remaining = budget === null ? null : Math.max(0, budget - used)
+    const pctConsumed = usagePct(used, budget) // % of the budget consumed
+    const remainingPct = pctConsumed === null ? null : Math.max(0, 100 - pctConsumed)
+    return {
+      used_usd: round4(used),
+      budget_usd: budget,
+      remaining_usd: remaining === null ? null : round4(remaining),
+      pct: pctConsumed,
+      remaining_pct: remainingPct,
+      approx_boreas_tasks_remaining: approxTasksRemaining(remaining, "boreas"),
+    }
+  }
+  const costOut: UsageCost = {
+    session: costWindow(costSession, costBudgetSession),
+    weekly: costWindow(costWeekly, costBudgetWeekly),
+  }
+  // Transparency + upsell: the per-model relative burn rate, and a soft nudge keyed
+  // on the ENFORCED (session) window's remaining budget. Every model is on every
+  // tier — the premium model just burns the budget faster (no gating).
+  const modelBurn = modelBurnTable()
+  const hint = usageUpsellHint(costOut.session.remaining_pct)
 
   // Optional ORG per-author breakdown ("who triggered org usage") — merged across
   // the usage_events org meters (slack + linear_triage). Only when scope=org, an
@@ -473,6 +615,9 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
       since_session: sinceSession,
       since_weekly: sinceWeekly,
     },
+    cost: costOut,
+    model_burn: modelBurn,
+    hint,
     ...(authors ? { authors } : {}),
     generated_at: new Date(nowMs).toISOString(),
   }

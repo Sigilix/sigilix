@@ -133,6 +133,7 @@ import { runSlackAgent } from "@/src/lib/slack/slack-agent"
 import { learningsKey } from "@/src/features/learnings/domain/store-ops"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
 import { readUsageEventCount } from "@/src/features/tenancy"
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
@@ -803,6 +804,7 @@ describe("runSlackAgent — SIG-303 slack ORG-pool metering", () => {
     const db = makeD1()
     await db.exec(M1)
     await db.exec(M4)
+    await applyCostMigrations(db)
     const env = makeEnv()
     env.SIGILIX_PLATFORM_DB = db
     return { env, db }

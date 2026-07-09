@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
 import { appendUsage } from "@/src/features/tenancy/adapters/d1-usage-ledger"
 import type { Env } from "@/src/shared/types/env"
 
@@ -57,6 +58,7 @@ describe("appendUsage", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await applyCostMigrations(db)
     // usage_ledger has no FK to tenant/repo, so we can insert rows without seeding those tables.
   })
 

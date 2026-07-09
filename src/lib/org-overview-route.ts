@@ -64,6 +64,7 @@ import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { fetchInstallationRoster } from "@/src/lib/org-members-roster"
 import { resolveUserRole, type UserRole } from "@/src/lib/resolve-user-role"
+import { resolveInstallationPlan, type PlanName } from "@/src/lib/resolve-plan"
 import type { Env } from "@/src/shared/types/env"
 
 // Defensive pagination cap on GET /user/installations (session→installation
@@ -79,8 +80,9 @@ const SEAT_SCAN_LIMIT = 1000
 const DEFAULT_PAGE_LIMIT = 50
 const MAX_PAGE_LIMIT = 200
 
-const ORG_PLANS = ["free", "pro", "teams", "max", "ultra", "team", "enterprise"] as const
-export type OrgPlan = (typeof ORG_PLANS)[number]
+// The org plan tiers are exactly the canonical PlanName set (resolve-plan.ts) —
+// alias so the two can never drift as tiers are added.
+export type OrgPlan = PlanName
 
 export interface OrgSeat {
   login: string
@@ -161,10 +163,20 @@ async function fetchUserInstallationIds(accessToken: string): Promise<number[]> 
 
 // ─── Config helpers (plan + billing placeholders) ─────────────
 
-/** Plan from OPENCLAW_PLAN (validated against the known set), else "free". */
-function resolvePlan(env: Pick<Env, "OPENCLAW_PLAN">): OrgPlan {
-  const raw = env.OPENCLAW_PLAN
-  return (ORG_PLANS as readonly string[]).includes(raw ?? "") ? (raw as OrgPlan) : "free"
+/**
+ * The org's REAL plan — the authoritative `tenant.tier` for this installation
+ * (resolveInstallationPlan reads it through the same entitlements source the
+ * gate enforces on), falling back to the deployment default only when there is
+ * no tenant row / an unknown tier / a D1 fault. This is why a paid org (e.g.
+ * tier "ultra"/"enterprise") reads its true plan on the Organization page rather
+ * than the OPENCLAW_PLAN placeholder that previously defaulted every org to "free".
+ * PlanName and OrgPlan share the same members, so the result is a valid OrgPlan.
+ */
+async function resolvePlan(
+  env: Pick<Env, "OPENCLAW_PLAN" | "SIGILIX_PLATFORM_DB">,
+  installationId: number,
+): Promise<OrgPlan> {
+  return resolveInstallationPlan(env, installationId)
 }
 
 /** Per-seat billing placeholder from OPENCLAW_PER_SEAT_PRICE, or null ("billing at launch"). */
@@ -528,7 +540,7 @@ export async function handleOrgOverviewRoute(request: Request, env: Env, ctx?: E
     scope = resolveApiKeyScope(apiAuth.caller.installationId)
   }
 
-  const plan = resolvePlan(env)
+  const plan = await resolvePlan(env, scope.installationId)
   const billing = resolveBilling(env)
 
   // Best-effort org headline + seats. Any D1 fault degrades to an empty seat

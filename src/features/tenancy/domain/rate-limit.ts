@@ -90,17 +90,21 @@ export const RATE_LIMIT_CAP_BASE = 5
 
 /**
  * Per-tier multiplier of `RATE_LIMIT_CAP_BASE` — the founder-confirmed usage ladder:
- *   pro   1×  → 5      (base)
- *   teams 2×  → 10     (2× pro; feature-complete, top-tier entitlements)
- *   max   5×  → 25     (5× pro)
- *   ultra 50× → 250    (10× max = 50× pro — the highest paid tier)
+ *   pro         1×  → 5      (base)
+ *   teams       2×  → 10     (2× pro; feature-complete, top-tier entitlements)
+ *   max         5×  → 25     (5× pro)
+ *   ultra       50× → 250    (10× max = 50× pro — the highest self-serve paid tier)
+ *   enterprise 100× → 500    (2× ultra — the CONTRACT tier, the highest cap of all)
+ * `enterprise` is set on tenant.tier manually when a team signs a contract (never via
+ * self-serve Stripe); it sits ABOVE ultra as the top of the ladder.
  * (Free is the DEFAULT_RATE_LIMIT_CAP floor, not a multiple of the base.)
  */
-const TIER_CAP_MULTIPLIER: Record<"pro" | "teams" | "max" | "ultra", number> = {
+const TIER_CAP_MULTIPLIER: Record<"pro" | "teams" | "max" | "ultra" | "enterprise", number> = {
   pro: 1,
   teams: 2,
   max: 5,
   ultra: 50,
+  enterprise: 100,
 }
 
 /**
@@ -121,12 +125,18 @@ const TIER_CAP_MULTIPLIER: Record<"pro" | "teams" | "max" | "ultra", number> = {
  * passes `trialing = false` and the FULL tier cap is restored. Halved caps:
  * pro 5→3, teams 10→5, max 25→13, ultra 250→125 (free 2→2, floored).
  *
+ * ENTERPRISE is the CONTRACT tier: set manually on tenant.tier when a team signs, never
+ * sold via self-serve Stripe, so it can NEVER be on a trial. It therefore ignores the
+ * `trialing` flag entirely and always resolves to its full top cap (500 = 2× ultra) —
+ * this keeps enterprise at full volume even if a stray `trialing = true` is passed when
+ * the contract tenant has no Stripe `active` status row.
+ *
  * TODO (SIG-41): replace the static map with Stripe entitlement lookup.
  */
 export function resolveRateLimitCap(tier?: string | null, trialing = false): number {
+  const t = tier?.trim().toLowerCase()
   const full = ((): number => {
-    const t = tier?.trim().toLowerCase()
-    if (t === "pro" || t === "teams" || t === "max" || t === "ultra") {
+    if (t === "pro" || t === "teams" || t === "max" || t === "ultra" || t === "enterprise") {
       return RATE_LIMIT_CAP_BASE * TIER_CAP_MULTIPLIER[t]
     }
     switch (t) {
@@ -135,14 +145,14 @@ export function resolveRateLimitCap(tier?: string | null, trialing = false): num
       case "pro_plus":
       case "pro+":
         return 10
-      case "enterprise":
-        return 12
       // oss / cli / free / unknown / null / undefined → the Free floor.
       default:
         return DEFAULT_RATE_LIMIT_CAP
     }
   })()
-  if (!trialing) return full
+  // Enterprise is contract-set (never sold via Stripe) → it can never be on a trial, so
+  // it always earns its full top cap regardless of the trialing flag.
+  if (!trialing || t === "enterprise") return full
   // Trial → HALF the tier's volume, deterministic + floored at the Free cap so a
   // trial is never below Free and never zero/negative/unlimited.
   return Math.max(DEFAULT_RATE_LIMIT_CAP, Math.round(full / 2))

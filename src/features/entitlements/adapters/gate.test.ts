@@ -44,12 +44,16 @@ describe("resolveEntitlement — mode off is a strict no-op", () => {
 })
 
 describe("resolveEntitlement — enforce gates un-entitled tiers", () => {
-  it("allows pro/max/ultra for every feature", async () => {
+  it("allows pro/teams/max/ultra/enterprise for every feature", async () => {
     const db = await makeDb()
     await seedTenant(db, 10, "pro")
     await seedTenant(db, 11, "max")
     await seedTenant(db, 12, "ultra")
-    for (const id of [10, 11, 12]) {
+    await seedTenant(db, 13, "teams")
+    // enterprise is the CONTRACT top tier — a manually-set enterprise tenant is FULLY
+    // entitled (it must not fail closed).
+    await seedTenant(db, 14, "enterprise")
+    for (const id of [10, 11, 12, 13, 14]) {
       for (const feature of ["ci_triage", "slack", "linear", "cli_byok"] as const) {
         const dec = await resolveEntitlement(envWith(db, "enforce"), { installationId: id, feature })
         expect(dec.entitled).toBe(true)
@@ -58,12 +62,12 @@ describe("resolveEntitlement — enforce gates un-entitled tiers", () => {
     }
   })
 
-  it("blocks free/individual and any other tier", async () => {
+  it("blocks free/individual/team and any unknown tier", async () => {
     const db = await makeDb()
     await seedTenant(db, 20, "free")
     await seedTenant(db, 21, "individual")
     await seedTenant(db, 22, "team")
-    await seedTenant(db, 23, "enterprise")
+    await seedTenant(db, 23, "gibberish")
     for (const id of [20, 21, 22, 23]) {
       const dec = await resolveEntitlement(envWith(db, "enforce"), { installationId: id, feature: "slack" })
       expect(dec.entitled).toBe(false)

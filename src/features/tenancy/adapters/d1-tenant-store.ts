@@ -79,6 +79,17 @@ export async function upsertTenantAndRepo(
  * the state that decides FULL-vs-HALF usage volume (see resolveRateLimitCap) can never
  * drift apart. It is ALWAYS written alongside the tier: converting a trial→active
  * overwrites the column to 'active', so no lingering half-cap survives the conversion.
+ *
+ * ENTERPRISE PROTECTION (contract tier): `enterprise` is set manually on `tenant.tier`
+ * when a team signs a contract — never via self-serve Stripe. This is the ONLY Stripe
+ * tier-write site, and Stripe only ever produces free/pro/teams/max/ultra. The
+ * `ON CONFLICT ... WHERE` guard makes the UPDATE a no-op when the EXISTING row is already
+ * `enterprise`, so a stray/late Stripe event (e.g. a `subscription.deleted` for a
+ * previously-linked sub, or a `payment_failed`) can never downgrade a contract tenant and
+ * strip its entitlements / top cap. A skipped no-op still succeeds (`ok:true` → the
+ * webhook acks 200, no redelivery). An INSERT for a brand-new tenant is unaffected
+ * (Stripe never inserts `enterprise`), and an operator downgrade of an ended contract is
+ * a direct manual D1 write that bypasses this function entirely.
  */
 export async function upsertTenantTier(
   env: Pick<Env, "SIGILIX_PLATFORM_DB">,
@@ -96,7 +107,10 @@ export async function upsertTenantTier(
         " ON CONFLICT(installation_id) DO UPDATE SET" +
         " tier = excluded.tier," +
         " subscription_status = excluded.subscription_status," +
-        " updated_at = excluded.updated_at",
+        " updated_at = excluded.updated_at" +
+        // Contract-tier guard: never let a Stripe event overwrite a manually-set
+        // `enterprise` tenant (case/space-insensitive match mirrors resolveRateLimitCap).
+        " WHERE LOWER(TRIM(tenant.tier)) != 'enterprise'",
     )
       .bind(installationId, tier, subscriptionStatus, nowIso, nowIso)
       .run()

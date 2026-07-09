@@ -6,9 +6,11 @@
 // one-file edit.
 //
 // POLICY (founder-confirmed 2026-07-02): CI-failure triage, the Slack assistant,
-// Linear triage/agent, and CLI bring-your-own-model-key are Pro/Teams/Max/Ultra
-// ONLY. Free — and `individual`, and any unknown/unset plan — get core PR reviews
-// but NOT these four.
+// Linear triage/agent, and CLI bring-your-own-model-key are Pro/Teams/Max/Ultra/
+// Enterprise ONLY. Free — and `individual`, and any unknown/unset plan — get core
+// PR reviews but NOT these four. `enterprise` is the CONTRACT tier (set manually on
+// tenant.tier when a team signs, never via self-serve Stripe); it is the TOP tier and
+// earns every entitled feature — so it must be in the allowlist, not fail closed.
 //
 // cli_byok is enforced DIFFERENTLY from the other three. The three worker surfaces
 // have a server call site that branches on `resolveEntitlement(...).blocked`.
@@ -22,9 +24,9 @@
 // call like the others.
 //
 // FAIL-CLOSED: the entitled set is an explicit ALLOWLIST. Anything we cannot
-// positively identify as one of {pro, teams, max, ultra} — free, individual, team,
-// enterprise, "default", unknown, unset, a typo — is NOT entitled. The burden is
-// on a plan to prove it is entitled, never on this resolver to prove it is not.
+// positively identify as one of {pro, teams, max, ultra, enterprise} — free,
+// individual, team, "default", unknown, unset, a typo — is NOT entitled. The burden
+// is on a plan to prove it is entitled, never on this resolver to prove it is not.
 
 /**
  * The paid-only feature surfaces this layer gates. Extend the union (and the
@@ -41,13 +43,15 @@
 export type EntitledFeature = "ci_triage" | "slack" | "linear" | "cli_byok"
 
 /**
- * The tiers entitled to the paid-only features — {pro, teams, max, ultra}. The one
- * place the paid boundary is defined. Compared case-insensitively against a normalized
- * plan string (see `normalizePlan`). `teams` is FEATURE-COMPLETE (SSO + admin + all
- * connectors) — it earns every entitled feature, like the top consumer tier; only its
- * usage VOLUME differs (2× pro; see resolveRateLimitCap).
+ * The tiers entitled to the paid-only features — {pro, teams, max, ultra, enterprise}.
+ * The one place the paid boundary is defined. Compared case-insensitively against a
+ * normalized plan string (see `normalizePlan`). `teams` is FEATURE-COMPLETE (SSO +
+ * admin + all connectors) — it earns every entitled feature, like the top consumer
+ * tier; only its usage VOLUME differs (2× pro; see resolveRateLimitCap). `enterprise`
+ * is the CONTRACT tier (set on tenant.tier when a team signs, never self-serve Stripe)
+ * — it is the TOP tier: every entitled feature plus the highest usage cap.
  */
-export const ENTITLED_TIERS: ReadonlySet<string> = new Set<string>(["pro", "teams", "max", "ultra"])
+export const ENTITLED_TIERS: ReadonlySet<string> = new Set<string>(["pro", "teams", "max", "ultra", "enterprise"])
 
 /**
  * The per-feature policy: which features currently require an entitled tier.
@@ -70,9 +74,8 @@ export function normalizePlan(plan: string | null | undefined): string {
 /**
  * True when `plan` is entitled to `feature`. FAIL-CLOSED: a feature that requires
  * an entitled tier is granted ONLY when the normalized plan is in
- * `ENTITLED_TIERS`; every other plan (free, individual, team, enterprise,
- * unknown, unset) is denied. A feature not requiring an entitled tier is always
- * granted (none today).
+ * `ENTITLED_TIERS`; every other plan (free, individual, team, unknown, unset) is
+ * denied. A feature not requiring an entitled tier is always granted (none today).
  */
 export function isFeatureEntitled(plan: string | null | undefined, feature: EntitledFeature): boolean {
   if (!REQUIRES_ENTITLED_TIER[feature]) return true

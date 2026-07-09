@@ -145,9 +145,7 @@ const TRIVIAL_MESSAGES = new Set<string>([
   "later",
   "take care",
   "talk soon",
-  // misc chit-chat / connectivity checks
-  "test",
-  "testing",
+  // connectivity check
   "ping",
 ])
 

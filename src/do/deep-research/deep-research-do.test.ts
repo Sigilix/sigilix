@@ -428,4 +428,78 @@ describe("DeepResearchDO — conversational mode + trivial guard", () => {
     expect(events.some((e) => e.type === "status" && (e as { phase?: string }).phase === "searching")).toBe(false)
     expect(events.some((e) => e.type === "final")).toBe(true)
   })
+
+  it("chat mode + a NON-codebase question skips grounding retrieval (kept fast)", async () => {
+    const { ctx } = makeDoState()
+    const instance = new DeepResearchDO(ctx, makeEnv())
+    let gatherCalls = 0
+    instance.setTestHooks(
+      baseHooks({
+        search: () => Promise.reject(new Error("chat mode must not run web search")),
+        gatherGrounding: async () => {
+          gatherCalls++
+          return null
+        },
+      }),
+    )
+    await instance.fetch(
+      req("/start", "POST", {
+        // A general question (no codebase ownership cue) → grounding won't be used,
+        // so the DO must not spend the retrieval on it.
+        question: "how should I structure a monorepo?",
+        mode: "chat",
+        creator: "session:alice",
+        owner: "acme",
+        repo: "widgets",
+        hasIndexedRepo: true,
+      }),
+    )
+    await drive(instance)
+    expect(gatherCalls).toBe(0)
+    const events = await readSse(await instance.fetch(req("/stream", "GET", undefined, "session:alice")))
+    expect(events.some((e) => e.type === "status" && (e as { phase?: string }).phase === "searching")).toBe(false)
+    expect(events.some((e) => e.type === "final")).toBe(true)
+  })
+
+  it("chat mode + a CODEBASE question DOES gather grounding (repo-cited, no web)", async () => {
+    const { ctx } = makeDoState()
+    const instance = new DeepResearchDO(ctx, makeEnv())
+    let gatherCalls = 0
+    instance.setTestHooks(
+      baseHooks({
+        search: () => Promise.reject(new Error("a grounded codebase question must not run web search")),
+        gatherGrounding: async () => {
+          gatherCalls++
+          return {
+            namespace: "acme/widgets",
+            context: "[symbol] src/session/cache.ts",
+            sources: [
+              {
+                url: "https://github.com/acme/widgets/blob/HEAD/src/session/cache.ts#L1-L20",
+                title: "src/session/cache.ts:1-20",
+                domain: "acme/widgets",
+                kind: "repo" as const,
+              },
+            ],
+            chunkCount: 1,
+          }
+        },
+      }),
+    )
+    await instance.fetch(
+      req("/start", "POST", {
+        question: "where does session caching live in our repo?",
+        mode: "chat",
+        creator: "session:alice",
+        owner: "acme",
+        repo: "widgets",
+        hasIndexedRepo: true,
+      }),
+    )
+    await drive(instance)
+    expect(gatherCalls).toBe(1)
+    const events = await readSse(await instance.fetch(req("/stream", "GET", undefined, "session:alice")))
+    expect(events.some((e) => e.type === "source" && (e as { kind?: string }).kind === "repo")).toBe(true)
+    expect(events.some((e) => e.type === "status" && (e as { phase?: string }).phase === "searching")).toBe(false)
+  })
 })

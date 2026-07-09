@@ -41,7 +41,7 @@ export interface EngineDeps {
   runId: string
   config: ResearchConfig
   /** Whether at least one search provider is configured. When false the loop
-   *  degrades gracefully to a model-only answer (see `runWithoutSearch`) instead
+   *  degrades gracefully to a model-only answer (see `runDirectAnswer`) instead
    *  of running the search rounds. */
   hasSearchProvider: boolean
   /** Codebase grounding gathered before the loop from the caller's connected +
@@ -109,17 +109,22 @@ export async function runResearchLoop(deps: EngineDeps): Promise<void> {
     const conversational = deps.mode === "chat"
 
     // Repo grounding retrieved real code → answer from the user's OWN codebase.
-    // In conversational mode, for a codebase question, or when no web provider is
-    // configured, answer DIRECTLY from the repo and cite files — no web rounds.
-    // Otherwise the repo context is folded into the web loop as authoritative
-    // augmentation.
+    // A codebase question (or no web provider configured) is answered DIRECTLY from
+    // the repo with file-path citations — no web rounds. Grounding augments a
+    // CODEBASE question only: a general/non-codebase question is never forced into
+    // repo context just because the caller has a repo connected.
     if (deps.repoGrounding) {
-      if (conversational || codebaseQ || !deps.hasSearchProvider) {
+      if (codebaseQ || !deps.hasSearchProvider) {
         await runRepoGrounded(deps, deps.repoGrounding)
         return
       }
-      await runInner(deps)
-      return
+      // Non-codebase question with a connected repo: deep mode folds the repo
+      // context into the web loop as authoritative augmentation. Chat mode never
+      // web-searches, so it falls through to a plain direct answer below.
+      if (!conversational) {
+        await runInner(deps)
+        return
+      }
     }
 
     // Codebase question but NO indexed repo connected → tell them to connect one
@@ -130,10 +135,11 @@ export async function runResearchLoop(deps: EngineDeps): Promise<void> {
     }
 
     // Conversational mode (Deep Research OFF) or no web provider → a single direct
-    // model answer, no web search. The no-provider case adds a clear note; the
-    // conversational case just replies naturally.
+    // model answer, no web search. Only the no-provider DEGRADATION shows the note;
+    // a conversational reply doesn't — the user turned Deep Research off, so "web
+    // search isn't enabled" would be misleading noise.
     if (conversational || !deps.hasSearchProvider) {
-      await runDirectAnswer(deps, deps.hasSearchProvider ? undefined : NO_SEARCH_NOTE)
+      await runDirectAnswer(deps, conversational ? undefined : NO_SEARCH_NOTE)
       return
     }
 

@@ -21,7 +21,7 @@ import { buildModelFn } from "./model"
 import { hasAnySearchProvider, searchWeb } from "./search"
 import { fetchPage } from "./fetch-guard"
 import { gatherRepoGrounding, type GatherRepoGroundingArgs } from "./repo-grounding"
-import { isTrivialMessage } from "./text-utils"
+import { isCodebaseQuestion, isTrivialMessage } from "./text-utils"
 import type { RepoGrounding, ResearchEffort, ResearchEvent, ResearchMode, ResearchTier } from "./types"
 
 const META_KEY = "meta"
@@ -166,10 +166,13 @@ export class DeepResearchDO extends DurableObject<Env> {
     // fails to null (the run then falls back to web research) — grounding must
     // never break a run.
     let repoGrounding: RepoGrounding | null = null
-    // Skip the (heavier) grounding retrieval for a greeting / trivial message — it
-    // short-circuits to a direct reply in the engine anyway, so retrieving code for
-    // "hey!" would only add latency to a message that never uses it.
-    if (this.owner && this.repo && !isTrivialMessage(question)) {
+    // Gather grounding only when the engine will actually USE it: deep mode (a
+    // codebase question answers from the repo, a non-codebase one folds it into the
+    // web loop) OR a codebase question in chat mode. A trivial greeting, and a
+    // non-codebase chat message, both answer directly — retrieving code for them
+    // would only add latency to a message that never cites it.
+    const wantGrounding = this.mode === "deep" || isCodebaseQuestion(question)
+    if (this.owner && this.repo && wantGrounding && !isTrivialMessage(question)) {
       const gather = this.hooks?.gatherGrounding ?? gatherRepoGrounding
       try {
         repoGrounding = await gather({ env: this.env, owner: this.owner, repo: this.repo, query: question })

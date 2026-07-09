@@ -484,9 +484,10 @@ describe("conversational mode + trivial short-circuit", () => {
     expect(types[types.length - 2]).toBe("final")
   })
 
-  it("mode 'chat' still repo-grounds a codebase-ish question (repo cites, no web)", async () => {
+  it("mode 'chat' repo-grounds a CODEBASE question (repo cites, no web)", async () => {
     const { deps, events } = makeDeps({
-      question: "how do we cache sessions?",
+      // A real codebase question (ownership cue "our repo") — isCodebaseQuestion true.
+      question: "where does session caching live in our repo?",
       mode: "chat",
       repoGrounding: grounding,
       hasIndexedRepo: true,
@@ -496,6 +497,28 @@ describe("conversational mode + trivial short-circuit", () => {
     expect(countSearching(events)).toBe(0)
     const final = events.find((e) => e.type === "final")
     expect(final && final.type === "final" ? final.sources.every((s) => s.kind === "repo") : false).toBe(true)
+    expect(final && final.type === "final" ? final.sources.length : 0).toBe(1)
+  })
+
+  it("mode 'chat' does NOT force repo grounding onto a NON-codebase question", async () => {
+    // A general question from a repo-connected user (grounding present but the
+    // question isn't about their code). It must get a plain direct answer — NOT the
+    // repo-grounded path that would cite irrelevant repo files — and never web-search.
+    const { deps, events } = makeDeps({
+      question: "what is the latest stable version of Node.js?",
+      mode: "chat",
+      repoGrounding: grounding,
+      hasIndexedRepo: true,
+      search: () => Promise.reject(new Error("web search must not run in conversational mode")),
+    })
+    await runResearchLoop(deps)
+    expect(countSearching(events)).toBe(0)
+    // No repo (or any) sources emitted, and a source-less final — a plain reply.
+    expect(events.some((e) => e.type === "source")).toBe(false)
+    const final = events.find((e) => e.type === "final")
+    expect(final && final.type === "final" ? final.sources : null).toEqual([])
+    // Not the repo-grounding note either.
+    expect(events.some((e) => e.type === "note" && /grounding this answer/i.test(e.text))).toBe(false)
   })
 
   it("a greeting short-circuits to a direct reply even with Deep Research ON", async () => {

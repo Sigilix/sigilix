@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
 import { checkRateLimit } from "@/src/features/tenancy/adapters/check-rate-limit"
 import { DEFAULT_RATE_LIMIT_CAP } from "@/src/features/tenancy/domain/rate-limit"
 import type { Env } from "@/src/shared/types/env"
@@ -115,6 +116,7 @@ describe("checkRateLimit", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await applyCostMigrations(db)
   })
 
   // ── mode = off ────────────────────────────────────────────────────────────────
@@ -432,5 +434,101 @@ describe("checkRateLimit", () => {
     expect(proTrial.cap).toBeGreaterThanOrEqual(free.cap)
     expect(proTrial.cap).toBe(3)
     expect(free.cap).toBe(2)
+  })
+})
+
+// ─── cost-based enforcement (sig-cost-based-metering) ─────────────────────────
+
+/** Insert one review row carrying an explicit `cost_usd` (blended model spend). */
+async function insertReviewWithCost(
+  db: D1Database,
+  installationId: number,
+  authorLogin: string,
+  idx: number,
+  costUsd: number,
+  createdAt: string,
+): Promise<void> {
+  await db
+    .prepare(
+      "INSERT INTO usage_ledger" +
+        " (installation_id, repo_id, pr_number, head_sha, model_calls, tokens, cost_usd, author_login, created_at)" +
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(installationId, 100, idx, `sha${idx}`, 1, 100, costUsd, authorLogin, createdAt)
+    .run()
+}
+
+describe("checkRateLimit — cost budget", () => {
+  let db: D1Database
+  beforeEach(async () => {
+    db = makeD1()
+    await db.exec(MIGRATION_SQL)
+    await applyCostMigrations(db)
+  })
+
+  it("blocks on COST while still UNDER the count cap (cost is the primary dimension)", async () => {
+    // Pro: count cap 5, session cost budget $3.75. Two reviews at $2 each = $4 ≥ $3.75,
+    // but only 2 of 5 reviews used → the count cap is NOT hit. Cost binds first.
+    await insertReviewWithCost(db, 70, "mallory", 1, 2.0, recentIso())
+    await insertReviewWithCost(db, 70, "mallory", 2, 2.0, recentIso())
+    const d = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 70,
+      authorLogin: "mallory",
+      nowMs: NOW,
+      tier: "pro",
+      trialing: false,
+    })
+    expect(d.used).toBe(2)
+    expect(d.used).toBeLessThan(d.cap) // under the COUNT cap
+    expect(d.usedCostUsd).toBeCloseTo(4.0, 6)
+    expect(d.costBudgetUsd).toBeCloseTo(3.75, 6)
+    expect(d.allowed).toBe(false) // …yet blocked, on COST
+  })
+
+  it("a big-cost request consumes proportionally more budget than a small one", async () => {
+    await insertReviewWithCost(db, 71, "big", 1, 3.0, recentIso())
+    await insertReviewWithCost(db, 72, "small", 1, 0.1, recentIso())
+    const big = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 71,
+      authorLogin: "big",
+      nowMs: NOW,
+      tier: "pro",
+    })
+    const small = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 72,
+      authorLogin: "small",
+      nowMs: NOW,
+      tier: "pro",
+    })
+    // Same ONE review each, but the big one has drained far more of the same budget.
+    expect(big.usedCostUsd).toBeGreaterThan(small.usedCostUsd)
+    expect(big.costRemainingUsd!).toBeLessThan(small.costRemainingUsd!)
+  })
+
+  it("enterprise has an UNBOUNDED cost budget → never blocked on cost", async () => {
+    // Way past any dollar figure, but enterprise budget is null (unbounded).
+    for (let i = 1; i <= 6; i++) await insertReviewWithCost(db, 73, "ent", i, 100.0, recentIso())
+    const d = await checkRateLimit(makeEnv(db, "enforce"), {
+      installationId: 73,
+      authorLogin: "ent",
+      nowMs: NOW,
+      tier: "enterprise",
+    })
+    expect(d.costBudgetUsd).toBeNull()
+    expect(d.costRemainingUsd).toBeNull()
+    expect(d.usedCostUsd).toBeCloseTo(600, 6)
+    expect(d.allowed).toBe(true) // count cap for enterprise is 500 — 6 is trivially under it
+  })
+
+  it("shadow mode never blocks even when the cost budget is exceeded", async () => {
+    await insertReviewWithCost(db, 74, "shadow", 1, 10.0, recentIso())
+    const d = await checkRateLimit(makeEnv(db, "shadow"), {
+      installationId: 74,
+      authorLogin: "shadow",
+      nowMs: NOW,
+      tier: "pro",
+    })
+    expect(d.usedCostUsd).toBeCloseTo(10.0, 6)
+    expect(d.allowed).toBe(true) // shadow observes, never blocks
   })
 })

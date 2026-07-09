@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
 import { readTenantUsageSince, readUsageRollupSince } from "@/src/features/tenancy/adapters/d1-usage-read"
 import type { Env } from "@/src/shared/types/env"
 
@@ -85,6 +86,7 @@ describe("readTenantUsageSince", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await applyCostMigrations(db)
   })
 
   it("sums model_calls, tokens and counts reviews within the time window", async () => {
@@ -108,7 +110,7 @@ describe("readTenantUsageSince", () => {
     })
 
     const result = await readTenantUsageSince(makeEnv(db), 1, "2026-06-01T00:00:00.000Z")
-    expect(result).toEqual({ ok: true, modelCalls: 8, tokens: 1300, reviews: 2 })
+    expect(result).toEqual({ ok: true, modelCalls: 8, tokens: 1300, reviews: 2, costUsd: 0 })
   })
 
   it("excludes rows with created_at strictly before sinceIso", async () => {
@@ -134,12 +136,12 @@ describe("readTenantUsageSince", () => {
     })
 
     const result = await readTenantUsageSince(makeEnv(db), 1, "2026-06-01T00:00:00.000Z")
-    expect(result).toEqual({ ok: true, modelCalls: 2, tokens: 200, reviews: 1 })
+    expect(result).toEqual({ ok: true, modelCalls: 2, tokens: 200, reviews: 1, costUsd: 0 })
   })
 
   it("returns {ok:true, 0,0,0} when genuinely no rows exist for the tenant in the window", async () => {
     const result = await readTenantUsageSince(makeEnv(db), 999, "2026-01-01T00:00:00.000Z")
-    expect(result).toEqual({ ok: true, modelCalls: 0, tokens: 0, reviews: 0 })
+    expect(result).toEqual({ ok: true, modelCalls: 0, tokens: 0, reviews: 0, costUsd: 0 })
   })
 
   it("binding absent → {ok: false}", async () => {
@@ -165,6 +167,7 @@ describe("readUsageRollupSince", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await applyCostMigrations(db)
   })
 
   it("returns one row per tenant with summed usage and joined account fields", async () => {

@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
 import { readRollingReviewCount } from "@/src/features/tenancy/adapters/d1-rate-limit-read"
 import type { Env } from "@/src/shared/types/env"
 
@@ -68,6 +69,7 @@ describe("readRollingReviewCount", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await applyCostMigrations(db)
   })
 
   it("counts all rows for (installationId, authorLogin) within the window", async () => {
@@ -95,6 +97,40 @@ describe("readRollingReviewCount", () => {
     // Rows must be ascending in time
     const sorted = [...result.windowRowsAscMs].sort((a, b) => a - b)
     expect(result.windowRowsAscMs).toEqual(sorted)
+  })
+
+  it("sums cost_usd across in-window rows (sig-cost-based-metering)", async () => {
+    // Two rows with explicit costs; one older row is legacy (cost defaults 0).
+    await db
+      .prepare(
+        "INSERT INTO usage_ledger (installation_id, repo_id, pr_number, head_sha, model_calls, tokens, cost_usd, author_login, created_at)" +
+          " VALUES (9, 100, 1, 'a', 3, 1000, 0.25, 'carol', '2026-06-01T01:00:00.000Z')",
+      )
+      .run()
+    await db
+      .prepare(
+        "INSERT INTO usage_ledger (installation_id, repo_id, pr_number, head_sha, model_calls, tokens, cost_usd, author_login, created_at)" +
+          " VALUES (9, 100, 2, 'b', 5, 2000, 0.75, 'carol', '2026-06-01T02:00:00.000Z')",
+      )
+      .run()
+    // Legacy row inserted WITHOUT the cost column → defaults to 0, contributes nothing.
+    await db
+      .prepare(
+        "INSERT INTO usage_ledger (installation_id, repo_id, pr_number, head_sha, model_calls, tokens, author_login, created_at)" +
+          " VALUES (9, 100, 3, 'c', 1, 100, 'carol', '2026-06-01T03:00:00.000Z')",
+      )
+      .run()
+
+    const result = await readRollingReviewCount(makeEnv(db), {
+      installationId: 9,
+      authorLogin: "carol",
+      sinceIso: "2026-06-01T00:00:00.000Z",
+      limit: 10,
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.count).toBe(3)
+    expect(result.costUsd).toBeCloseTo(1.0, 6) // 0.25 + 0.75 + 0 (legacy)
   })
 
   it("excludes rows with created_at strictly before sinceIso", async () => {

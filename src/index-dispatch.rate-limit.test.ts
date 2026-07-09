@@ -109,12 +109,32 @@ function makeEnv(extra: Partial<Env> = {}): Env {
 
 /** Decision for an over-cap enforce deny. */
 function denied(): RateLimitDecision {
-  return { allowed: false, mode: "enforce", used: 10, cap: 10, resetMs: 45_000, footer: "" }
+  return {
+    allowed: false,
+    mode: "enforce",
+    used: 10,
+    cap: 10,
+    resetMs: 45_000,
+    usedCostUsd: 0,
+    costBudgetUsd: null,
+    costRemainingUsd: null,
+    footer: "",
+  }
 }
 
 /** Decision for an allowed enforce. */
 function allowed(mode: "enforce" | "shadow" | "off" = "enforce"): RateLimitDecision {
-  return { allowed: true, mode, used: 5, cap: 10, resetMs: 0, footer: "" }
+  return {
+    allowed: true,
+    mode,
+    used: 5,
+    cap: 10,
+    resetMs: 0,
+    usedCostUsd: 0,
+    costBudgetUsd: null,
+    costRemainingUsd: null,
+    footer: "",
+  }
 }
 
 beforeEach(() => {

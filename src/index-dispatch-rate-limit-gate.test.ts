@@ -111,12 +111,32 @@ function makeArgs(
 
 /** Denied rate-limit decision (enforce, over-cap). */
 function denied(): RateLimitDecision {
-  return { allowed: false, mode: "enforce", used: 3, cap: 3, resetMs: 45_000, footer: "" }
+  return {
+    allowed: false,
+    mode: "enforce",
+    used: 3,
+    cap: 3,
+    resetMs: 45_000,
+    usedCostUsd: 0,
+    costBudgetUsd: null,
+    costRemainingUsd: null,
+    footer: "",
+  }
 }
 
 /** Allowed rate-limit decision. */
 function allowed(): RateLimitDecision {
-  return { allowed: true, mode: "enforce", used: 1, cap: 3, resetMs: 0, footer: "" }
+  return {
+    allowed: true,
+    mode: "enforce",
+    used: 1,
+    cap: 3,
+    resetMs: 0,
+    usedCostUsd: 0,
+    costBudgetUsd: null,
+    costRemainingUsd: null,
+    footer: "",
+  }
 }
 
 // ─── console spies ────────────────────────────────────────────────────────────

@@ -31,6 +31,7 @@ import type { EnsembleResult, FinalizeTelemetry } from "./session"
 import type { SkipNoticeReason } from "@/src/lib/review-comment-fallback"
 import type { Env } from "@/src/shared/types/env"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
 
 // ── SIG-304 helpers ──────────────────────────────────────────────────────────
 
@@ -123,6 +124,7 @@ describe("finalize — SIG-343 usage-ledger metering", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await applyCostMigrations(db)
     vi.clearAllMocks()
   })
 

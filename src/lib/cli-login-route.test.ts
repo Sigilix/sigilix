@@ -7,17 +7,22 @@
 // via the real-SQLite shim with the account_tenant/api_key (0003) + name (0009)
 // + tenant (0001) schema applied.
 
-import { describe, it, expect, beforeEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { handleCliAuthorizeRoute, handleCliExchangeRoute, handleCliMeRoute } from "@/src/lib/cli-login-route"
 import { linkAccountTenant } from "@/src/lib/api-key-store"
 import { sha256Hex } from "@/src/lib/auth-bearer"
-import { base64urlEncode } from "@/src/lib/auth-session"
+import { base64urlEncode, createSession } from "@/src/lib/auth-session"
 import type { SessionRecord } from "@/src/lib/auth-session"
 import type { Env } from "@/src/shared/types/env"
 
 const SESSION_COOKIE = "__Host-sigilix_session"
+// 32-byte AES-256 key (base64url) — the production secret shape. Only the
+// org-install fallback test decrypts a token, so it seeds a REAL encrypted
+// session (createSession) under this key; the other tests use the token-less
+// seedSession above.
+const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(7))
 
 // A KV shim that HONORS expirationTtl so the expiry test is real: an entry
 // written with { expirationTtl } older than now is treated as absent.
@@ -59,6 +64,36 @@ async function seedSession(kv: KVNamespace, sessionId: string, githubUserId: num
   }
   await kv.put(`auth_session:${sessionId}`, JSON.stringify(record))
 }
+
+/** Seed a REAL encrypted session (so the org-install fallback can decrypt the GitHub token). */
+async function seedRealSession(kv: KVNamespace, sessionId: string, githubUserId: number, login: string): Promise<void> {
+  await createSession({
+    kv,
+    sessionId,
+    login,
+    githubUserId,
+    accessToken: "ghu_test_token",
+    encryptionKeyB64url: ENC_KEY,
+  })
+}
+
+/** Stub `GET /user/installations` to return exactly the given installation ids. */
+function stubUserInstallations(ids: number[]): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ total_count: ids.length, installations: ids.map((id) => ({ id })) }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    ),
+  )
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 function reqWithSession(url: string, sessionId: string | null, init?: RequestInit): Request {
   const headers = new Headers(init?.headers)
@@ -177,6 +212,44 @@ describe("handleCliAuthorizeRoute (POST /v1/cli/authorize)", () => {
     }>()
     expect(row?.installation_id).toBe(42)
     expect(row?.name).toBe("Sigilix CLI")
+  })
+
+  it("resolves an ORG-only installation live (org owner, no D1 link) and mints against it", async () => {
+    // The regression: the founder is an OWNER of an org that HAS the App
+    // installed (installation 134811639), but has NO personal install and NO
+    // account_tenant link — /setup only ever links a PERSONAL installer. Before
+    // the fix this 409'd ("no installed GitHub App"); now the route resolves the
+    // org install live from GitHub's `GET /user/installations` and persists it.
+    await seedRealSession(kv, "sess-org", 4242, "damartinezjulio")
+    const orgEnv = {
+      OPENCLAW_STATE: kv,
+      SIGILIX_PLATFORM_DB: db,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+    } as unknown as Env
+    stubUserInstallations([134811639]) // an ORG install the user is an owner of
+
+    const { challenge, state } = await pkce()
+    const res = await handleCliAuthorizeRoute(
+      jsonPost("https://x/v1/cli/authorize", "sess-org", { state, challenge }),
+      orgEnv,
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { code: string; login: string }
+    expect(body.code).toBeTruthy()
+    expect(body.login).toBe("damartinezjulio")
+
+    // The account_tenant trust link is now persisted (fast path next time), and
+    // the minted key is bound to the ORG installation.
+    const link = await db
+      .prepare("SELECT installation_id FROM account_tenant WHERE github_user_id = ?")
+      .bind("4242")
+      .first<{ installation_id: number }>()
+    expect(link?.installation_id).toBe(134811639)
+    const key = await db
+      .prepare("SELECT installation_id FROM api_key WHERE created_by = ?")
+      .bind("4242")
+      .first<{ installation_id: number }>()
+    expect(key?.installation_id).toBe(134811639)
   })
 })
 

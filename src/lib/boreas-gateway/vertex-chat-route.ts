@@ -28,7 +28,10 @@ import { runGatewayChain } from "./fallback-chain"
 
 // Chat bodies carry the full prompt/history, so the cap is generous (vs the tiny
 // query routes) but still bounds an abusive buffer. Enforced as the stream is read.
-const MAX_BODY_BYTES = 2 * 1024 * 1024
+// Sized to the widest model window: Pyroeis (Gemini 3.5 Flash) is 1M tokens ≈ 4MB of
+// UTF-8, so a 2MB cap silently halved its usable window. 8MB fits a full 1M-token
+// prompt plus JSON/history overhead; Boreas/Astraeus (262K/200K ≈ ≤1MB) are well under.
+const MAX_BODY_BYTES = 8 * 1024 * 1024
 const DAY_COUNTER_TTL_SECONDS = 2 * 24 * 60 * 60 // expire yesterday's counter (2-day window)
 const DEFAULT_DAILY_LIMIT = 200 // coarse endpoint-wide daily request ceiling (cost guard)
 

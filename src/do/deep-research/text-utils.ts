@@ -13,6 +13,35 @@
  * everything before it (the opener was cut off upstream). Whitespace is
  * trimmed. Never throws.
  */
+// sig-deep-research-repo-grounding — phrases that signal the caller is asking
+// about THEIR OWN connected repository rather than a general/external engineering
+// question. It REQUIRES an ownership cue (our/my/this/the + a repo-ish noun, or
+// "in our/the code…") so a general design question like "which service should we
+// use for queues?" or "where should rate limiting be implemented?" is NOT
+// misrouted into repo grounding. A false negative is cheap: when the caller has a
+// connected repo the web loop still folds in (soft-failing) repo grounding as
+// augmentation; when they don't, it correctly runs web research. Kept in the pure
+// text-utils leaf so the engine imports no heavy retrieval deps.
+const CODEBASE_PATTERNS: RegExp[] = [
+  // "our/my/this repo | repository | codebase | project | app | service | backend | …"
+  /\b(our|my|this)\s+(repo|repository|code\s?base|project|app|service|backend|frontend|monorepo)\b/i,
+  // "in our/my/this/the code | codebase | repo | repository | project"
+  /\bin\s+(our|my|this|the)\s+(code|code\s?base|repo|repository|project)\b/i,
+  // "the repo | repository | codebase" — product-contextual: refers to the user's own
+  /\bthe\s+(repo|repository|code\s?base)\b/i,
+]
+
+/**
+ * Whether a question is asking about the caller's own codebase (so repo grounding
+ * should take priority, and a missing indexed repo should prompt them to connect
+ * one instead of getting a generic answer). Pure; never throws.
+ */
+export function isCodebaseQuestion(question: string): boolean {
+  const q = question.trim()
+  if (!q) return false
+  return CODEBASE_PATTERNS.some((re) => re.test(q))
+}
+
 export function stripThinking(raw: string): string {
   if (!raw) return ""
   const tags = ["think", "thinking", "reasoning"]

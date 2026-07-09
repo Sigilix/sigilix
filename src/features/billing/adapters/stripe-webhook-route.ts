@@ -38,7 +38,7 @@ import {
   enforceSingleActiveSubscription,
   findActiveSurvivor,
 } from "@/src/features/billing/adapters/enforce-single-subscription"
-import { upsertTenantTier } from "@/src/features/tenancy"
+import { upsertTenantTier, readTenantBillingGuard } from "@/src/features/tenancy"
 
 /** Guard against an absurd body (Stripe events are well under this). */
 const MAX_BODY_BYTES = 1024 * 1024
@@ -254,10 +254,29 @@ export async function handleStripeWebhookRoute(request: Request, env: Env): Prom
   }
 
   const nowIso = new Date().toISOString()
+  // sig-github-marketplace-billing: reciprocal clobber-guard. If this tenant is currently a
+  // paying GitHub Marketplace subscriber (source github_marketplace + active/trialing), a
+  // Stripe event — especially a stale/late `subscription.deleted` / `payment_failed` for an
+  // OLD Stripe link the org left behind — must NOT overwrite the live Marketplace tier or
+  // re-stamp the source. Log + ack (mark processed so Stripe doesn't redeliver). Fail-open:
+  // a null guard (unknown state) never blocks a legitimate Stripe write.
+  const mpGuard = await readTenantBillingGuard(env, installationId)
+  if (
+    mpGuard?.billingSource === "github_marketplace" &&
+    (mpGuard.subscriptionStatus === "active" || mpGuard.subscriptionStatus === "trialing")
+  ) {
+    console.warn(
+      JSON.stringify({ event: "stripe-webhook-marketplace-active-skip", type: eventType, installationId, tier }),
+    )
+    if (eventId) await markStripeEventProcessed(env, eventId)
+    return new Response("marketplace active not clobbered\n", { status: 200 })
+  }
   // sig-trial-cap: persist the subscription status alongside the tier so the caps layer
   // resolves FULL (active) vs HALF (trialing/unknown) volume. Co-written in one UPSERT so
   // a trial→active conversion can never leave a stale 'trialing' behind the new tier.
-  const result = await upsertTenantTier(env, installationId, tier, nowIso, subscriptionStatus)
+  // sig-github-marketplace-billing: stamp billing_source='stripe' so a GitHub Marketplace
+  // event can recognise (and refuse to clobber) an active Stripe payer.
+  const result = await upsertTenantTier(env, installationId, tier, nowIso, subscriptionStatus, "stripe")
   if (!result.ok) {
     // Genuine write failure — DON'T mark processed; 500 so Stripe redelivers.
     console.error(JSON.stringify({ event: "stripe-webhook-tier-upsert-failed", type: eventType, installationId, tier }))

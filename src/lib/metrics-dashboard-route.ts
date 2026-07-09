@@ -50,11 +50,34 @@
 //                        a 30d number under a 90d label) — an honest empty, never
 //                        a fabricated zero.
 //
+//   REAL (D1 usage_events, meter='chatbot' — SIG-303 metering; SEAT-scoped):
+//     - chatUsage.runs      count of the CALLER's OWN chatbot events (one row per
+//                           started deep-research / portal-chat run) in window.
+//                           chatbot is a SEAT meter: portal-session events carry
+//                           installation_id 0 and are keyed by user_key
+//                           (`gh:<githubUserId>`), so org-scoping by installation
+//                           would UNDER-report — the honest, tenant-safe read is
+//                           the signed-in caller's own seat key (an API-key tenant
+//                           uses `inst:<installationId>`, mirroring the writer in
+//                           deep-research/routes.ts::seatIdentityFromCreator). A
+//                           caller only ever sees their own seat — no cross-tenant
+//                           leak. Null only on a genuine fault (missing binding /
+//                           D1 error) or an unattributable caller (legacy tenant),
+//                           never fabricated; a real 0 is returned as 0.
+//     - chatUsage.prevRuns  same count over the immediately-preceding equal-length
+//                           window (drives the card's small vs-previous trend).
+//
 //   NULL (no source — never fabricated):
-//     - chatUsage        chatbot metering (SIG-303 usage_events) is not yet in
-//                        this worker; there is no session/message store to read
-//     - medianTime       no merge/last-commit timestamps are persisted
-//     - pipelineFailures CI triage is post-and-forget; no aggregate is stored
+//     - medianTime       no merge/last-commit timestamps are persisted. usage_ledger
+//                        stores only the review created_at; merged_at is fetched
+//                        transiently at review time (merge-guard.ts) but never
+//                        persisted, and the merged-PR webhook only enqueues a corpus
+//                        upsert (title/body) with no timestamp. Would need a PR
+//                        lifecycle store (opened_at + merged_at per PR) to compute.
+//     - pipelineFailures CI triage is post-and-forget; the only persisted trace is
+//                        a short-lived KV dedupe key (TTL). Would need a ci-failure
+//                        meter (usage_events) or a dedicated counter written from
+//                        the workflow_run failure path (triage-ci.ts).
 //
 // Tenant isolation (CRITICAL): the D1 reads filter on the caller's exact
 // installation_id set via bound `?` placeholders (never string-concatenated);
@@ -130,7 +153,7 @@ export interface MetricsDashboardResponse {
   avgReviewIterationsPerPr: number | null
   severity: SeverityBucket[]
   category: CategoryBucket[]
-  chatUsage: { sessions: number; messages: number } | null
+  chatUsage: { runs: number; prevRuns: number } | null
   medianTime: { mergeMin: number; lastCommitMin: number } | null
   toolFindings: { sast: number; linter: number; other: number } | null
   pipelineFailures: number | null
@@ -405,6 +428,51 @@ async function readUsageStats(
       }),
     )
     return EMPTY_USAGE_STATS
+  }
+}
+
+/**
+ * Chat/deep-research usage for the CALLER'S OWN seat (meter='chatbot', SIG-303
+ * usage_events). Returns the run count for the current window plus the count for
+ * the immediately-preceding equal-length window (the card's vs-previous trend).
+ *
+ * SEAT-scoped by `seatKey` — a portal session's `gh:<githubUserId>` or an API
+ * tenant's `inst:<installationId>`, matching the writer's
+ * seatIdentityFromCreator. The seat key is the caller's OWN identity, so this can
+ * only ever surface the caller's own usage — never a cross-tenant read.
+ *
+ * `prevRuns` is derived from a single row (count since the earlier cutoff, minus
+ * the current-window count) so both numbers come from ONE bound query. Returns
+ * null (→ "Coming soon") when there is no binding, no attributable seat, or a D1
+ * fault — a real 0 is returned as `{ runs: 0, prevRuns: 0 }`, never null.
+ */
+async function readChatUsage(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  seatKey: string | null,
+  cutoffIso: string,
+  prevCutoffIso: string,
+): Promise<{ runs: number; prevRuns: number } | null> {
+  if (!env.SIGILIX_PLATFORM_DB) return null
+  if (!seatKey) return null
+  try {
+    const row = await env.SIGILIX_PLATFORM_DB.prepare(
+      "SELECT SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS cur, COUNT(*) AS sincePrev" +
+        " FROM usage_events WHERE meter = ? AND user_key = ? AND created_at >= ?",
+    )
+      .bind(cutoffIso, "chatbot", seatKey, prevCutoffIso)
+      .first<Record<string, unknown>>()
+    if (!row) return { runs: 0, prevRuns: 0 }
+    const runs = Number(row.cur) || 0
+    const sincePrev = Number(row.sincePrev) || 0
+    return { runs, prevRuns: Math.max(0, sincePrev - runs) }
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "metrics-dashboard-chat-usage-read-failed",
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return null
   }
 }
 
@@ -701,12 +769,20 @@ export async function handleMetricsDashboardRoute(
   const session = await requireSession(request, env, ctx)
 
   let scope: LedgerScope
+  // The caller's chatbot SEAT key (usage_events.user_key) — mirrors
+  // seatIdentityFromCreator in deep-research/routes.ts: a portal session is
+  // `gh:<githubUserId|userId>`, an API tenant is `inst:<installationId>`. Null
+  // when unattributable (legacy tenant) so chatUsage reads null, never a leak.
+  let chatSeatKey: string | null
   if (session) {
     scope = await resolveSessionScope(env, session)
+    chatSeatKey = `gh:${session.record.githubUserId ?? session.record.userId ?? "anon"}`
   } else {
     const apiAuth = await requireApiTenant(request, env, ctx)
     if ("response" in apiAuth) return apiAuth.response // 401
-    scope = apiAuth.caller.installationId === LEGACY_TENANT_INSTALLATION_ID ? "all" : [apiAuth.caller.installationId]
+    const isLegacy = apiAuth.caller.installationId === LEGACY_TENANT_INSTALLATION_ID
+    scope = isLegacy ? "all" : [apiAuth.caller.installationId]
+    chatSeatKey = isLegacy ? null : `inst:${apiAuth.caller.installationId}`
   }
 
   const url = new URL(request.url)
@@ -724,6 +800,8 @@ export async function handleMetricsDashboardRoute(
 
   const nowMs = Date.now()
   const cutoffIso = new Date(nowMs - windowDays * DAY_MS).toISOString()
+  // The window immediately before this one (same length) — for chatUsage's trend.
+  const prevCutoffIso = new Date(nowMs - 2 * windowDays * DAY_MS).toISOString()
 
   // Facets + filter-validation options (scoped to the caller, NOT narrowed by
   // the active filters — the UI needs the full option set).
@@ -744,6 +822,9 @@ export async function handleMetricsDashboardRoute(
   // Deterministic-tool findings for the caller's OWN repos (tenant-scoped inside).
   const toolFindings = await scanToolFindings(env, filters.slugsLower, windowDays)
 
+  // Chat/deep-research usage for the caller's OWN seat (fail-soft to null inside).
+  const chatUsage = await readChatUsage(env, chatSeatKey, cutoffIso, prevCutoffIso)
+
   const body: MetricsDashboardResponse = {
     window: `${windowDays}d`,
     activeRepos: usage.activeRepos,
@@ -761,8 +842,8 @@ export async function handleMetricsDashboardRoute(
     severity: reviewComments?.severity ?? [],
     category: reviewComments?.category ?? [],
     toolFindings,
+    chatUsage,
     // No instrumented source — null so the portal renders "Coming soon".
-    chatUsage: null,
     medianTime: null,
     pipelineFailures: null,
     facets: {

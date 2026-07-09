@@ -23,11 +23,20 @@
 // data is fetched, so a caller can never probe another tenant's PR.
 //
 // GitHub fetch: `GET /repos/{owner}/{repo}/pulls/{n}/comments` (inline review
-// comments, paginated) + `GET .../pulls/{n}/reviews` (review summaries). Both
-// are filtered to the Sigilix bot author (SIGILIX_BOT_LOGIN) — CodeRabbit /
-// human / other-bot comments never appear. Inline comments are grouped by file
-// path (grouping is the pure, unit-tested `groupReviewComments` below); the
-// summary is the bot's most recent non-empty review body.
+// comments, paginated) + `GET .../issues/{n}/comments` (the editable overview
+// sticky) + `GET .../pulls/{n}/reviews` (review-submission fallback). All are
+// filtered to the Sigilix bot author (SIGILIX_BOT_LOGIN) — CodeRabbit / human /
+// other-bot comments never appear. Inline comments are grouped by file path
+// (grouping is the pure, unit-tested `groupReviewComments` below).
+//
+// The `summary` is the OVERVIEW — the bot's `<!-- sigilix:pr-overview -->`
+// sticky issue comment (summary / quality gates / important files / findings),
+// picked by `pickOverviewComment`. Under SIG-471 the PR *review-submission* body
+// was gutted to just the `<!-- sigilix:pr-review -->` marker (the inline comments
+// speak for themselves), so the real overview lives ONLY in that editable sticky;
+// reading the review body alone is why the portal used to render a raw marker with
+// an empty body. The review-submission summary (`latestReviewSummary`) stays as a
+// fallback for legacy PRs that predate the sticky.
 //
 // Fail-closed on config/auth; fail-loud on GitHub faults: a missing GitHub App
 // config is 503, a mint/fetch failure is 502 — the portal shows a retriable
@@ -38,6 +47,7 @@ import { decryptAccessToken } from "@/src/lib/auth-session"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { SIGILIX_BOT_LOGIN } from "@/src/shared/domain/sigilix-identity"
+import { OVERVIEW_MARKER, LEGACY_OVERVIEW_MARKER } from "@/src/lib/triage-pr-overview-scan"
 import type { Env } from "@/src/shared/types/env"
 
 const MAX_INSTALLATION_PAGES = 20
@@ -135,8 +145,17 @@ export function groupReviewComments(comments: GithubReviewComment[]): PrReviewFi
   return files
 }
 
+/** A comment/review body stripped of HTML comments (Sigilix markers), for an
+ *  "is there anything to render?" check. `<!-- sigilix:pr-review -->\n` → "". */
+function bodyWithoutMarkers(body: string): string {
+  return body.replace(/<!--[\s\S]*?-->/g, "").trim()
+}
+
 /**
- * The Sigilix bot's most recent non-empty review summary, or null. Ties on
+ * The Sigilix bot's most recent review summary with RENDERABLE content, or null.
+ * A body that is only the SIG-471 `<!-- sigilix:pr-review -->` marker (or empty)
+ * is skipped — returning it would re-expose the raw-marker/empty-body failure the
+ * overview sticky exists to fix, on the legacy fallback path. Ties on
  * `submitted_at` (or a missing timestamp) keep the last-seen — GitHub returns
  * reviews oldest-first, so the last of equal timestamps is the freshest.
  */
@@ -146,7 +165,7 @@ export function latestReviewSummary(reviews: GithubReview[]): PrReviewSummary | 
   for (const r of reviews) {
     if (!isSigilixAuthor(r.user)) continue
     const body = typeof r.body === "string" ? r.body : ""
-    if (body.trim() === "") continue
+    if (bodyWithoutMarkers(body) === "") continue
     const at = typeof r.submitted_at === "string" ? r.submitted_at : ""
     if (best === null || at >= bestAt) {
       best = {
@@ -154,6 +173,39 @@ export function latestReviewSummary(reviews: GithubReview[]): PrReviewSummary | 
         state: typeof r.state === "string" ? r.state : "",
         body,
       }
+      bestAt = at
+    }
+  }
+  return best
+}
+
+interface GithubIssueComment {
+  id?: unknown
+  body?: unknown
+  updated_at?: unknown
+  user?: { login?: unknown } | null
+}
+
+/**
+ * The Sigilix "overview" sticky — the bot's `<!-- sigilix:pr-overview -->` (or
+ * legacy `<!-- openclaw:pr-overview -->`) issue comment, whose body carries the
+ * customer-facing summary / quality gates / important files / findings. There is
+ * exactly one sticky per PR (the review pipeline PATCHes it in place); on the
+ * off chance of duplicates we keep the most recently updated. Returns it shaped
+ * like a `PrReviewSummary` (`state: "OVERVIEW"`) so the portal renders it in the
+ * same summary slot, or null when no sticky exists (legacy PRs → the caller
+ * falls back to the review-submission summary). Pure — exported for tests.
+ */
+export function pickOverviewComment(comments: GithubIssueComment[]): PrReviewSummary | null {
+  let best: PrReviewSummary | null = null
+  let bestAt = ""
+  for (const c of comments) {
+    if (!isSigilixAuthor(c.user)) continue
+    const body = typeof c.body === "string" ? c.body : ""
+    if (!body.includes(OVERVIEW_MARKER) && !body.includes(LEGACY_OVERVIEW_MARKER)) continue
+    const at = typeof c.updated_at === "string" ? c.updated_at : ""
+    if (best === null || at >= bestAt) {
+      best = { id: typeof c.id === "number" ? c.id : 0, state: "OVERVIEW", body }
       bestAt = at
     }
   }
@@ -272,6 +324,34 @@ async function fetchReviews(token: string, owner: string, repo: string, prNumber
   return Array.isArray(arr) ? arr : []
 }
 
+/**
+ * Fetch all pages of the PR's issue comments — the timeline the overview sticky
+ * lives in (a PR is an issue, so its top-level comments are `/issues/{n}/comments`,
+ * distinct from the inline review comments on `/pulls/{n}/comments`). Throws on a
+ * non-OK page so the handler fails loud (retriable) rather than dropping the
+ * overview silently.
+ */
+async function fetchIssueComments(
+  token: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<GithubIssueComment[]> {
+  const all: GithubIssueComment[] = []
+  for (let page = 1; page <= MAX_COMMENT_PAGES; page++) {
+    const res = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${prNumber}/comments?per_page=${PER_PAGE}&page=${page}`,
+      { headers: githubHeaders(`token ${token}`) },
+    )
+    if (!res.ok) throw new Error(`issue comments HTTP ${res.status}`)
+    const arr = (await res.json()) as GithubIssueComment[]
+    if (!Array.isArray(arr) || arr.length === 0) break
+    all.push(...arr)
+    if (arr.length < PER_PAGE) break
+  }
+  return all
+}
+
 // ─── Handler ─────────────────────────────────────────────────────
 
 /** GET /v1/workspace/prs/:installationId/:repo/:number/review — see file header. */
@@ -343,16 +423,20 @@ export async function handleWorkspacePrReviewRoute(
 
   // ── Fetch + shape the review stack (fail-loud so the portal can retry) ──
   try {
-    const [comments, reviews] = await Promise.all([
+    const [comments, reviews, issueComments] = await Promise.all([
       fetchReviewComments(token, parsed.owner, parsed.repo, parsed.prNumber),
       fetchReviews(token, parsed.owner, parsed.repo, parsed.prNumber),
+      fetchIssueComments(token, parsed.owner, parsed.repo, parsed.prNumber),
     ])
+    // Prefer the editable overview sticky (the real summary/gates/files body);
+    // fall back to the review-submission summary for legacy PRs without a sticky.
+    const summary = pickOverviewComment(issueComments) ?? latestReviewSummary(reviews)
     return json(
       {
         installationId: parsed.installationId,
         repo: `${parsed.owner}/${parsed.repo}`,
         prNumber: parsed.prNumber,
-        summary: latestReviewSummary(reviews),
+        summary,
         files: groupReviewComments(comments),
       } satisfies WorkspacePrReviewResponse,
       200,

@@ -13,29 +13,31 @@
 // portal-cors.ts's hasJsonContentType doc comment) because the session cookie is
 // SameSite=None.
 
-import { requireSession } from "@/src/lib/auth-middleware"
+import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { getInstallationsForUser } from "@/src/lib/api-key-store"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
+import { listGithubUserInstallationRepos } from "@/src/lib/github-user-repo-scope"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
 import { parseEffort, parseMode, parseTier } from "./config"
 import { CREATOR_HEADER } from "./deep-research-do"
-import { resolveRepoTarget } from "./repo-grounding"
+import { isCodebaseQuestion, resolveRepoTarget } from "./repo-grounding"
 import type { Env } from "@/src/shared/types/env"
 
 const DO_BASE = "https://deep-research.do"
 
 /** The caller's stable identity + the 401 branch when unauthenticated. `creator`
- *  binds the run; `sessionLogin` / `installationId` are hints for resolving which
- *  indexed repo to ground the run in (sig-deep-research-repo-grounding). */
-type CallerAuth = { creator: string; sessionLogin?: string; installationId?: number } | { response: Response }
+ *  binds the run; the exact session repo scope / tenant installation resolves
+ *  which indexed repo may ground it (sig-deep-research-repo-grounding). */
+type CallerAuth = { creator: string; installationId?: number; session?: AuthedSession } | { response: Response }
 
 /**
  * Session-OR-API-key gate. On success returns the caller's opaque `creator`
  * identity (session subject or api tenant), which the run is bound to so only
  * the creator can stream/cancel it and metering is attributed to a tenant. Also
- * surfaces the GitHub login (session) or installation id (tenant) so the run can
- * resolve the caller's indexed repo for codebase grounding.
+ * surfaces the live session or installation id (tenant) so the run can resolve
+ * the caller's exact authorized repo scope for codebase grounding.
  */
 async function authorize(request: Request, env: Env, ctx: ExecutionContext): Promise<CallerAuth> {
   const session = await requireSession(request, env, ctx)
@@ -43,10 +45,9 @@ async function authorize(request: Request, env: Env, ctx: ExecutionContext): Pro
   // email-password sessions (no githubUserId) get a distinct, non-colliding
   // creator instead of all sharing "session:undefined".
   if (session) {
-    const login = typeof session.record.login === "string" ? session.record.login : undefined
     return {
       creator: `session:${session.record.githubUserId ?? session.record.userId ?? "anon"}`,
-      ...(login ? { sessionLogin: login } : {}),
+      session,
     }
   }
   const tenant = await requireApiTenant(request, env, ctx)
@@ -137,19 +138,52 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   const mode = body.mode === undefined ? "deep" : parseMode(body.mode)
   if (mode === null) return json({ error: "mode must be one of: deep, chat" }, 400)
 
-  // sig-deep-research-repo-grounding: resolve which indexed repo (if any) to ground
-  // this run in — an explicit owner/repo the portal sent, else the caller's own
-  // indexed repo (from their session login / api-key installation). Cheap (KV
-  // manifest reads); the heavy retrieval happens in the DO. Soft-fails to no target.
+  // sig-deep-research-repo-grounding: resolve which authorized indexed repo (if
+  // any) to ground this run in. Session grounding always uses the user's current,
+  // exact GitHub App repo scope; the heavier code retrieval happens in the DO.
   const explicitOwner = typeof body.owner === "string" ? body.owner : undefined
   const explicitRepo = typeof body.repo === "string" ? body.repo : undefined
+  let sessionRepos: Array<{ installationId: number; owner: string; repo: string }> | undefined
+  const needsSessionRepoScope =
+    mode === "deep" || isCodebaseQuestion(question) || (explicitOwner !== undefined && explicitRepo !== undefined)
+  if (auth.session && needsSessionRepoScope) {
+    if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) {
+      console.error(JSON.stringify({ event: "deep-research-repo-scope-failed", reason: "missing_encryption_key" }))
+      sessionRepos = []
+    } else {
+      try {
+        const accessToken = await getValidGithubToken({
+          env,
+          sessionId: auth.session.sessionId,
+          record: auth.session.record,
+          encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+        })
+        const scope = await listGithubUserInstallationRepos(accessToken)
+        if (scope.ok) {
+          sessionRepos = scope.repos
+        } else {
+          console.error(JSON.stringify({ event: "deep-research-repo-scope-failed", reason: scope.reason }))
+          sessionRepos = []
+        }
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            event: "deep-research-repo-scope-failed",
+            reason: "token_failed",
+            err: error instanceof Error ? error.message : String(error),
+          }),
+        )
+        sessionRepos = []
+      }
+    }
+  }
   let repoTarget: { owner: string; repo: string } | null = null
   let hasIndexedRepo = false
   try {
     const resolution = await resolveRepoTarget(env, {
       explicitOwner,
       explicitRepo,
-      sessionLogin: "sessionLogin" in auth ? auth.sessionLogin : undefined,
+      sessionRepos,
       installationId: "installationId" in auth ? auth.installationId : undefined,
     })
     repoTarget = resolution.target

@@ -118,3 +118,23 @@ describe("SlackAwareOAuthProvider — falls back to the base (DCR) behavior", ()
     expect(await p.clientInformation()).toBeUndefined()
   })
 })
+
+describe("SlackAwareOAuthProvider — DCR client metadata (consent-screen branding)", () => {
+  it("registers with the Sigilix brand: display name, site, and the official square logo", () => {
+    // This is the metadata the SDK POSTs to a provider's DCR endpoint (e.g.
+    // Linear). Without the override the consent screen shows the bare
+    // "sigilix-portal-mcp" name, a callback-derived client_uri, and a
+    // placeholder logo — the bug this fix closes.
+    const p = makeProvider({ serverUrl: "https://mcp.linear.app/mcp" })
+    const meta = p.clientMetadata
+    expect(meta.client_name).toBe("Sigilix")
+    expect(meta.client_uri).toBe("https://sigilix.ai")
+    expect(meta.logo_uri).toBe("https://sigilix.ai/Sigilix.png")
+    // The callback (redirect) URL still flows through from the base metadata.
+    expect(meta.redirect_uris).toContain(CALLBACK)
+    // The override must SPREAD the base (not replace it): the required DCR
+    // fields the SDK sets must survive, or registration would silently break.
+    expect(meta.grant_types).toContain("authorization_code")
+    expect(meta.token_endpoint_auth_method).toBe("none")
+  })
+})

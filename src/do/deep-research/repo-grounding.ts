@@ -30,6 +30,14 @@ import { loadLearnings, type LearningEntry } from "@/src/features/learnings"
 const MAX_REPO_SOURCES = 12
 /** Max learning rules to surface as negative memory (mirrors api-context-route). */
 const MAX_LEARNINGS = 20
+/**
+ * Char budget for the packed repo-grounding slice fed to the research/chat model.
+ * `gatherAgentContext` defaults to a tight 6,000-char slice (PR-review do-no-harm
+ * bound), which silently clipped the chat's repo context to ~1.5k tokens. The chat
+ * should fill the model's real window, so we lift this to ~48k tokens of repo
+ * context — well within the smallest chat tier's window (glm-5.1 ≈ 200K).
+ */
+const RESEARCH_GROUNDING_CONTEXT_CHARS = 192_000
 
 // ── identity → repo target ────────────────────────────────────────────────
 
@@ -291,6 +299,7 @@ export async function gatherRepoGrounding(args: GatherRepoGroundingArgs): Promis
       query,
       env: args.env,
       fetchFileContent: handles.fetchFileContent,
+      maxContextChars: RESEARCH_GROUNDING_CONTEXT_CHARS,
       ...(learnings.length > 0 ? { learnings } : {}),
       ...(args.signal ? { signal: args.signal } : {}),
     })

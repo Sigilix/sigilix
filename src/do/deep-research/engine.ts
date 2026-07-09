@@ -53,7 +53,11 @@ export interface EngineDeps {
   now: () => number
 }
 
-const MAX_PAGE_CHARS = 12_000
+// Per-page char cap on web content packed into the extraction prompt. Was 12k
+// (~3k tokens) — an artificial clip that starved the model of page context. Lifted
+// to ~48k tokens/page so the chat fills its window; the ~1.5MB fetch-guard byte cap
+// (fetch-guard.ts) remains the real upper bound on any single page.
+const MAX_PAGE_CHARS = 192_000
 const MAX_REPORT_SOURCES = 30
 const VALID_CATEGORIES: QuestionCategory[] = ["factual", "comparative", "howto", "exploratory", "troubleshooting"]
 const NO_INFO = "NO RELEVANT INFORMATION"

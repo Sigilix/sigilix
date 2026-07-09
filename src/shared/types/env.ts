@@ -1282,7 +1282,7 @@ export interface Env {
 
   // sig-free-tier-entitlements: master rollout switch for the paid-only feature
   // gate (CI-failure triage, the Slack assistant, Linear triage/agent are
-  // Pro/Max/Ultra only). "off" (default/unset/unknown) — NO gating, byte-identical
+  // Pro/Teams/Max/Ultra/Enterprise only). "off" (default/unset/unknown) — NO gating, byte-identical
   // to pre-entitlements behavior. "shadow" — resolve the plan and LOG what would be
   // gated, but allow it (validate on live traffic before enforcing). "enforce" —
   // actually gate an un-entitled installation. Resolved by resolveEntitlementsMode
@@ -1347,6 +1347,19 @@ export interface Env {
   SIGILIX_STRIPE_PRICE_TEAMS?: string
   SIGILIX_STRIPE_PRICE_MAX?: string
   SIGILIX_STRIPE_PRICE_ULTRA?: string
+
+  // sig-github-marketplace-billing: GitHub Marketplace subscriptions arrive at the SAME
+  // POST /github/webhook endpoint (X-GitHub-Event: marketplace_purchase), verified by
+  // GITHUB_WEBHOOK_SECRET like every other GitHub event — no separate secret.
+  //   GITHUB_MARKETPLACE_PLAN_MAP — JSON {"<plan_id>":"pro","<plan_id>":"teams",...} that
+  //                                 pins each Marketplace plan id to a Sigilix tier
+  //                                 (free/pro/teams/max/ultra — NEVER enterprise). Plan ids
+  //                                 aren't known until the founder creates the plans, so
+  //                                 this is set once, after, WITHOUT a code change. Absent /
+  //                                 a plan not in the map → the case-insensitive plan-NAME
+  //                                 heuristic, then a fail-closed `free`. Set via [vars]:
+  //                                 `wrangler ... ` or the dashboard.
+  GITHUB_MARKETPLACE_PLAN_MAP?: string
 
   // Portal Organization page (GET /v1/org/overview) — plan + per-seat billing
   // display placeholders. Both optional: absent OPENCLAW_PLAN defaults to "free";

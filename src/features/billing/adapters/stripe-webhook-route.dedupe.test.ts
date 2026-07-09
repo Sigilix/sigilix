@@ -17,6 +17,7 @@ const NOW = 1_700_000_000
 const MIGRATION_SQL = [
   readFileSync(new URL("../../../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8"),
   readFileSync(new URL("../../../../migrations/0011_add_tenant_subscription_status.sql", import.meta.url), "utf8"),
+  readFileSync(new URL("../../../../migrations/0012_add_tenant_billing_source.sql", import.meta.url), "utf8"),
 ].join("\n")
 
 function makeKv() {

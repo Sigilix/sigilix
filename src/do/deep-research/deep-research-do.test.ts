@@ -319,3 +319,62 @@ describe("DeepResearchDO — model + effort echo through the DO", () => {
     expect(first).toMatchObject({ type: "status", model: "pyroeis", effort: "low" })
   })
 })
+
+// sig-deep-research-repo-grounding — the DO threads a resolved repo target into
+// codebase grounding via the injectable `gatherGrounding` hook.
+describe("DeepResearchDO — repo grounding", () => {
+  it("grounds a codebase question in the resolved repo and emits repo-file sources", async () => {
+    const { ctx } = makeDoState()
+    const instance = new DeepResearchDO(ctx, makeEnv())
+    const gatherArgs: Array<{ owner: string; repo: string; query: string }> = []
+    instance.setTestHooks(
+      baseHooks({
+        // Fail loudly if a grounded codebase question ever hits web search.
+        search: () => Promise.reject(new Error("web search must not run for a grounded codebase question")),
+        gatherGrounding: async (args) => {
+          gatherArgs.push({ owner: args.owner, repo: args.repo, query: args.query })
+          return {
+            namespace: "acme/widgets",
+            context: "[symbol] src/index/memory-indexer.ts\nexport function indexMemory() {}",
+            sources: [
+              {
+                url: "https://github.com/acme/widgets/blob/HEAD/src/index/memory-indexer.ts#L1-L30",
+                title: "src/index/memory-indexer.ts:1-30",
+                domain: "acme/widgets",
+                kind: "repo" as const,
+              },
+            ],
+            chunkCount: 1,
+          }
+        },
+      }),
+    )
+
+    await instance.fetch(
+      req("/start", "POST", {
+        question: "where does the memory indexing live in our repo?",
+        creator: "session:alice",
+        owner: "acme",
+        repo: "widgets",
+        hasIndexedRepo: true,
+      }),
+    )
+    await drive(instance)
+
+    // The DO passed the resolved repo + question to the grounding gatherer.
+    expect(gatherArgs).toEqual([
+      { owner: "acme", repo: "widgets", query: "where does the memory indexing live in our repo?" },
+    ])
+
+    const events = await readSse(await instance.fetch(req("/stream", "GET", undefined, "session:alice")))
+    const repoSource = events.find((e) => e.type === "source" && (e as { kind?: string }).kind === "repo")
+    expect(repoSource).toBeTruthy()
+    const final = events.find((e) => e.type === "final") as unknown as {
+      markdown: string
+      sources: Array<{ kind?: string }>
+    }
+    expect(final.sources.every((s) => s.kind === "repo")).toBe(true)
+    // No web search ran.
+    expect(events.some((e) => e.type === "status" && (e as { phase?: string }).phase === "searching")).toBe(false)
+  })
+})

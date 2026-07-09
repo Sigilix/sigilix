@@ -27,6 +27,8 @@ import { makeEnv, makeCtx } from "@/src/lib/boreas-gateway/boreas-gateway.test-h
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { readUsageEventCount } from "@/src/features/tenancy"
+import { insertApiKey } from "@/src/lib/api-key-store"
+import { sha256Hex } from "@/src/lib/auth-bearer"
 
 const KEY = "secret-bearer"
 const ISSUER = "https://gw.example"
@@ -583,6 +585,53 @@ describe("gateway coding_agent SEAT metering — SIG-303", () => {
       },
     )
     expect(seat).toEqual({ ok: true, count: 1 })
+  })
+
+  it("a per-installation key attributes the coding_agent seat to the DEVELOPER (gh:<createdBy>) + its org", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL | Request) => {
+        const r = vertexOk(String(url))
+        if (r) return r
+        throw new Error(`unexpected fetch: ${String(url)}`)
+      }),
+    )
+    const d = await db()
+    const devKey = "sigilix_dev_key_abc"
+    await insertApiKey(d, {
+      id: "key-dev",
+      keyHash: await sha256Hex(devKey),
+      installationId: 42,
+      createdBy: "555", // the developer's github user id
+      nowIso: "2026-01-01T00:00:00.000Z",
+    })
+    const env = makeEnv({
+      OPENCLAW_SIGILIX_API_KEY: KEY,
+      OPENCLAW_GATEWAY_ISSUER: ISSUER,
+      OLLAMA_API_KEY: OLLAMA_KEY,
+      SIGILIX_PLATFORM_DB: d,
+    })
+    const { ctx, waits } = makeCtx()
+    const res = await handleBoreasApiRoute(
+      post("/v1/boreas/chat/completions", { messages: [] }, `Bearer ${devKey}`),
+      env,
+      ctx,
+    )
+    expect(res.status).toBe(200)
+    await Promise.all(waits)
+
+    // Attributed to the developer (gh:555) AND scoped to their org (installation 42).
+    const seat = await readUsageEventCount(
+      { SIGILIX_PLATFORM_DB: d },
+      { meter: "coding_agent", userKey: "gh:555", installationId: 42, sinceIso: "2000-01-01T00:00:00.000Z" },
+    )
+    expect(seat).toEqual({ ok: true, count: 1 })
+    // NOT keyed by installation anymore (no inst:42 row).
+    const legacy = await readUsageEventCount(
+      { SIGILIX_PLATFORM_DB: d },
+      { meter: "coding_agent", userKey: "inst:42", sinceIso: "2000-01-01T00:00:00.000Z" },
+    )
+    expect(legacy).toEqual({ ok: true, count: 0 })
   })
 
   it("enforce + over the seat cap → 429 before any Vertex/token call", async () => {

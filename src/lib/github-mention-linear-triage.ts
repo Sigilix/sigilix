@@ -98,7 +98,7 @@ export async function handleLinearTriageCommand(args: {
   }
 
   // ── Entitlement gate (sig-free-tier-entitlements) ────────────────────────────
-  // Linear triage is Pro/Max/Ultra only. Resolve the plan from THIS PR's own
+  // Linear triage is Pro/Teams/Max/Ultra/Enterprise only. Resolve the plan from THIS PR's own
   // installation (tenant isolation). If not entitled, reply with a brief upgrade
   // note in the GitHub thread — the natural human surface — and do not create.
   // A failed installation resolve → unknown plan → fail-closed (blocked in enforce).

@@ -9,8 +9,11 @@ import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import {
   upsertTenantAndRepo,
   upsertTenantTier,
+  upsertTenantAccount,
   readTenantConfig,
   readTenantSubscriptionStatus,
+  resolveInstallationByAccountLogin,
+  readTenantBillingGuard,
 } from "@/src/features/tenancy/adapters/d1-tenant-store"
 import type { Env } from "@/src/shared/types/env"
 
@@ -24,7 +27,12 @@ const MIGRATION_0011_SQL = readFileSync(
   new URL("../../../../migrations/0011_add_tenant_subscription_status.sql", import.meta.url),
   "utf8",
 )
-const MIGRATION_SQL = [MIGRATION_0001_SQL, MIGRATION_0011_SQL].join("\n")
+// sig-github-marketplace-billing: 0012 adds tenant.billing_source, co-written by the tier UPSERT.
+const MIGRATION_0012_SQL = readFileSync(
+  new URL("../../../../migrations/0012_add_tenant_billing_source.sql", import.meta.url),
+  "utf8",
+)
+const MIGRATION_SQL = [MIGRATION_0001_SQL, MIGRATION_0011_SQL, MIGRATION_0012_SQL].join("\n")
 
 function makeEnv(db: D1Database): Pick<Env, "SIGILIX_PLATFORM_DB"> {
   return { SIGILIX_PLATFORM_DB: db }
@@ -352,6 +360,51 @@ describe("upsertTenantTier", () => {
       .first<{ subscription_status: string | null }>()
     expect(row?.subscription_status).toBeNull()
   })
+
+  // Enterprise (contract tier) protection: a Stripe event must NEVER downgrade a
+  // manually-set `enterprise` tenant. The ON CONFLICT ... WHERE guard no-ops the UPDATE.
+  it("NEVER overwrites a manually-set enterprise tenant (Stripe downgrade → free is a no-op)", async () => {
+    await upsertTenantTier(makeEnv(db), 100, "enterprise", "2026-01-01T00:00:00Z", "active")
+    // Simulate a stray/late Stripe event trying to drop the contract tenant to free.
+    const res = await upsertTenantTier(makeEnv(db), 100, "free", "2026-03-03T00:00:00Z", null)
+    expect(res).toEqual({ ok: true }) // a skipped no-op still succeeds → webhook acks 200
+    const row = await db
+      .prepare("SELECT tier, subscription_status FROM tenant WHERE installation_id = ?")
+      .bind(100)
+      .first<{ tier: string; subscription_status: string }>()
+    // Unchanged: still enterprise + active (keeps all entitlements + the top cap).
+    expect(row).toEqual({ tier: "enterprise", subscription_status: "active" })
+  })
+
+  it("the enterprise guard is case/space-insensitive (' Enterprise ' is protected too)", async () => {
+    await upsertTenantTier(makeEnv(db), 101, " Enterprise ", "2026-01-01T00:00:00Z", "active")
+    await upsertTenantTier(makeEnv(db), 101, "pro", "2026-03-03T00:00:00Z", "active")
+    const row = await db
+      .prepare("SELECT tier FROM tenant WHERE installation_id = ?")
+      .bind(101)
+      .first<{ tier: string }>()
+    expect(row?.tier).toBe(" Enterprise ")
+  })
+
+  it("a brand-new Stripe tenant still inserts normally (guard only blocks overwriting enterprise)", async () => {
+    const res = await upsertTenantTier(makeEnv(db), 102, "ultra", "2026-01-01T00:00:00Z", "active")
+    expect(res).toEqual({ ok: true })
+    const row = await db
+      .prepare("SELECT tier FROM tenant WHERE installation_id = ?")
+      .bind(102)
+      .first<{ tier: string }>()
+    expect(row?.tier).toBe("ultra")
+  })
+
+  it("a non-enterprise tenant is still updated normally (guard does not block pro→max, etc.)", async () => {
+    await upsertTenantTier(makeEnv(db), 103, "pro", "2026-01-01T00:00:00Z", "active")
+    await upsertTenantTier(makeEnv(db), 103, "max", "2026-02-02T00:00:00Z", "active")
+    const row = await db
+      .prepare("SELECT tier FROM tenant WHERE installation_id = ?")
+      .bind(103)
+      .first<{ tier: string }>()
+    expect(row?.tier).toBe("max")
+  })
 })
 
 describe("readTenantSubscriptionStatus", () => {
@@ -394,6 +447,144 @@ describe("readTenantSubscriptionStatus", () => {
   })
 })
 
+// sig-github-marketplace-billing — billing_source co-write + the account-login resolver
+// and billing-guard reader that the Marketplace webhook depends on.
+describe("upsertTenantTier billing_source", () => {
+  let db: D1Database
+  beforeEach(async () => {
+    db = makeD1()
+    await db.exec(MIGRATION_SQL)
+  })
+
+  it("writes billing_source when provided", async () => {
+    await upsertTenantTier(makeEnv(db), 300, "pro", "2026-01-01T00:00:00Z", "active", "github_marketplace")
+    const row = await db
+      .prepare("SELECT billing_source FROM tenant WHERE installation_id = ?")
+      .bind(300)
+      .first<{ billing_source: string }>()
+    expect(row?.billing_source).toBe("github_marketplace")
+  })
+
+  it("omitting billing_source (default null) PRESERVES an existing value via COALESCE", async () => {
+    await upsertTenantTier(makeEnv(db), 301, "pro", "2026-01-01T00:00:00Z", "active", "stripe")
+    // A later write that does NOT pass billing_source must not wipe it.
+    await upsertTenantTier(makeEnv(db), 301, "max", "2026-02-01T00:00:00Z", "active")
+    const row = await db
+      .prepare("SELECT tier, billing_source FROM tenant WHERE installation_id = ?")
+      .bind(301)
+      .first<{ tier: string; billing_source: string }>()
+    expect(row).toEqual({ tier: "max", billing_source: "stripe" })
+  })
+})
+
+describe("upsertTenantAccount", () => {
+  let db: D1Database
+  beforeEach(async () => {
+    db = makeD1()
+    await db.exec(MIGRATION_SQL)
+  })
+
+  it("seeds a new tenant row with account_login + account_type (tier at schema default)", async () => {
+    await upsertTenantAccount(makeEnv(db), {
+      installationId: 350,
+      accountLogin: "acme",
+      accountType: "Organization",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    const row = await db
+      .prepare("SELECT tier, account_login, account_type FROM tenant WHERE installation_id = ?")
+      .bind(350)
+      .first<{ tier: string; account_login: string; account_type: string }>()
+    expect(row).toEqual({ tier: "default", account_login: "acme", account_type: "Organization" })
+  })
+
+  it("re-seed with COALESCE preserves tier/billing_source and does not overwrite login with null", async () => {
+    await upsertTenantTier(makeEnv(db), 351, "ultra", "2026-01-01T00:00:00Z", "active", "github_marketplace")
+    // Seed account identity on the paid row — must not disturb tier/subscription_status/source.
+    await upsertTenantAccount(makeEnv(db), {
+      installationId: 351,
+      accountLogin: "acme",
+      nowIso: "2026-02-01T00:00:00Z",
+    })
+    // A later seed WITHOUT a login must not wipe the stored login (COALESCE).
+    await upsertTenantAccount(makeEnv(db), { installationId: 351, nowIso: "2026-03-01T00:00:00Z" })
+    const row = await db
+      .prepare("SELECT tier, account_login, subscription_status, billing_source FROM tenant WHERE installation_id = ?")
+      .bind(351)
+      .first<{ tier: string; account_login: string; subscription_status: string; billing_source: string }>()
+    expect(row).toEqual({
+      tier: "ultra",
+      account_login: "acme",
+      subscription_status: "active",
+      billing_source: "github_marketplace",
+    })
+  })
+
+  it("fails open (never throws) on an absent binding / non-positive id / broken db", async () => {
+    await expect(
+      upsertTenantAccount(makeAbsentEnv(), { installationId: 1, accountLogin: "x", nowIso: "t" }),
+    ).resolves.toBeUndefined()
+    await expect(
+      upsertTenantAccount(makeEnv(db), { installationId: 0, accountLogin: "x", nowIso: "t" }),
+    ).resolves.toBeUndefined()
+    await expect(
+      upsertTenantAccount(
+        { SIGILIX_PLATFORM_DB: makeBrokenDb() },
+        { installationId: 1, accountLogin: "x", nowIso: "t" },
+      ),
+    ).resolves.toBeUndefined()
+  })
+})
+
+describe("resolveInstallationByAccountLogin", () => {
+  let db: D1Database
+  beforeEach(async () => {
+    db = makeD1()
+    await db.exec(MIGRATION_SQL)
+  })
+
+  it("resolves the installation id by account login (case-insensitive)", async () => {
+    await upsertTenantAndRepo(makeEnv(db), {
+      installationId: 400,
+      repoId: 4000,
+      fullName: "acme/x",
+      nowIso: "2026-01-01T00:00:00Z",
+      accountLogin: "AcmeOrg",
+    })
+    expect(await resolveInstallationByAccountLogin(makeEnv(db), "acmeorg")).toBe(400)
+    expect(await resolveInstallationByAccountLogin(makeEnv(db), "AcmeOrg")).toBe(400)
+  })
+
+  it("returns null for an unknown login / absent binding / broken db", async () => {
+    expect(await resolveInstallationByAccountLogin(makeEnv(db), "ghost")).toBeNull()
+    expect(await resolveInstallationByAccountLogin(makeAbsentEnv(), "x")).toBeNull()
+    expect(await resolveInstallationByAccountLogin({ SIGILIX_PLATFORM_DB: makeBrokenDb() }, "x")).toBeNull()
+  })
+})
+
+describe("readTenantBillingGuard", () => {
+  let db: D1Database
+  beforeEach(async () => {
+    db = makeD1()
+    await db.exec(MIGRATION_SQL)
+  })
+
+  it("returns tier + billing_source + subscription_status for an existing tenant", async () => {
+    await upsertTenantTier(makeEnv(db), 500, "max", "2026-01-01T00:00:00Z", "active", "stripe")
+    expect(await readTenantBillingGuard(makeEnv(db), 500)).toEqual({
+      tier: "max",
+      billingSource: "stripe",
+      subscriptionStatus: "active",
+    })
+  })
+
+  it("returns null for a missing tenant / absent binding / broken db (fail-open)", async () => {
+    expect(await readTenantBillingGuard(makeEnv(db), 99999)).toBeNull()
+    expect(await readTenantBillingGuard(makeAbsentEnv(), 1)).toBeNull()
+    expect(await readTenantBillingGuard({ SIGILIX_PLATFORM_DB: makeBrokenDb() }, 1)).toBeNull()
+  })
+})
+
 // sig-trial-cap — migration 0011 backfill: existing PAID tenants must become 'active'
 // (keep full volume) while free/default rows stay NULL (fail-safe half). Applies 0001,
 // seeds rows on the OLD schema, THEN applies 0011 to exercise the backfill UPDATE.
@@ -413,8 +604,9 @@ describe("migration 0011 subscription_status backfill", () => {
     await seed(204, "free")
     await seed(205, "default")
     await seed(206, "teams")
-    // Legacy + case/space variants that resolveRateLimitCap still gives a full cap —
-    // the backfill must reach these too, or they'd fall to NULL → halved (regression).
+    // Contract (enterprise) + legacy + case/space variants that resolveRateLimitCap
+    // gives a full cap — the backfill must reach these too, or they'd fall to NULL →
+    // halved (regression). enterprise is the contract TOP tier (full cap 500).
     await seed(207, "enterprise")
     await seed(208, "pro_plus")
     await seed(209, "MAX")

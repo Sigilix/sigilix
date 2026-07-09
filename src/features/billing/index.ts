@@ -17,3 +17,20 @@ export {
 } from "./domain/checkout-session"
 export { createStripeCustomer, createCheckoutSession, createBillingPortalSession } from "./adapters/stripe-api"
 export { linkCustomerToInstallation, resolveCustomerForInstallation } from "./adapters/stripe-link-store"
+// sig-github-marketplace-billing: GitHub Marketplace subscription path — the webhook
+// handler (dispatched from the GitHub webhook entry on X-GitHub-Event:
+// marketplace_purchase) + the install-time purchase-before-install reconcile.
+export {
+  handleMarketplacePurchaseEvent,
+  reconcileMarketplaceSubscriptionOnInstall,
+  MARKETPLACE_BILLING_SOURCE,
+} from "./adapters/marketplace-webhook"
+export {
+  resolveMarketplaceTier,
+  parseMarketplacePlanMap,
+  extractSeats,
+  interpretMarketplaceEvent,
+  type MarketplaceTier,
+  type MarketplacePlanMap,
+  type MarketplaceEvent,
+} from "./domain/marketplace-plan"

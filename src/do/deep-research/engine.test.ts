@@ -317,3 +317,129 @@ describe("effort budget matrix (addendum §2)", () => {
     for (const n of fetchesPerRound) expect(n).toBeLessThanOrEqual(cfg.maxPagesPerRound)
   })
 })
+
+// sig-deep-research-repo-grounding — the codebase-grounding branches.
+describe("repo grounding", () => {
+  const repoGrounding = {
+    namespace: "acme/widgets",
+    context:
+      "# Team conventions\n- keep it simple\n\n[symbol] src/index/memory-indexer.ts\nexport function indexMemory() {}",
+    sources: [
+      {
+        url: "https://github.com/acme/widgets/blob/HEAD/src/index/memory-indexer.ts#L10-L40",
+        title: "src/index/memory-indexer.ts:10-40",
+        domain: "acme/widgets",
+        kind: "repo" as const,
+      },
+      {
+        url: "https://github.com/acme/widgets/blob/HEAD/src/index/store.ts#L1-L20",
+        title: "src/index/store.ts:1-20",
+        domain: "acme/widgets",
+        kind: "repo" as const,
+      },
+    ],
+    chunkCount: 2,
+  }
+
+  it("answers a codebase question from repo context with repo-file citations and NO web search", async () => {
+    // A "where does X live in our repo" question — the exact repro.
+    const { deps, events } = makeDeps({
+      question: "where does the memory indexing live in our repo?",
+      repoGrounding,
+      hasIndexedRepo: true,
+      // Fail loudly if the loop ever hits web search on the repo-grounded path.
+      search: () => Promise.reject(new Error("web search must not run for a grounded codebase question")),
+    })
+    await runResearchLoop(deps)
+
+    // No web search phase at all.
+    expect(countSearching(events)).toBe(0)
+    // The repo files were emitted as sources (kind "repo").
+    const repoSources = events.filter((e) => e.type === "source" && e.kind === "repo")
+    expect(repoSources.map((s) => (s.type === "source" ? s.url : ""))).toContain(
+      "https://github.com/acme/widgets/blob/HEAD/src/index/memory-indexer.ts#L10-L40",
+    )
+    // The final cites the repo files (not web pages).
+    const final = events.find((e) => e.type === "final")
+    expect(final && final.type === "final" ? final.sources.every((s) => s.kind === "repo") : false).toBe(true)
+    expect(final && final.type === "final" ? final.sources.length : 0).toBe(2)
+    // Terminates cleanly.
+    const types = typesOf(events)
+    expect(types[types.length - 1]).toBe("done")
+    expect(types[types.length - 2]).toBe("final")
+    expect(events.some((e) => e.type === "error")).toBe(false)
+  })
+
+  it("passes the packed repo context to the (final-report role) model prompt", async () => {
+    const seenPrompts: string[] = []
+    const { deps } = makeDeps({
+      question: "which file implements the token broker in our repo?",
+      repoGrounding,
+      hasIndexedRepo: true,
+      model: async (_role, messages) => {
+        seenPrompts.push(messages.map((m) => m.content).join("\n"))
+        return { text: "The token broker lives in src/do/linear-token-broker.ts [1].", tokens: 10 }
+      },
+    })
+    await runResearchLoop(deps)
+    // The authoritative repo context reached the model.
+    expect(seenPrompts.some((p) => p.includes("memory-indexer.ts"))).toBe(true)
+    expect(seenPrompts.some((p) => /Repository context/i.test(p))).toBe(true)
+  })
+
+  it("tells the user to connect a repo for a codebase question when none is indexed", async () => {
+    const { deps, events } = makeDeps({
+      question: "where is the auth middleware defined in our codebase?",
+      repoGrounding: null,
+      hasIndexedRepo: false,
+      search: () => Promise.reject(new Error("must not web-search when telling the user to connect a repo")),
+    })
+    await runResearchLoop(deps)
+
+    expect(countSearching(events)).toBe(0)
+    const final = events.find((e) => e.type === "final")
+    expect(
+      final && final.type === "final" ? /no repository is connected and indexed/i.test(final.markdown) : false,
+    ).toBe(true)
+    expect(final && final.type === "final" ? final.sources : null).toEqual([])
+    expect(typesOf(events)[typesOf(events).length - 1]).toBe("done")
+  })
+
+  it("still runs normal web research for a non-codebase question (no grounding)", async () => {
+    const { deps, events } = makeDeps({
+      question: "what is the latest stable version of Node.js?",
+      config: baseConfig({ minRounds: 1 }),
+      model: makeModel({ stop: "STOP" }),
+      repoGrounding: null,
+      hasIndexedRepo: false,
+    })
+    await runResearchLoop(deps)
+    // Web path ran (searched) and cited a web source.
+    expect(countSearching(events)).toBeGreaterThan(0)
+    const final = events.find((e) => e.type === "final")
+    expect(final && final.type === "final" ? final.sources.map((s) => s.url) : []).toContain("https://example.com/a")
+  })
+
+  it("folds repo grounding into the web loop for a repo-connected NON-codebase question", async () => {
+    const seenPrompts: string[] = []
+    const { deps, events } = makeDeps({
+      question: "compare our approach to the OAuth 2.1 spec",
+      config: baseConfig({ minRounds: 1 }),
+      repoGrounding,
+      hasIndexedRepo: true,
+      model: async (role, messages) => {
+        seenPrompts.push(messages.map((m) => m.content).join("\n"))
+        if (role === "stopCheck") return { text: "STOP", tokens: 1 }
+        if (role === "classify") return { text: "comparative", tokens: 1 }
+        return { text: "# Answer\n\nBottom line [1].", tokens: 10 }
+      },
+    })
+    await runResearchLoop(deps)
+    // Web search DID run (augmentation), AND repo sources were seeded first.
+    expect(countSearching(events)).toBeGreaterThan(0)
+    const firstSource = events.find((e) => e.type === "source")
+    expect(firstSource && firstSource.type === "source" ? firstSource.kind : "").toBe("repo")
+    // The final report prompt carries the authoritative repo context.
+    expect(seenPrompts.some((p) => /Authoritative repository context/i.test(p))).toBe(true)
+  })
+})

@@ -15,30 +15,44 @@
 
 import { requireSession } from "@/src/lib/auth-middleware"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
+import { getInstallationsForUser } from "@/src/lib/api-key-store"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
 import { parseEffort, parseTier } from "./config"
 import { CREATOR_HEADER } from "./deep-research-do"
+import { resolveRepoTarget } from "./repo-grounding"
 import type { Env } from "@/src/shared/types/env"
 
 const DO_BASE = "https://deep-research.do"
 
-/** The caller's stable identity + the 401 branch when unauthenticated. */
-type CallerAuth = { creator: string } | { response: Response }
+/** The caller's stable identity + the 401 branch when unauthenticated. `creator`
+ *  binds the run; `sessionLogin` / `installationId` are hints for resolving which
+ *  indexed repo to ground the run in (sig-deep-research-repo-grounding). */
+type CallerAuth = { creator: string; sessionLogin?: string; installationId?: number } | { response: Response }
 
 /**
  * Session-OR-API-key gate. On success returns the caller's opaque `creator`
  * identity (session subject or api tenant), which the run is bound to so only
- * the creator can stream/cancel it and metering is attributed to a tenant.
+ * the creator can stream/cancel it and metering is attributed to a tenant. Also
+ * surfaces the GitHub login (session) or installation id (tenant) so the run can
+ * resolve the caller's indexed repo for codebase grounding.
  */
 async function authorize(request: Request, env: Env, ctx: ExecutionContext): Promise<CallerAuth> {
   const session = await requireSession(request, env, ctx)
   // sig-user-identity: prefer the provider-agnostic user_id so Google /
   // email-password sessions (no githubUserId) get a distinct, non-colliding
   // creator instead of all sharing "session:undefined".
-  if (session) return { creator: `session:${session.record.githubUserId ?? session.record.userId ?? "anon"}` }
+  if (session) {
+    const login = typeof session.record.login === "string" ? session.record.login : undefined
+    return {
+      creator: `session:${session.record.githubUserId ?? session.record.userId ?? "anon"}`,
+      ...(login ? { sessionLogin: login } : {}),
+    }
+  }
   const tenant = await requireApiTenant(request, env, ctx)
-  if ("caller" in tenant) return { creator: `tenant:${tenant.caller.installationId}` }
+  if ("caller" in tenant) {
+    return { creator: `tenant:${tenant.caller.installationId}`, installationId: tenant.caller.installationId }
+  }
   return { response: tenant.response }
 }
 
@@ -59,6 +73,37 @@ export function seatIdentityFromCreator(creator: string): { userKey: string; ins
   return { userKey: creator, installationId: 0 }
 }
 
+/**
+ * SIG-303 — resolve the ORG installation to stamp on a chatbot SEAT event so an
+ * org admin can drill into a specific member's seat usage. chatbot stays a SEAT
+ * meter (installation_id is org CONTEXT only — it never draws the org pool), but
+ * the usage read scopes a per-member drill by installation_id for tenant-safety,
+ * so the event MUST carry the developer's org link. A portal session's github
+ * user is looked up in `account_tenant` (the SAME link `/setup` + CLI-login
+ * write); its newest installation wins. Non-session creators (api tenants) keep
+ * their own `fallback` context. FAILS SOFT — no D1 / no github link / a fault →
+ * the `fallback` (0 = no org context), never throws.
+ *
+ * KNOWN LIMITATION (multi-org member): a portal chat request has no org in its
+ * context, so every chatbot event for a member in >1 org is stamped with their
+ * NEWEST installation only. It is always ONE of the member's own orgs (never a
+ * cross-tenant leak), but an admin of an OLDER org drilling into such a member
+ * sees zero chatbot usage (their coding_agent still shows — each CLI key carries
+ * its own real installation). Correct for the common single-org case; the read
+ * path stays tenant-safe either way.
+ */
+async function resolveSeatOrgInstallation(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  creator: string,
+  fallback: number,
+): Promise<number> {
+  if (!env.SIGILIX_PLATFORM_DB || !creator.startsWith("session:")) return fallback
+  const githubUserId = creator.slice("session:".length)
+  if (!githubUserId || githubUserId === "anon") return fallback
+  const installs = await getInstallationsForUser(env.SIGILIX_PLATFORM_DB, githubUserId)
+  return installs[0] ?? fallback
+}
+
 /** POST /v1/research — body { question, model?, effort? } → { id }. */
 export async function handleResearchCreate(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (!hasJsonContentType(request)) return json({ error: "content-type must be application/json" }, 415)
@@ -73,7 +118,7 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   const meterDecision = await checkUsagePool(env, { pool: "seat", userKey: seat.userKey, nowMs: now })
   if (!meterDecision.allowed) return json({ error: "usage_limit_exceeded", pool: "seat" }, 429)
 
-  let body: { question?: unknown; model?: unknown; effort?: unknown }
+  let body: { question?: unknown; model?: unknown; effort?: unknown; owner?: unknown; repo?: unknown }
   try {
     body = (await request.json()) as typeof body
   } catch {
@@ -88,12 +133,40 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   const effort = body.effort === undefined ? "medium" : parseEffort(body.effort)
   if (effort === null) return json({ error: "effort must be one of: low, medium, high" }, 400)
 
+  // sig-deep-research-repo-grounding: resolve which indexed repo (if any) to ground
+  // this run in — an explicit owner/repo the portal sent, else the caller's own
+  // indexed repo (from their session login / api-key installation). Cheap (KV
+  // manifest reads); the heavy retrieval happens in the DO. Soft-fails to no target.
+  const explicitOwner = typeof body.owner === "string" ? body.owner : undefined
+  const explicitRepo = typeof body.repo === "string" ? body.repo : undefined
+  let repoTarget: { owner: string; repo: string } | null = null
+  let hasIndexedRepo = false
+  try {
+    const resolution = await resolveRepoTarget(env, {
+      explicitOwner,
+      explicitRepo,
+      sessionLogin: "sessionLogin" in auth ? auth.sessionLogin : undefined,
+      installationId: "installationId" in auth ? auth.installationId : undefined,
+    })
+    repoTarget = resolution.target
+    hasIndexedRepo = resolution.hasIndexedRepo
+  } catch {
+    // Resolution is best-effort — a failure just means no grounding this run.
+  }
+
   const id = env.DEEP_RESEARCH.newUniqueId()
   const stub = env.DEEP_RESEARCH.get(id)
   const started = await stub.fetch(`${DO_BASE}/start`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ question, model, effort, creator: auth.creator }),
+    body: JSON.stringify({
+      question,
+      model,
+      effort,
+      creator: auth.creator,
+      ...(repoTarget ? { owner: repoTarget.owner, repo: repoTarget.repo } : {}),
+      hasIndexedRepo,
+    }),
   })
   if (!started.ok) {
     return json({ error: "failed to start research run" }, 502)
@@ -103,10 +176,15 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   // DO id → idempotent on a retry. Fire-and-forget (fail-open; never fails the run).
   // mode="off" is a true kill switch — shed the D1 write entirely.
   if (meterDecision.mode !== "off") {
+    // Resolve the developer's org link (account_tenant) so the SEAT event carries
+    // the org for the admin per-member drill. One D1 read (fail-soft), in the
+    // same synchronous style as the checkUsagePool reads above; the append itself
+    // stays fire-and-forget via waitUntil (never adds latency, never fails the run).
+    const orgInstallationId = await resolveSeatOrgInstallation(env, auth.creator, seat.installationId)
     ctx.waitUntil(
       appendUsageEvent(env, {
         meter: "chatbot",
-        installationId: seat.installationId,
+        installationId: orgInstallationId,
         userKey: seat.userKey,
         surface: "portal",
         eventId: id.toString(),

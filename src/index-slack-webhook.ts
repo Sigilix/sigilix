@@ -157,7 +157,7 @@ async function runDeferredWork(
   }
 
   // ── Entitlement gate (sig-free-tier-entitlements) ────────────────────────────
-  // The Slack assistant is Pro/Max/Ultra only. Resolve the plan from THIS team's
+  // The Slack assistant is Pro/Teams/Max/Ultra/Enterprise only. Resolve the plan from THIS team's
   // mapped installation (scope isolation — never another team's). If not entitled,
   // reply with a brief upsell rather than silently ignoring or answering.
   // off/shadow are non-blocking; only enforce blocks.

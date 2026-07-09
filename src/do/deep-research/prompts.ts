@@ -135,12 +135,23 @@ paragraphs). Keep exact facts. If nothing on the page is relevant, output exactl
   }
 }
 
-/** Synthesis prompt — fold this round's extractions into the running notes. */
-export function buildSynthesisPrompt(args: { question: string; existingNotes: string; roundExtractions: string }): {
+/** Synthesis prompt — fold this round's extractions into the running notes.
+ *  When `repoContext` is present (the caller's connected repository, retrieved via
+ *  the same seam PR review uses) it is AUTHORITATIVE for anything about the user's
+ *  own code — keep its concrete file paths and symbols in the notes. */
+export function buildSynthesisPrompt(args: {
+  question: string
+  existingNotes: string
+  roundExtractions: string
+  repoContext?: string
+}): {
   system: string
   user: string
 } {
   const existing = args.existingNotes.trim() ? args.existingNotes.trim() : "(no notes yet)"
+  const repoBlock = args.repoContext?.trim()
+    ? `\n\nAuthoritative repository context (the user's OWN connected codebase — trust this over web findings for questions about their code, and preserve its file paths / symbols):\n${args.repoContext.trim()}`
+    : ""
   return {
     system: RESEARCH_SYSTEM_PROMPT,
     user: `
@@ -156,12 +167,71 @@ Existing notes:
 ${existing}
 
 New findings this round:
-${args.roundExtractions}
+${args.roundExtractions}${repoBlock}
 
 Output the consolidated notes only.
 `.trim(),
   }
 }
+
+/** Render a numbered source list for the final/repo-answer prompts. */
+function numberSources(sources: ResearchSource[]): string {
+  return sources.length
+    ? sources.map((s, i) => `[${i + 1}] ${s.title || s.domain} — ${s.url}`).join("\n")
+    : "(no sources)"
+}
+
+/** Direct codebase answer prompt — used when the question is about the user's OWN
+ *  repository and we retrieved real code for it. Answers straight from the grounded
+ *  repository context and cites the specific repo files by their [n] numbers, so the
+ *  answer points at real file paths instead of generic web pages. */
+export function buildRepoAnswerPrompt(args: { question: string; repoContext: string; sources: ResearchSource[] }): {
+  system: string
+  user: string
+} {
+  return {
+    system: `
+You are Sigilix, answering a developer's question about THEIR OWN codebase. You are given
+authoritative context retrieved from their connected repository — matched code chunks, enclosing
+symbol definitions, a repository map, and team conventions. Answer the question using THIS
+repository context, not generic knowledge.
+
+Rules:
+- Lead with a direct answer: name the specific file(s) / module(s) / symbol(s) where the thing
+  lives or is handled.
+- Cite the repository files you used inline with bracketed numbers like [1], [2] that refer to the
+  numbered "Repository files" list. Reference real file paths from the context.
+- Only claim what the provided context supports. If it doesn't contain the answer, say so plainly
+  and point to where in the repo to look next — never invent files, paths, or symbols.
+`.trim(),
+    user: `
+Question:
+${args.question}
+
+Repository context (authoritative — the user's own code):
+${args.repoContext.trim() || "(no code context was retrieved)"}
+
+Repository files (cite these by number):
+${numberSources(args.sources)}
+
+Answer in markdown: the direct answer first (which file/module), then the supporting detail with
+inline [n] citations to the repository files.
+`.trim(),
+  }
+}
+
+/** The answer shown when a codebase question arrives but the caller has NO indexed
+ *  repository — tell them to connect one instead of answering generically. */
+export const NO_REPO_ANSWER = `
+It looks like you're asking about your own codebase, but **no repository is connected and indexed for your account yet**, so I can't ground this answer in your actual code.
+
+To get repo-grounded answers that cite real files:
+
+1. Connect a repository to Sigilix (Setup → connect a repo / install the GitHub app).
+2. Let Sigilix index it (this happens automatically on connect and on push).
+
+Once a repo is indexed, ask again — I'll answer from your real code and cite the specific files. In the meantime I can still research general or external engineering questions.
+`.trim()
 
 /** Stop-check prompt — decide whether the notes now suffice to answer well. */
 export function buildStopCheckPrompt(args: { question: string; notes: string }): { system: string; user: string } {
@@ -206,20 +276,29 @@ naturally and briefly instead of writing a report.
 /** Final-report prompt — a cited markdown answer. Adapted from Tongyi WebWeaver
  *  write_prompt_multi_hop_2 (analytical, well-cited, takeaway-first markdown),
  *  re-tuned for a developer-facing engineering answer. */
-export function buildFinalReportPrompt(args: { question: string; notes: string; sources: ResearchSource[] }): {
+export function buildFinalReportPrompt(args: {
+  question: string
+  notes: string
+  sources: ResearchSource[]
+  repoContext?: string
+}): {
   system: string
   user: string
 } {
-  const sourceList = args.sources.length
-    ? args.sources.map((s, i) => `[${i + 1}] ${s.title || s.domain} — ${s.url}`).join("\n")
-    : "(no sources were retrieved)"
+  const sourceList = numberSources(args.sources)
+  const repoBlock = args.repoContext?.trim()
+    ? `\n\nAuthoritative repository context (the user's OWN connected codebase — for anything about their code prefer THIS over web findings, and cite the repository files in the source list by their [n] numbers):\n${args.repoContext.trim()}`
+    : ""
+  const repoNote = args.repoContext?.trim()
+    ? " The source list mixes repository files (the user's own code) and web pages; for claims about the user's codebase prefer and cite the repository files."
+    : ""
   return {
     system: `
 You are a technical writer producing a final research answer for a developer. Write analytical,
 accurate, well-structured markdown — interpret and connect the findings, do not merely list
 them. Lead with a short bottom-line summary, then the details. Cite sources inline with
-bracketed numbers like [1], [2] that refer to the numbered source list. Only claim what the
-notes support; if something is uncertain or unverified, say so. Do not invent sources or facts.
+bracketed numbers like [1], [2] that refer to the numbered source list.${repoNote} Only claim what the
+notes/context support; if something is uncertain or unverified, say so. Do not invent sources or facts.
 `.trim(),
     user: `
 Write the final answer to the question below in markdown, using the research notes and citing
@@ -229,7 +308,7 @@ Question:
 ${args.question}
 
 Research notes:
-${args.notes.trim() || "(no notes were gathered)"}
+${args.notes.trim() || "(no notes were gathered)"}${repoBlock}
 
 Sources (cite these by number):
 ${sourceList}

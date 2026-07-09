@@ -17,14 +17,16 @@ import {
   buildFinalReportPrompt,
   buildPlanPrompt,
   buildQueryPrompt,
+  buildRepoAnswerPrompt,
   buildStopCheckPrompt,
   buildSynthesisPrompt,
+  NO_REPO_ANSWER,
 } from "./prompts"
-import { isLowQuality, truncate } from "./text-utils"
+import { isCodebaseQuestion, isLowQuality, truncate } from "./text-utils"
 import type { ResearchModelFn } from "./model"
 import type { SearchQueryResult } from "./search"
 import type { FetchPageResult } from "./fetch-guard"
-import type { QuestionCategory, ResearchConfig, ResearchEvent, ResearchSource } from "./types"
+import type { QuestionCategory, RepoGrounding, ResearchConfig, ResearchEvent, ResearchSource } from "./types"
 
 /** Everything the loop needs from the outside world. All IO is here. */
 export interface EngineDeps {
@@ -35,6 +37,14 @@ export interface EngineDeps {
    *  degrades gracefully to a model-only answer (see `runWithoutSearch`) instead
    *  of running the search rounds. */
   hasSearchProvider: boolean
+  /** Codebase grounding gathered before the loop from the caller's connected +
+   *  indexed repository (null/undefined when nothing was grounded). When present,
+   *  a codebase question is answered from real repo files with file-path citations;
+   *  otherwise it augments the web answer. See `repo-grounding.ts`. */
+  repoGrounding?: RepoGrounding | null
+  /** Whether the caller has ANY indexed repo. Lets a codebase question with NO
+   *  connected repo return a clear "connect a repo" answer instead of a generic one. */
+  hasIndexedRepo?: boolean
   emit: (event: ResearchEvent) => Promise<void> | void
   model: ResearchModelFn
   search: (query: string) => Promise<SearchQueryResult>
@@ -43,7 +53,11 @@ export interface EngineDeps {
   now: () => number
 }
 
-const MAX_PAGE_CHARS = 12_000
+// Per-page char cap on web content packed into the extraction prompt. Was 12k
+// (~3k tokens) — an artificial clip that starved the model of page context. Lifted
+// to ~48k tokens/page so the chat fills its window; the ~1.5MB fetch-guard byte cap
+// (fetch-guard.ts) remains the real upper bound on any single page.
+const MAX_PAGE_CHARS = 192_000
 const MAX_REPORT_SOURCES = 30
 const VALID_CATEGORIES: QuestionCategory[] = ["factual", "comparative", "howto", "exploratory", "troubleshooting"]
 const NO_INFO = "NO RELEVANT INFORMATION"
@@ -60,6 +74,28 @@ const NO_INFO = "NO RELEVANT INFORMATION"
  */
 export async function runResearchLoop(deps: EngineDeps): Promise<void> {
   try {
+    const codebaseQ = isCodebaseQuestion(deps.question)
+
+    // Repo grounding retrieved real code → answer from the user's OWN codebase.
+    // For a codebase question (or when no web provider is configured) answer
+    // DIRECTLY from the repo and cite files — no web rounds needed. Otherwise the
+    // repo context is folded into the web loop as authoritative augmentation.
+    if (deps.repoGrounding) {
+      if (codebaseQ || !deps.hasSearchProvider) {
+        await runRepoGrounded(deps, deps.repoGrounding)
+        return
+      }
+      await runInner(deps)
+      return
+    }
+
+    // Codebase question but NO indexed repo connected → tell them to connect one
+    // instead of answering from generic knowledge (the broken-moat repro).
+    if (codebaseQ && !deps.hasIndexedRepo) {
+      await runNoRepo(deps)
+      return
+    }
+
     if (!deps.hasSearchProvider) {
       await runWithoutSearch(deps)
       return
@@ -95,6 +131,49 @@ async function runWithoutSearch(deps: EngineDeps): Promise<void> {
   await deps.emit({ type: "final", markdown: answer.text, sources: [] })
 }
 
+/**
+ * Repo-grounded answer: the question is about the user's OWN connected codebase
+ * and we retrieved real code for it. Emit the repo files as sources (so they get
+ * the [1..k] citation numbers), then answer straight from the grounded repository
+ * context — no web rounds. This is the moat: "where does X live in our repo?" now
+ * answers with real file paths instead of a generic web essay.
+ */
+async function runRepoGrounded(deps: EngineDeps, grounding: RepoGrounding): Promise<void> {
+  const { config } = deps
+  await deps.emit({ type: "status", phase: "planning", round: 0, model: config.tier, effort: config.effort })
+  await deps.emit({
+    type: "note",
+    text: `Grounding this answer in your connected repository (${grounding.namespace}).`,
+  })
+  for (const source of grounding.sources) {
+    await deps.emit({ type: "source", ...source })
+  }
+  if (deps.isCancelled()) return cancel(deps)
+  await deps.emit({ type: "status", phase: "finalizing", round: 0 })
+  const prompt = buildRepoAnswerPrompt({
+    question: deps.question,
+    repoContext: grounding.context,
+    sources: grounding.sources,
+  })
+  const answer = await deps.model("finalReport", toMessages(prompt))
+  // Re-check after the awaited model call so a mid-answer /cancel wins the race.
+  if (deps.isCancelled()) return cancel(deps)
+  await deps.emit({ type: "final", markdown: answer.text, sources: grounding.sources })
+}
+
+/**
+ * No-repo answer: the question is clearly about the caller's own codebase, but no
+ * repository is connected/indexed for them. Say so clearly (connect + index a
+ * repo) instead of answering generically. No model call — a fixed, honest message.
+ */
+async function runNoRepo(deps: EngineDeps): Promise<void> {
+  const { config } = deps
+  await deps.emit({ type: "status", phase: "planning", round: 0, model: config.tier, effort: config.effort })
+  if (deps.isCancelled()) return cancel(deps)
+  await deps.emit({ type: "status", phase: "finalizing", round: 0 })
+  await deps.emit({ type: "final", markdown: NO_REPO_ANSWER, sources: [] })
+}
+
 async function runInner(deps: EngineDeps): Promise<void> {
   const { config } = deps
   const start = deps.now()
@@ -120,6 +199,20 @@ async function runInner(deps: EngineDeps): Promise<void> {
   let notes = ""
   let consecutiveEmpty = 0
   let lastRound = 0
+
+  // Fold repo grounding (when present) into the web loop as AUTHORITATIVE context:
+  // seed the repo files FIRST so they take the low [1..k] citation numbers, and
+  // thread the packed repo context into synthesis + the final report so the answer
+  // prefers and cites the user's own code for codebase claims while web fills in
+  // genuinely external facts.
+  const repoContext = deps.repoGrounding?.context?.trim() ? deps.repoGrounding.context : undefined
+  if (deps.repoGrounding) {
+    for (const source of deps.repoGrounding.sources) {
+      if (sources.has(source.url)) continue
+      sources.set(source.url, source)
+      await deps.emit({ type: "source", ...source })
+    }
+  }
 
   for (let round = 1; round <= config.maxRounds; round++) {
     lastRound = round
@@ -170,6 +263,7 @@ async function runInner(deps: EngineDeps): Promise<void> {
         question: deps.question,
         existingNotes: notes,
         roundExtractions: roundText,
+        ...(repoContext ? { repoContext } : {}),
       })
       const synth = await deps.model("synthesis", toMessages(synthPrompt))
       track(synth.tokens)
@@ -193,7 +287,12 @@ async function runInner(deps: EngineDeps): Promise<void> {
   if (deps.isCancelled()) return cancel(deps)
   await deps.emit({ type: "status", phase: "finalizing", round: lastRound })
   const sourceList = [...sources.values()].slice(0, MAX_REPORT_SOURCES)
-  const reportPrompt = buildFinalReportPrompt({ question: deps.question, notes, sources: sourceList })
+  const reportPrompt = buildFinalReportPrompt({
+    question: deps.question,
+    notes,
+    sources: sourceList,
+    ...(repoContext ? { repoContext } : {}),
+  })
   const report = await deps.model("finalReport", toMessages(reportPrompt))
   track(report.tokens)
   await deps.emit({ type: "final", markdown: report.text, sources: sourceList })

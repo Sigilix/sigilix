@@ -2,20 +2,22 @@
 
 The single source of truth for **"is this paid-only feature available on this plan?"**
 Free-tier installations (and `individual`, and any unknown/unset plan) get core PR
-reviews but NOT the three paid-only surfaces.
+reviews but NOT the four paid-only surfaces.
 
 ## Policy (founder-confirmed 2026-07-02)
 
 | Feature (`EntitledFeature`) | Surface | Entitled tiers |
 | --- | --- | --- |
-| `ci_triage` | CI-failure triage sticky comment | `pro`, `teams`, `max`, `ultra` |
-| `slack` | Slack app-mention assistant | `pro`, `teams`, `max`, `ultra` |
-| `linear` | Linear triage + assign→PR agent | `pro`, `teams`, `max`, `ultra` |
-| `cli_byok` | BYO model-key in the CLI/portal — **display/config gate + Terms** (no server touchpoint) | `pro`, `teams`, `max`, `ultra` |
+| `ci_triage` | CI-failure triage sticky comment | `pro`, `teams`, `max`, `ultra`, `enterprise` |
+| `slack` | Slack app-mention assistant | `pro`, `teams`, `max`, `ultra`, `enterprise` |
+| `linear` | Linear triage + assign→PR agent | `pro`, `teams`, `max`, `ultra`, `enterprise` |
+| `cli_byok` | BYO model-key in the CLI/portal — **display/config gate + Terms** (no server touchpoint) | `pro`, `teams`, `max`, `ultra`, `enterprise` |
 
-`ENTITLED_TIERS = {pro, teams, max, ultra}` (teams is feature-complete). **Fail-closed**: anything not positively one of
-those four — `free`, `individual`, `team`, `enterprise`, `"default"`, unknown, unset,
-a typo — is NOT entitled.
+`ENTITLED_TIERS = {pro, teams, max, ultra, enterprise}` (teams is feature-complete;
+`enterprise` is the CONTRACT tier — set manually on `tenant.tier` when a team signs, never
+self-serve Stripe — and is the TOP tier: every feature plus the highest usage cap).
+**Fail-closed**: anything not positively one of those five — `free`, `individual`, `team`,
+`"default"`, unknown, unset, a typo — is NOT entitled.
 
 ### How each feature is enforced
 

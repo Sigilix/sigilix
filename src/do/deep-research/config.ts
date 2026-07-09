@@ -18,7 +18,11 @@ const FIXED_DEFAULTS = {
   minRounds: 2,
   maxEmptyRounds: 2,
   maxParallelFetches: 3,
-  tokenBudget: 250_000,
+  // Run-level cumulative token budget (loop-termination guard). Lifted 250k → 1M so
+  // a chat/research run can fill the default heavy tier's real window (glm-5.2 ≈ 1M)
+  // instead of stopping early. Env OPENCLAW_RESEARCH_TOKEN_BUDGET still overrides
+  // (clamp [10k, 5M]) — this is a cost knob, not an endpoint ceiling.
+  tokenBudget: 1_000_000,
   cleanupAfterMs: 60 * 60 * 1000, // ~1 hour after last activity
 } as const
 

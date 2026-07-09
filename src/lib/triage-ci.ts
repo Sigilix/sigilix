@@ -99,7 +99,7 @@ export async function handleCiTriage(args: TriageCiArgs): Promise<void> {
   since("start")
 
   // ── Entitlement gate (sig-free-tier-entitlements) ────────────────────────────
-  // CI-failure triage is Pro/Max/Ultra only. If this installation isn't entitled,
+  // CI-failure triage is Pro/Teams/Max/Ultra/Enterprise only. If this installation isn't entitled,
   // clean-skip BEFORE any work — no PR comment (a paywall comment on every failed
   // CI run would be spam). off/shadow are non-blocking; enforce blocks.
   const entitlement = await resolveEntitlement(env, { installationId, feature: "ci_triage" })

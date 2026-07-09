@@ -1282,7 +1282,7 @@ export interface Env {
 
   // sig-free-tier-entitlements: master rollout switch for the paid-only feature
   // gate (CI-failure triage, the Slack assistant, Linear triage/agent are
-  // Pro/Max/Ultra only). "off" (default/unset/unknown) — NO gating, byte-identical
+  // Pro/Teams/Max/Ultra/Enterprise only). "off" (default/unset/unknown) — NO gating, byte-identical
   // to pre-entitlements behavior. "shadow" — resolve the plan and LOG what would be
   // gated, but allow it (validate on live traffic before enforcing). "enforce" —
   // actually gate an un-entitled installation. Resolved by resolveEntitlementsMode

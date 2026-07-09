@@ -262,7 +262,7 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
     }
 
     // ── Entitlement gate (sig-free-tier-entitlements) ──────────────────────────
-    // The Linear agent is Pro/Max/Ultra only. Resolve the plan from THIS issue's
+    // The Linear agent is Pro/Teams/Max/Ultra/Enterprise only. Resolve the plan from THIS issue's
     // team→repo→installation (tenant isolation). If not entitled, post a brief
     // upgrade note where a human sees it — a terminal session activity (so the
     // session resolves out of "Working") when there's a sessionId, else an issue

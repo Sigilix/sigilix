@@ -28,6 +28,8 @@ import { resolveInstallationPlan, type PlanName } from "@/src/lib/resolve-plan"
 import { decryptAccessToken } from "@/src/lib/auth-session"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
+import { isLinkedToInstallation } from "@/src/lib/api-key-store"
+import { resolveGithubAuthors } from "@/src/shared/adapters/github/resolve-authors"
 import {
   resolveUsageMeterMode,
   resolveUsagePoolCap,
@@ -167,6 +169,13 @@ interface ResolvedScope {
   installationId: number
   /** Seat key for scope=user (e.g. "gh:<id>" | "inst:<id>"). */
   seatKey: string | null
+  /**
+   * When set, SEAT reads are ALSO scoped to this installation_id (tenant-safety
+   * for an admin's per-member drill: only seat events attributed to the admin's
+   * own org are counted, never the member's usage in another org). Undefined for
+   * a caller's own-seat read (their full seat, matching enforcement).
+   */
+  seatInstallationScope?: number
   /** Admin per-author filter for scope=org (matches usage_events.user_key / pr author). */
   authorFilter: string | null
   account: string
@@ -212,10 +221,26 @@ async function readOrgMeter(
   return null
 }
 
-/** Count one SEAT-pool meter (coding_agent | chatbot) for a seat in [since, now]. */
-async function readSeatMeter(env: Env, meter: UsageMeter, seatKey: string, sinceIso: string): Promise<number | null> {
+/**
+ * Count one SEAT-pool meter (coding_agent | chatbot) for a seat in [since, now].
+ * When `installationId` is provided the count is ALSO scoped to that org — the
+ * admin per-member drill passes it so a member's usage in ANOTHER org can never
+ * be read (tenant-safety). An own-seat read omits it (the full seat).
+ */
+async function readSeatMeter(
+  env: Env,
+  meter: UsageMeter,
+  seatKey: string,
+  sinceIso: string,
+  installationId?: number,
+): Promise<number | null> {
   if (meter !== "coding_agent" && meter !== "chatbot") return null
-  const res = await readUsageEventCount(env, { meter, userKey: seatKey, sinceIso })
+  const res = await readUsageEventCount(env, {
+    meter,
+    userKey: seatKey,
+    ...(installationId !== undefined ? { installationId } : {}),
+    sinceIso,
+  })
   return res.ok ? res.count : null
 }
 
@@ -270,31 +295,61 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
     // isAdminOfInstallation — NOT the aggregate resolveUserRole, which returns
     // "admin" for anyone owning ANY personal install and would let a mere member of
     // this org read its aggregate + per-developer usage.
-    const wantsOrg = url.searchParams.get("scope") === "org"
+    const scopeParam = url.searchParams.get("scope")
+    const wantsOrg = scopeParam === "org"
+    const wantsUser = scopeParam === "user"
     const authorParam = url.searchParams.get("author")?.trim() || null
+    const ownSeatKey = `gh:${session.record.githubUserId ?? session.record.userId ?? "anon"}`
+    const ownSeat: ResolvedScope = {
+      scope: "user",
+      installationId: current,
+      seatKey: ownSeatKey,
+      authorFilter: null,
+      account,
+    }
 
-    if (wantsOrg && current > 0) {
+    if (wantsUser && authorParam && current > 0) {
+      // SIG-303 admin per-member SEAT drill: `?scope=user&author=<login>`. ADMIN
+      // of THIS installation only (isAdminOfInstallation — scoped, NOT the
+      // aggregate role), and the target must be a MEMBER of it (account_tenant
+      // link — the same trust link the CLI/setup writes and the member's own
+      // seat events are stamped with). The read is then installation-scoped
+      // (seatInstallationScope), so even a resolved id can only ever surface
+      // seat events attributed to the admin's OWN org — never cross-tenant. A
+      // non-admin, an unresolvable login, or a non-member all resolve to a ZEROED
+      // member seat (seatKey null → honest "no usage"), NEVER another member's
+      // real data and NEVER the caller's own numbers relabeled as the member: the
+      // only caller who sends `author` is one whose client believes it is an
+      // admin, so were the server to disagree, returning the caller's own seat
+      // would mislabel it under the member's name — a zeroed drill is airtight.
+      const isAdmin = await isAdminOfInstallation(accessToken, session.record.login, current)
+      const memberId = isAdmin
+        ? (await resolveGithubAuthors([authorParam], accessToken)).get(authorParam.toLowerCase())?.id
+        : undefined
+      const linked =
+        memberId !== undefined && env.SIGILIX_PLATFORM_DB
+          ? await isLinkedToInstallation(env.SIGILIX_PLATFORM_DB, String(memberId), current)
+          : false
+      resolved = {
+        scope: "user",
+        installationId: current,
+        // null seatKey → the seat read yields zeros (honest "no usage" for a
+        // non-admin caller, an unresolvable login, or a non-member).
+        seatKey: linked ? `gh:${memberId}` : null,
+        seatInstallationScope: current,
+        authorFilter: null,
+        account,
+      }
+    } else if (wantsOrg && current > 0) {
       const isAdmin = await isAdminOfInstallation(accessToken, session.record.login, current)
       if (isAdmin) {
         resolved = { scope: "org", installationId: current, seatKey: null, authorFilter: authorParam, account }
       } else {
         // non-admin → own seat (never the org aggregate)
-        resolved = {
-          scope: "user",
-          installationId: current,
-          seatKey: `gh:${session.record.githubUserId ?? session.record.userId ?? "anon"}`,
-          authorFilter: null,
-          account,
-        }
+        resolved = ownSeat
       }
     } else {
-      resolved = {
-        scope: "user",
-        installationId: current,
-        seatKey: `gh:${session.record.githubUserId}`,
-        authorFilter: null,
-        account,
-      }
+      resolved = ownSeat
     }
   } else {
     const apiAuth = await requireApiTenant(request, env, ctx)
@@ -353,8 +408,8 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
       ])
     } else if (pool === "seat" && resolved.seatKey) {
       ;[usedS, usedW] = await Promise.all([
-        readSeatMeter(env, meter, resolved.seatKey, sinceSession),
-        readSeatMeter(env, meter, resolved.seatKey, sinceWeekly),
+        readSeatMeter(env, meter, resolved.seatKey, sinceSession, resolved.seatInstallationScope),
+        readSeatMeter(env, meter, resolved.seatKey, sinceWeekly, resolved.seatInstallationScope),
       ])
     } else {
       usedS = 0

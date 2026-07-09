@@ -112,13 +112,15 @@ export async function handleVertexChatRoute(
   if ("response" in auth) return auth.response
   if (!env.OPENCLAW_GATEWAY_ISSUER) return json({ error: "boreas_gateway_not_configured" }, 503)
 
-  // SIG-303 SEAT pool (coding_agent). The CLI seat is identified by its API key;
-  // a per-installation key currently has no per-user link, so the seat key is
-  // `inst:<installationId>` (documented gap — unify when per-user CLI keys land).
+  // SIG-303 SEAT pool (coding_agent). The CLI seat is the DEVELOPER behind the
+  // API key: `gh:<createdBy>` (the github user id that minted the key), so a
+  // per-developer, org-scoped seat read is possible and this key aligns with the
+  // portal chatbot seat (`gh:<githubUserId>`). Only the legacy shared global key
+  // (no developer) falls back to `inst:<installationId>`.
   // GRACE POLICY: checked at admission BEFORE the token mint / Vertex call — an
   // over-cap request never mints a GCP token; an in-flight stream is never aborted.
   // Behind SIGILIX_USAGE_METER_MODE (default shadow → never blocks). Fail-open.
-  const seatKey = `inst:${auth.caller.installationId}`
+  const seatKey = auth.caller.createdBy ? `gh:${auth.caller.createdBy}` : `inst:${auth.caller.installationId}`
   const now = Date.now()
   const meterDecision = await checkUsagePool(env, { pool: "seat", userKey: seatKey, nowMs: now })
   if (!meterDecision.allowed) return json({ error: "usage_limit_exceeded", pool: "seat" }, 429)

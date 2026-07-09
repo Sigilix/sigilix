@@ -123,6 +123,19 @@ export async function resolveApiKey(
   return null
 }
 
+/**
+ * The SEAT key for a resolved caller — the per-developer identity the SIG-303 seat
+ * pool (coding_agent + chatbot) is keyed by. `gh:<createdBy>` when the key carries a
+ * developer (the github user id that minted it), else `inst:<installationId>` (the
+ * legacy shared global key, which has no developer — installationId is the LEGACY
+ * sentinel there). SINGLE SOURCE OF TRUTH: the CLI gateway append and the
+ * /v1/usage/report late-bind MUST derive the seat identically or cost never binds
+ * onto the row, so both call this one helper rather than re-deriving the expression.
+ */
+export function seatKeyFor(caller: ResolvedApiKey): string {
+  return caller.createdBy ? `gh:${caller.createdBy}` : `inst:${caller.installationId}`
+}
+
 /** Either the resolved caller, or the 401 Response the route should return as-is. */
 export type ApiTenantAuth = { response: Response } | { caller: ResolvedApiKey }
 

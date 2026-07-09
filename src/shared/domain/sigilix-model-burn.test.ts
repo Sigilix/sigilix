@@ -9,6 +9,8 @@ import {
   modelBurnTable,
   approxTasksRemaining,
   usageUpsellHint,
+  normalizeBurnModelKey,
+  codingAgentEventCost,
 } from "./sigilix-model-burn"
 
 describe("cheapest / priciest burn model", () => {
@@ -64,5 +66,39 @@ describe("usageUpsellHint", () => {
 
   it("never fires on an unbounded (null) remaining pct", () => {
     expect(usageUpsellHint(null)).toBeNull()
+  })
+})
+
+describe("normalizeBurnModelKey", () => {
+  it("strips a leading sigilix/ prefix and lowercases (the CLI reports sigilix/boreas)", () => {
+    expect(normalizeBurnModelKey("sigilix/boreas")).toBe("boreas")
+    expect(normalizeBurnModelKey("Sigilix/Astraeus")).toBe("astraeus")
+    expect(normalizeBurnModelKey("  pyroeis  ")).toBe("pyroeis")
+  })
+  it("passes an unknown id through unchanged (→ rate 0 downstream)", () => {
+    expect(normalizeBurnModelKey("gpt-4o")).toBe("gpt-4o")
+  })
+})
+
+describe("codingAgentEventCost", () => {
+  it("prices a boreas turn at the representative blended rate (tokens/1e6 × $/MTok)", () => {
+    // 100k in + 50k out = 150k tokens × $0.30/MTok = $0.045
+    const { tokens, costUsd } = codingAgentEventCost("sigilix/boreas", 100_000, 50_000)
+    expect(tokens).toBe(150_000)
+    expect(costUsd).toBeCloseTo((150_000 / 1_000_000) * SIGILIX_MODEL_BURN_USD_PER_MTOK.boreas!, 9)
+    expect(costUsd).toBeCloseTo(0.045, 9)
+  })
+
+  it("astraeus (premium) costs more than boreas for the same tokens", () => {
+    const boreas = codingAgentEventCost("boreas", 100_000, 100_000)
+    const astraeus = codingAgentEventCost("astraeus", 100_000, 100_000)
+    expect(astraeus.costUsd).toBeGreaterThan(boreas.costUsd)
+  })
+
+  it("fails SAFE to 0 cost on an unknown model, and 0 tokens on non-finite/negative counts", () => {
+    expect(codingAgentEventCost("mystery", 100_000, 100_000).costUsd).toBe(0)
+    const nan = codingAgentEventCost("boreas", Number.NaN, -5)
+    expect(nan.tokens).toBe(0)
+    expect(nan.costUsd).toBe(0)
   })
 })

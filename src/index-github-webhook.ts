@@ -45,6 +45,7 @@ import {
   maybeScheduleAutoApproveFromReviewComment,
 } from "@/src/index-github-auto-approve"
 import { handleWorkflowRunEvent } from "@/src/index-github-workflow-run"
+import { routeMarketplaceWebhook } from "@/src/index-github-marketplace"
 
 export async function handleGitHubWebhook(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY || !env.GITHUB_WEBHOOK_SECRET) {
@@ -72,11 +73,11 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
     return new Response("invalid json\n", { status: 400 })
   }
 
-  // GitHub fires `ping` when a webhook URL is set or updated. Ack and
-  // move on — no installation/repo context, nothing to enqueue.
-  if (event === "ping") {
-    return new Response("pong\n", { status: 200 })
-  }
+  // GitHub fires `ping` when a webhook URL is set/updated — no context, nothing to enqueue.
+  if (event === "ping") return new Response("pong\n", { status: 200 })
+  // sig-github-marketplace-billing: Marketplace events (+ install-time reconcile) — leaf-owned.
+  const marketplaceRes = await routeMarketplaceWebhook({ event, payload, env })
+  if (marketplaceRes) return marketplaceRes
 
   // App-level events have no repository field. ARC-234 intercepts the
   // two install-onboarding events that drive the customer-ready

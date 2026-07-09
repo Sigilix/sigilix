@@ -1,0 +1,14 @@
+-- sig-github-marketplace-billing — record which billing PROVIDER last set a tenant's
+-- tier, so a Stripe subscription and a GitHub Marketplace subscription can be told apart
+-- (and a Marketplace event can be stopped from clobbering an active Stripe payer, and
+-- vice-versa). Forward-only; immutable once applied (COMPLIANCE.md §8). Applied via
+-- `wrangler d1 migrations apply <db>` — NOT auto on deploy; run it BEFORE shipping the
+-- code that reads/writes the column.
+--
+-- Additive only: a single nullable column on the existing tenant table (migration 0001),
+-- so every existing row and the current tier UPSERT stay valid. Values: 'stripe' |
+-- 'github_marketplace' | NULL. NULL = source unknown (never billed, or a row written
+-- before this column existed) — treated as "no known active paid source" by the
+-- clobber-guard, which is fail-open for the Marketplace write (an unknown source never
+-- blocks a Marketplace provision). The billing webhooks stamp it on the next event.
+ALTER TABLE tenant ADD COLUMN billing_source TEXT;

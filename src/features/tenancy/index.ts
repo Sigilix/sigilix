@@ -35,10 +35,14 @@ export type { RateLimitMode } from "./domain/rate-limit"
 export {
   upsertTenantAndRepo,
   upsertTenantTier,
+  upsertTenantAccount,
   readTenantConfig,
   readTenantSubscriptionStatus,
+  resolveInstallationByAccountLogin,
+  readTenantBillingGuard,
   lookupRepoByFullName,
 } from "./adapters/d1-tenant-store"
+export type { TenantBillingGuard } from "./adapters/d1-tenant-store"
 export { resolveTenantCap } from "./adapters/resolve-tenant-cap"
 export { appendUsage } from "./adapters/d1-usage-ledger"
 export { readTenantUsageSince, readUsageRollupSince } from "./adapters/d1-usage-read"

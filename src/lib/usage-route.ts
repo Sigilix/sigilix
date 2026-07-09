@@ -24,7 +24,7 @@
 // and always tenant-isolated to the caller's own installation. CORS'd in index.ts.
 
 import { requireSession } from "@/src/lib/auth-middleware"
-import { resolvePlanFromEnv, type PlanName } from "@/src/lib/resolve-plan"
+import { resolveInstallationPlan, type PlanName } from "@/src/lib/resolve-plan"
 import { decryptAccessToken } from "@/src/lib/auth-session"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
@@ -235,7 +235,6 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
   const url = new URL(request.url)
   const nowMs = Date.now()
   const mode = resolveUsageMeterMode(env)
-  const plan = resolvePlanFromEnv(env)
 
   const session = await requireSession(request, env, ctx)
   let resolved: ResolvedScope
@@ -325,6 +324,11 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
       }
     }
   }
+
+  // Plan is the REAL tenant.tier for the resolved installation (the authoritative
+  // entitlement source), not the OPENCLAW_PLAN placeholder — so the usage panel
+  // header reads the org's true tier (e.g. "Ultra"), never a blanket "Free".
+  const plan = await resolveInstallationPlan(env, resolved.installationId)
 
   const pool: UsagePool = resolved.scope === "org" ? "org" : "seat"
   const capSession = resolveUsagePoolCap(env, pool, "session")

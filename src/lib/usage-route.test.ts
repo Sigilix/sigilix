@@ -250,6 +250,25 @@ describe("handleUsageRoute (GET /v1/usage) — SIG-303 two pools", () => {
     expect(body.windows.weekly.window_label).toBe("Mon 9:00")
   })
 
+  it("plan reflects the installation's REAL tenant.tier, not the OPENCLAW_PLAN default", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "Octocat", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+    stubInstallations([{ id: 1 }])
+    await insertTenant(db, 1, "octocat")
+    // A paid tenant — the usage panel header must read "ultra", never a blanket "free".
+    await db.prepare("UPDATE tenant SET tier = 'ultra' WHERE installation_id = 1").run()
+
+    const res = await handleUsageRoute(reqWithSession("sess-1"), env)
+    const body = (await res.json()) as UsageResponse
+    expect(body.plan).toBe("ultra")
+  })
+
   it("POOL INDEPENDENCE: org-automation events never move a dev's SEAT counters", async () => {
     const db = await makeDb()
     const kv = makeKV()

@@ -4,7 +4,7 @@
 // fail-closed auth, validation, the plan seam, and (via the worker entrypoint)
 // that the route + its PATCH preflight are registered in index.ts.
 
-import { describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import {
@@ -19,10 +19,53 @@ import type { Env } from "@/src/shared/types/env"
 const SESSION_COOKIE = "__Host-sigilix_session"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(9))
 
+const MIGRATION_TENANT_SQL = readFileSync(
+  new URL("../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url),
+  "utf8",
+)
 const MIGRATION_PROFILE_SQL = readFileSync(
   new URL("../../migrations/0005_create_user_profile.sql", import.meta.url),
   "utf8",
 )
+
+// The GET route resolves the caller's REAL plan from their first installation's
+// tenant.tier — so it decrypts the session token and calls GET /user/installations.
+// Stub that fetch (default: no installations) so tests are deterministic + offline;
+// individual tests set installations to exercise the tier-based plan.
+function stubInstallations(installations: Array<{ id: number }>) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString()
+      if (url.startsWith("https://api.github.com/user/installations?")) {
+        return new Response(JSON.stringify({ total_count: installations.length, installations }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    }),
+  )
+}
+
+async function insertTenant(db: D1Database, installationId: number, tier: string) {
+  await db
+    .prepare(
+      "INSERT INTO tenant (installation_id, tier, created_at, updated_at)" +
+        " VALUES (?, ?, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')" +
+        " ON CONFLICT(installation_id) DO UPDATE SET tier = excluded.tier",
+    )
+    .bind(installationId, tier)
+    .run()
+}
+
+beforeEach(() => {
+  stubInstallations([])
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 function makeKV(): KVNamespace {
   const store = new Map<string, string>()
@@ -43,6 +86,7 @@ function makeKV(): KVNamespace {
 
 async function makeDb(): Promise<D1Database> {
   const db = makeD1()
+  await db.exec(MIGRATION_TENANT_SQL)
   await db.exec(MIGRATION_PROFILE_SQL)
   return db
 }
@@ -116,13 +160,50 @@ describe("GET /v1/profile", () => {
     expect(body.display_name_source).toBe("login")
   })
 
-  it("returns the caller's REAL plan from OPENCLAW_PLAN (never hardcoded)", async () => {
+  it("falls back to the OPENCLAW_PLAN default when the caller has no installation", async () => {
     const kv = makeKV()
     const db = await makeDb()
     await seedSession(kv, "s1", { login: "someone", githubUserId: 7 })
+    stubInstallations([]) // no installation → no tenant.tier → env default
     const res = await handleUserProfileGetRoute(getReq("s1"), makeEnv(kv, db, { OPENCLAW_PLAN: "pro" } as Partial<Env>))
     const body = (await res.json()) as ProfileResponse
     expect(body.plan).toBe("pro")
+  })
+
+  it("returns the REAL tenant.tier of the caller's installation (paid org reads its true plan, not 'free')", async () => {
+    const kv = makeKV()
+    const db = await makeDb()
+    await seedSession(kv, "s1", { login: "founder", githubUserId: 7 })
+    await insertTenant(db, 134811639, "ultra")
+    stubInstallations([{ id: 134811639 }])
+    // No OPENCLAW_PLAN override — the plan must come from tenant.tier, not the "free" default.
+    const res = await handleUserProfileGetRoute(getReq("s1"), makeEnv(kv, db))
+    const body = (await res.json()) as ProfileResponse
+    expect(body.plan).toBe("ultra")
+  })
+
+  it("renders the enterprise tier (the top contract tier)", async () => {
+    const kv = makeKV()
+    const db = await makeDb()
+    await seedSession(kv, "s1", { login: "founder", githubUserId: 7 })
+    await insertTenant(db, 42, "enterprise")
+    stubInstallations([{ id: 42 }])
+    const res = await handleUserProfileGetRoute(getReq("s1"), makeEnv(kv, db))
+    const body = (await res.json()) as ProfileResponse
+    expect(body.plan).toBe("enterprise")
+  })
+
+  it("takes the HIGHEST tier across installations — a paid org outranks a free personal install listed first", async () => {
+    const kv = makeKV()
+    const db = await makeDb()
+    await seedSession(kv, "s1", { login: "founder", githubUserId: 7 })
+    await insertTenant(db, 555, "free") // personal free install
+    await insertTenant(db, 134811639, "ultra") // paid org
+    // Free install listed FIRST — the plan must still resolve to the paid tier.
+    stubInstallations([{ id: 555 }, { id: 134811639 }])
+    const res = await handleUserProfileGetRoute(getReq("s1"), makeEnv(kv, db))
+    const body = (await res.json()) as ProfileResponse
+    expect(body.plan).toBe("ultra")
   })
 })
 

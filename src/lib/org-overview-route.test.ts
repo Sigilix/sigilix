@@ -248,6 +248,25 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
     expect(other.role).toBe("member")
   })
 
+  it("org.plan reflects the installation's REAL tenant.tier (paid org reads its true plan, not 'free')", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "Octocat", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+    stubGitHub({ installations: [{ id: 1, account: { type: "User", login: "Octocat" } }] })
+    await insertTenant(db, 1, "octocat")
+    // A paid tenant — the Organization page must read "ultra", never a blanket "free".
+    await db.prepare("UPDATE tenant SET tier = 'ultra' WHERE installation_id = 1").run()
+
+    const res = await handleOrgOverviewRoute(reqWithSession("sess-1"), env)
+    const body = (await res.json()) as OrgOverviewResponse
+    expect(body.org.plan).toBe("ultra")
+  })
+
   it("admin session: merges the GitHub roster — active seats keep their state, roster-only members appended unassigned", async () => {
     const db = await makeDb()
     const kv = makeKV()

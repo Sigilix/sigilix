@@ -1348,6 +1348,19 @@ export interface Env {
   SIGILIX_STRIPE_PRICE_MAX?: string
   SIGILIX_STRIPE_PRICE_ULTRA?: string
 
+  // sig-github-marketplace-billing: GitHub Marketplace subscriptions arrive at the SAME
+  // POST /github/webhook endpoint (X-GitHub-Event: marketplace_purchase), verified by
+  // GITHUB_WEBHOOK_SECRET like every other GitHub event — no separate secret.
+  //   GITHUB_MARKETPLACE_PLAN_MAP — JSON {"<plan_id>":"pro","<plan_id>":"teams",...} that
+  //                                 pins each Marketplace plan id to a Sigilix tier
+  //                                 (free/pro/teams/max/ultra — NEVER enterprise). Plan ids
+  //                                 aren't known until the founder creates the plans, so
+  //                                 this is set once, after, WITHOUT a code change. Absent /
+  //                                 a plan not in the map → the case-insensitive plan-NAME
+  //                                 heuristic, then a fail-closed `free`. Set via [vars]:
+  //                                 `wrangler ... ` or the dashboard.
+  GITHUB_MARKETPLACE_PLAN_MAP?: string
+
   // Portal Organization page (GET /v1/org/overview) — plan + per-seat billing
   // display placeholders. Both optional: absent OPENCLAW_PLAN defaults to "free";
   // absent/invalid OPENCLAW_PER_SEAT_PRICE surfaces perSeatMonthly=null ("billing

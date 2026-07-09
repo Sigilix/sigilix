@@ -207,6 +207,15 @@ export interface GitHubWebhookPayload {
     modified?: string[]
     removed?: string[]
   }>
+  // sig-github-marketplace-billing: GitHub Marketplace `marketplace_purchase` events ride
+  // the same webhook endpoint. `action` (above) is purchased/changed/cancelled/
+  // pending_change/pending_change_cancelled; the purchase carries the buying account +
+  // plan. Fields are narrowed defensively by the pure interpreter.
+  marketplace_purchase?: {
+    account?: { id?: number; login?: string; type?: string }
+    unit_count?: number
+    plan?: { id?: number; name?: string }
+  }
 }
 
 /**

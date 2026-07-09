@@ -79,6 +79,12 @@ export async function upsertTenantAndRepo(
  * the state that decides FULL-vs-HALF usage volume (see resolveRateLimitCap) can never
  * drift apart. It is ALWAYS written alongside the tier: converting a trial→active
  * overwrites the column to 'active', so no lingering half-cap survives the conversion.
+ *
+ * sig-github-marketplace-billing: `billingSource` ('stripe' | 'github_marketplace' |
+ * null) records WHICH provider set this tier so the two billing webhooks can tell their
+ * writes apart (and refuse to clobber each other's active payer). Written via COALESCE —
+ * passing null (the default) PRESERVES any existing source, so a caller that does not
+ * care never wipes it; a caller that does passes 'stripe' / 'github_marketplace'.
  */
 export async function upsertTenantTier(
   env: Pick<Env, "SIGILIX_PLATFORM_DB">,
@@ -86,19 +92,21 @@ export async function upsertTenantTier(
   tier: string,
   nowIso: string,
   subscriptionStatus: string | null = null,
+  billingSource: string | null = null,
 ): Promise<{ ok: boolean }> {
   if (!env.SIGILIX_PLATFORM_DB) return { ok: false }
   if (!Number.isInteger(installationId) || installationId <= 0) return { ok: false }
   try {
     await env.SIGILIX_PLATFORM_DB.prepare(
-      "INSERT INTO tenant (installation_id, tier, subscription_status, created_at, updated_at)" +
-        " VALUES (?, ?, ?, ?, ?)" +
+      "INSERT INTO tenant (installation_id, tier, subscription_status, billing_source, created_at, updated_at)" +
+        " VALUES (?, ?, ?, ?, ?, ?)" +
         " ON CONFLICT(installation_id) DO UPDATE SET" +
         " tier = excluded.tier," +
         " subscription_status = excluded.subscription_status," +
+        " billing_source = COALESCE(excluded.billing_source, tenant.billing_source)," +
         " updated_at = excluded.updated_at",
     )
-      .bind(installationId, tier, subscriptionStatus, nowIso, nowIso)
+      .bind(installationId, tier, subscriptionStatus, billingSource, nowIso, nowIso)
       .run()
     return { ok: true }
   } catch (error) {
@@ -142,6 +150,130 @@ export async function readTenantSubscriptionStatus(
     console.warn(
       JSON.stringify({
         event: "d1-tenant-subscription-status-read-failed",
+        installationId,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return null
+  }
+}
+
+/**
+ * sig-github-marketplace-billing: seed a tenant row's ACCOUNT IDENTITY (account_login +
+ * account_type) at install time, so a later GitHub Marketplace `marketplace_purchase`
+ * event (which resolves the installation ONLY via `tenant.account_login`) can find it —
+ * even for an install-first-purchase-later account whose first PR (the other writer of
+ * account_login, via `upsertTenantAndRepo`) hasn't happened yet. UPSERT by installation_id:
+ * a brand-new tenant is inserted (tier left at the schema DEFAULT), an existing one has
+ * only account_login/account_type refreshed via COALESCE (incoming nulls never overwrite a
+ * known value) — tier/subscription_status/billing_source/concurrency_cap are untouched.
+ *
+ * FAILS OPEN — any error logs a warn and returns void; never throws (mirrors
+ * `upsertTenantAndRepo`). A failed seed only delays resolution until the next writer.
+ */
+export async function upsertTenantAccount(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  args: { installationId: number; accountLogin?: string; accountType?: string; nowIso: string },
+): Promise<void> {
+  if (!env.SIGILIX_PLATFORM_DB) return
+  if (!Number.isInteger(args.installationId) || args.installationId <= 0) return
+  try {
+    await env.SIGILIX_PLATFORM_DB.prepare(
+      "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
+        " VALUES (?, ?, ?, ?, ?)" +
+        " ON CONFLICT(installation_id) DO UPDATE SET" +
+        " account_login = COALESCE(excluded.account_login, tenant.account_login)," +
+        " account_type = COALESCE(excluded.account_type, tenant.account_type)," +
+        " updated_at = excluded.updated_at",
+    )
+      .bind(args.installationId, args.accountLogin ?? null, args.accountType ?? null, args.nowIso, args.nowIso)
+      .run()
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "d1-tenant-account-seed-failed",
+        installationId: args.installationId,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+  }
+}
+
+/**
+ * sig-github-marketplace-billing: resolve a GitHub account login → its installation_id by
+ * matching `tenant.account_login` case-insensitively. The Marketplace webhook carries the
+ * purchasing account (login), NOT an installation id, so this is how it finds the tenant
+ * to provision. Returns null when the binding is absent, no tenant matches (the App isn't
+ * installed yet → purchase-before-install), or any D1 fault occurs. Never throws.
+ *
+ * If more than one installation shares a login (should not happen — one login = one
+ * install), the smallest installation_id is returned deterministically.
+ */
+export async function resolveInstallationByAccountLogin(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  accountLogin: string,
+): Promise<number | null> {
+  if (!env.SIGILIX_PLATFORM_DB) return null
+  if (typeof accountLogin !== "string" || accountLogin.length === 0) return null
+  try {
+    const row = await env.SIGILIX_PLATFORM_DB.prepare(
+      "SELECT installation_id FROM tenant WHERE LOWER(account_login) = LOWER(?)" +
+        " ORDER BY installation_id ASC LIMIT 1",
+    )
+      .bind(accountLogin)
+      .first<{ installation_id: number }>()
+    if (row == null) return null
+    return Number.isInteger(row.installation_id) && row.installation_id > 0 ? row.installation_id : null
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "d1-tenant-resolve-by-login-failed",
+        accountLogin,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return null
+  }
+}
+
+/** The tenant fields the Marketplace clobber/downgrade guards read before writing. */
+export interface TenantBillingGuard {
+  tier: string | null
+  billingSource: string | null
+  subscriptionStatus: string | null
+}
+
+/**
+ * sig-github-marketplace-billing: read a tenant's current tier + billing_source +
+ * subscription_status so the Marketplace webhook can (1) refuse to downgrade an
+ * `enterprise` tenant (enterprise is sales-assisted, never a Marketplace plan) and (2)
+ * refuse to clobber a tenant whose active paid subscription came from Stripe. Returns
+ * null when the binding is absent, the row is missing, or a D1 fault occurs — a null
+ * (or a null tier) means "no guard tripped", which is fail-open for the Marketplace
+ * write (an unresolved current state never blocks a legitimate provision). Never throws.
+ */
+export async function readTenantBillingGuard(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  installationId: number,
+): Promise<TenantBillingGuard | null> {
+  if (!env.SIGILIX_PLATFORM_DB) return null
+  if (!Number.isInteger(installationId) || installationId <= 0) return null
+  try {
+    const row = await env.SIGILIX_PLATFORM_DB.prepare(
+      "SELECT tier, billing_source, subscription_status FROM tenant WHERE installation_id = ?",
+    )
+      .bind(installationId)
+      .first<{ tier: unknown; billing_source: unknown; subscription_status: unknown }>()
+    if (row == null) return null
+    return {
+      tier: typeof row.tier === "string" ? row.tier : null,
+      billingSource: typeof row.billing_source === "string" ? row.billing_source : null,
+      subscriptionStatus: typeof row.subscription_status === "string" ? row.subscription_status : null,
+    }
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "d1-tenant-billing-guard-read-failed",
         installationId,
         err: error instanceof Error ? error.message : String(error),
       }),

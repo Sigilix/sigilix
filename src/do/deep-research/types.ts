@@ -15,12 +15,35 @@ export type ResearchTier = "boreas" | "pyroeis" | "astraeus"
 /** The effort level — scales the loop budgets (rounds / queries / pages / time). */
 export type ResearchEffort = "low" | "medium" | "high"
 
-/** A web source surfaced during the run (a search hit or a fetched page). */
+/** A source surfaced during the run. `kind` distinguishes a web hit/page from a
+ *  file in the user's own connected repository (the codebase-grounding moat). It
+ *  is OPTIONAL and additive — legacy UIs that ignore it treat every source as a
+ *  web source, so the existing contract is unchanged. For a repo source `url` is
+ *  a GitHub blob URL and `domain` is the `owner/repo` slug (not a hostname). */
 export interface ResearchSource {
   url: string
   title: string
   domain: string
   snippet?: string
+  kind?: "web" | "repo"
+}
+
+/**
+ * Codebase grounding gathered BEFORE the loop from the caller's connected +
+ * indexed repository, reusing the same retrieval seam the PR-review path uses
+ * (`gatherAgentContext`). Present (non-null) only when real code was retrieved.
+ * Pure type — the runtime that builds it lives in `repo-grounding.ts`.
+ */
+export interface RepoGrounding {
+  /** The `<owner>/<repo>` index namespace the context came from (lowercased). */
+  namespace: string
+  /** The packed, prompt-ready grounded slice (learnings → repo map → symbol
+   *  bodies → raw chunks) — injected as authoritative repo context. */
+  context: string
+  /** The repo files to cite ([n] in the answer), most-relevant first. */
+  sources: ResearchSource[]
+  /** How many code chunks retrieval matched (0 ⇒ conventions-only grounding). */
+  chunkCount: number
 }
 
 /**
@@ -35,7 +58,7 @@ export type ResearchEvent =
   | { type: "status"; phase: ResearchPhase; round: number; model?: ResearchTier; effort?: ResearchEffort }
   | { type: "plan"; text: string }
   | { type: "queries"; items: string[] }
-  | { type: "source"; url: string; title: string; domain: string; snippet?: string }
+  | { type: "source"; url: string; title: string; domain: string; snippet?: string; kind?: "web" | "repo" }
   | { type: "note"; text: string }
   | { type: "final"; markdown: string; sources: ResearchSource[] }
   | { type: "error"; message: string }

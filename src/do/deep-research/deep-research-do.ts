@@ -20,7 +20,8 @@ import { parseEffort, parseTier, resolveResearchConfig } from "./config"
 import { buildModelFn } from "./model"
 import { hasAnySearchProvider, searchWeb } from "./search"
 import { fetchPage } from "./fetch-guard"
-import type { ResearchEffort, ResearchEvent, ResearchTier } from "./types"
+import { gatherRepoGrounding, type GatherRepoGroundingArgs } from "./repo-grounding"
+import type { RepoGrounding, ResearchEffort, ResearchEvent, ResearchTier } from "./types"
 
 const META_KEY = "meta"
 const EVENT_PREFIX = "evt:"
@@ -39,11 +40,19 @@ interface RunMeta {
   creator: string
   model: ResearchTier
   effort: ResearchEffort
+  /** sig-deep-research-repo-grounding: the repo (if any) resolved for this run
+   *  from the caller's identity, and whether they have ANY indexed repo. */
+  owner?: string
+  repo?: string
+  hasIndexedRepo?: boolean
 }
 
 /** Test seam: lets DO-level tests drive the loop with fake IO. Never set in
- *  production (buildDeps falls back to the real adapters). */
-export type ResearchTestHooks = Partial<Pick<EngineDeps, "model" | "search" | "fetchPage" | "now">>
+ *  production (buildDeps falls back to the real adapters). `gatherGrounding`
+ *  lets a test inject codebase grounding without hitting real retrieval. */
+export type ResearchTestHooks = Partial<Pick<EngineDeps, "model" | "search" | "fetchPage" | "now">> & {
+  gatherGrounding?: (args: GatherRepoGroundingArgs) => Promise<RepoGrounding | null>
+}
 
 export class DeepResearchDO extends DurableObject<Env> {
   /** In-memory authoritative event buffer (mirrors persisted evt:* frames). */
@@ -59,6 +68,9 @@ export class DeepResearchDO extends DurableObject<Env> {
   private creator = ""
   private model: ResearchTier = "astraeus"
   private effort: ResearchEffort = "medium"
+  private owner = ""
+  private repo = ""
+  private hasIndexedRepo = false
   private readonly encoder = new TextEncoder()
 
   // sig-worker-debrand-openclaw: resolve SIGILIX_ (preferred) / OPENCLAW_ (fallback)
@@ -83,7 +95,15 @@ export class DeepResearchDO extends DurableObject<Env> {
 
   private async handleStart(request: Request): Promise<Response> {
     if (this.started) return json({ ok: true, alreadyStarted: true })
-    let body: { question?: unknown; model?: unknown; effort?: unknown; creator?: unknown }
+    let body: {
+      question?: unknown
+      model?: unknown
+      effort?: unknown
+      creator?: unknown
+      owner?: unknown
+      repo?: unknown
+      hasIndexedRepo?: unknown
+    }
     try {
       body = (await request.json()) as typeof body
     } catch {
@@ -97,6 +117,12 @@ export class DeepResearchDO extends DurableObject<Env> {
     this.model = parseTier(body.model) ?? "astraeus"
     this.effort = parseEffort(body.effort) ?? "medium"
     this.creator = typeof body.creator === "string" ? body.creator : ""
+    // sig-deep-research-repo-grounding: the repo target (resolved in the route from
+    // the caller's identity) + whether they have any indexed repo. Absent ⇒ no
+    // codebase grounding for this run.
+    this.owner = typeof body.owner === "string" ? body.owner.trim() : ""
+    this.repo = typeof body.repo === "string" ? body.repo.trim() : ""
+    this.hasIndexedRepo = body.hasIndexedRepo === true
 
     this.started = true
     const meta: RunMeta = {
@@ -108,6 +134,9 @@ export class DeepResearchDO extends DurableObject<Env> {
       creator: this.creator,
       model: this.model,
       effort: this.effort,
+      ...(this.owner ? { owner: this.owner } : {}),
+      ...(this.repo ? { repo: this.repo } : {}),
+      hasIndexedRepo: this.hasIndexedRepo,
     }
     await this.ctx.storage.put(META_KEY, meta)
     await this.armCleanupAlarm()
@@ -122,11 +151,28 @@ export class DeepResearchDO extends DurableObject<Env> {
     const config = resolveResearchConfig(this.env, { model: this.model, effort: this.effort })
     const runId = this.ctx.id.toString()
     const tenant = this.creator || "anonymous"
+
+    // sig-deep-research-repo-grounding: gather codebase grounding for the resolved
+    // repo (if any) BEFORE the loop, reusing the PR-review retrieval seam. Soft-
+    // fails to null (the run then falls back to web research) — grounding must
+    // never break a run.
+    let repoGrounding: RepoGrounding | null = null
+    if (this.owner && this.repo) {
+      const gather = this.hooks?.gatherGrounding ?? gatherRepoGrounding
+      try {
+        repoGrounding = await gather({ env: this.env, owner: this.owner, repo: this.repo, query: question })
+      } catch {
+        repoGrounding = null
+      }
+    }
+
     const deps: EngineDeps = {
       question,
       runId,
       config,
       hasSearchProvider: hasAnySearchProvider(this.env),
+      repoGrounding,
+      hasIndexedRepo: this.hasIndexedRepo,
       emit: (event) => this.emit(event),
       model: this.hooks?.model ?? buildModelFn(this.env, config),
       search: this.hooks?.search ?? ((query) => searchWeb({ query, env: this.env, runId, tenant })),

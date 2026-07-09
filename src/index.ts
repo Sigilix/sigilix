@@ -74,6 +74,7 @@ import { handleAdminAgentRunRoute, handleAdminAgentStatusRoute } from "@/src/lib
 import { runIndexReconciliation } from "@/src/lib/index-reconciliation"
 import { runMemoryDecayPass } from "@/src/lib/memory-decay"
 import { handleReviewStatusRoute } from "@/src/do/status-route"
+import { tryHandleHealthRoute } from "@/src/lib/health-routes"
 import { handleAuthRoutes } from "@/src/lib/auth-routes"
 import { handleCreateApiKeyRoute, handleListApiKeysRoute, handleRevokeApiKeyRoute } from "@/src/lib/api-keys-route"
 import { tryHandleCliLoginRoute } from "@/src/lib/cli-login-route"
@@ -203,11 +204,10 @@ export default {
 
     const url = new URL(request.url)
 
-    if (request.method === "GET" && url.pathname === "/") {
-      return new Response("Sigilix — alive\n", {
-        headers: { "content-type": "text/plain" },
-      })
-    }
+    // sig-health-endpoints: `/` liveness + the PUBLIC dependency-aware health
+    // surface (/health, /health/models, /health/integrations). See health-routes.ts.
+    const healthRes = await tryHandleHealthRoute(request, env, ctx, url)
+    if (healthRes) return healthRes
 
     // SIG-545: UNAUTHENTICATED OIDC discovery for the Boreas CLI gateway — GCP's
     // Workload-Identity-Federation provider fetches these to verify the gateway's

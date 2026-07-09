@@ -9,6 +9,7 @@ import {
   parseReviewPath,
   groupReviewComments,
   latestReviewSummary,
+  pickOverviewComment,
 } from "@/src/lib/workspace-pr-review-route"
 import { base64urlEncode, createSession } from "@/src/lib/auth-session"
 import { insertApiKey } from "@/src/lib/api-key-store"
@@ -71,8 +72,13 @@ function baseEnv(kv: KVNamespace, db?: D1Database): Env {
   } as unknown as Env
 }
 
-/** Stub GitHub: installations listing + PR comments + PR reviews. */
-function stubGithub(opts: { installationIds?: number[]; comments?: unknown[]; reviews?: unknown[] }) {
+/** Stub GitHub: installations listing + PR inline comments + PR reviews + issue comments. */
+function stubGithub(opts: {
+  installationIds?: number[]
+  comments?: unknown[]
+  reviews?: unknown[]
+  issueComments?: unknown[]
+}) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -88,6 +94,9 @@ function stubGithub(opts: { installationIds?: number[]; comments?: unknown[]; re
       }
       if (/\/pulls\/42\/reviews/.test(url)) {
         return new Response(JSON.stringify(opts.reviews ?? []), { status: 200 })
+      }
+      if (/\/issues\/42\/comments/.test(url)) {
+        return new Response(JSON.stringify(opts.issueComments ?? []), { status: 200 })
       }
       throw new Error(`unexpected fetch: ${url}`)
     }),
@@ -144,6 +153,50 @@ describe("latestReviewSummary", () => {
   })
   it("returns null when the bot has no non-empty review", () => {
     expect(latestReviewSummary([{ id: 1, state: "APPROVED", body: "", user: { login: BOT } }])).toBeNull()
+  })
+  it("skips a SIG-471 marker-only review body (never re-exposes the raw marker on the fallback)", () => {
+    expect(
+      latestReviewSummary([
+        {
+          id: 1,
+          state: "APPROVED",
+          body: "<!-- sigilix:pr-review -->\n",
+          submitted_at: "2026-06-03T00:00:00Z",
+          user: { login: BOT },
+        },
+      ]),
+    ).toBeNull()
+  })
+})
+
+describe("pickOverviewComment", () => {
+  const OVERVIEW = "<!-- sigilix:pr-overview -->\n\n## Sigilix Overview\n\n### Summary\n\nDoes the thing."
+  it("picks the bot's overview sticky (state OVERVIEW), ignoring humans + non-overview comments", () => {
+    expect(
+      pickOverviewComment([
+        { id: 1, body: "just a chat comment", updated_at: "2026-06-01T00:00:00Z", user: { login: BOT } },
+        {
+          id: 2,
+          body: "human overview? <!-- sigilix:pr-overview -->",
+          updated_at: "2026-06-09T00:00:00Z",
+          user: { login: "x" },
+        },
+        { id: 3, body: OVERVIEW, updated_at: "2026-06-02T00:00:00Z", user: { login: BOT } },
+      ]),
+    ).toEqual({ id: 3, state: "OVERVIEW", body: OVERVIEW })
+  })
+  it("matches the legacy openclaw marker and keeps the most recently updated on duplicates", () => {
+    const legacy = "<!-- openclaw:pr-overview -->\n\n## Sigilix Overview\n\nlegacy"
+    const fresh = "<!-- sigilix:pr-overview -->\n\n## Sigilix Overview\n\nfresh"
+    expect(
+      pickOverviewComment([
+        { id: 1, body: legacy, updated_at: "2026-06-01T00:00:00Z", user: { login: BOT } },
+        { id: 2, body: fresh, updated_at: "2026-06-05T00:00:00Z", user: { login: BOT } },
+      ]),
+    ).toEqual({ id: 2, state: "OVERVIEW", body: fresh })
+  })
+  it("returns null when no overview sticky exists", () => {
+    expect(pickOverviewComment([{ id: 1, body: "hi", user: { login: BOT } }])).toBeNull()
   })
 })
 
@@ -207,6 +260,30 @@ describe("handleWorkspacePrReviewRoute", () => {
         ],
       },
     ])
+  })
+
+  it("session path: prefers the overview sticky over the review-submission body", async () => {
+    const kv = makeKV(tokenCache(1))
+    await seedSession(kv, "sess-1", "octocat")
+    const overviewBody = "<!-- sigilix:pr-overview -->\n\n## Sigilix Overview\n\n### Summary\n\nThe real overview."
+    stubGithub({
+      installationIds: [1],
+      // SIG-471: the review-submission body is gutted to just the marker.
+      reviews: [
+        {
+          id: 90,
+          state: "APPROVED",
+          body: "<!-- sigilix:pr-review -->\n",
+          submitted_at: "2026-06-02T00:00:00Z",
+          user: { login: BOT },
+        },
+      ],
+      issueComments: [{ id: 500, body: overviewBody, updated_at: "2026-06-02T00:00:00Z", user: { login: BOT } }],
+    })
+    const res = await handleWorkspacePrReviewRoute(reqSession("sess-1", REVIEW_PATH), baseEnv(kv))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { summary: { state: string; body: string } | null }
+    expect(body.summary).toEqual({ id: 500, state: "OVERVIEW", body: overviewBody })
   })
 
   it("api-key path: 403 when the key's installation differs from the requested one", async () => {

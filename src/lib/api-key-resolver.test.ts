@@ -57,7 +57,7 @@ describe("resolveApiKey", () => {
       SIGILIX_PLATFORM_DB: db,
       OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
     })
-    expect(result).toEqual({ installationId: 777 })
+    expect(result).toEqual({ installationId: 777, createdBy: "1" })
   })
 
   it("D1 hit — best-effort updates last_used_at without affecting the result", async () => {
@@ -82,7 +82,7 @@ describe("resolveApiKey", () => {
       SIGILIX_PLATFORM_DB: db,
       OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
     })
-    expect(result).toEqual({ installationId: LEGACY_TENANT_INSTALLATION_ID })
+    expect(result).toEqual({ installationId: LEGACY_TENANT_INSTALLATION_ID, createdBy: null })
   })
 
   it("D1 miss AND global-key mismatch — returns null", async () => {
@@ -126,7 +126,7 @@ describe("resolveApiKey", () => {
     const result = await resolveApiKey(reqWith(`Bearer ${GLOBAL_KEY}`), {
       OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
     })
-    expect(result).toEqual({ installationId: LEGACY_TENANT_INSTALLATION_ID })
+    expect(result).toEqual({ installationId: LEGACY_TENANT_INSTALLATION_ID, createdBy: null })
   })
 
   it("D1 binding absent AND global key unset — returns null (matches today's unconfigured behavior)", async () => {
@@ -150,7 +150,7 @@ describe("resolveApiKey", () => {
       },
       ctx,
     )
-    expect(result).toEqual({ installationId: 5 })
+    expect(result).toEqual({ installationId: 5, createdBy: "1" })
     expect(deferred).toHaveLength(1)
 
     // The touch is deferred — drain the waitUntil promise(s) and confirm it ran.
@@ -176,7 +176,7 @@ describe("requireApiTenant", () => {
       SIGILIX_PLATFORM_DB: db,
       OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
     })
-    expect("caller" in auth && auth.caller).toEqual({ installationId: LEGACY_TENANT_INSTALLATION_ID })
+    expect("caller" in auth && auth.caller).toEqual({ installationId: LEGACY_TENANT_INSTALLATION_ID, createdBy: null })
   })
 
   it("an issued per-installation key resolves its own installationId", async () => {
@@ -193,7 +193,7 @@ describe("requireApiTenant", () => {
       SIGILIX_PLATFORM_DB: db,
       OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
     })
-    expect("caller" in auth && auth.caller).toEqual({ installationId: 4242 })
+    expect("caller" in auth && auth.caller).toEqual({ installationId: 4242, createdBy: "1" })
   })
 
   it("a revoked key returns the 401 unauthorized Response, never the caller", async () => {

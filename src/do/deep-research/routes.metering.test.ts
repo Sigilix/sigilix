@@ -12,6 +12,10 @@ import type { Env } from "@/src/shared/types/env"
 
 const SESSION_COOKIE = "__Host-sigilix_session"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(9))
+const M3 = readFileSync(
+  new URL("../../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
+  "utf8",
+)
 const M4 = readFileSync(new URL("../../../migrations/0004_create_usage_events.sql", import.meta.url), "utf8")
 
 function makeKV(): KVNamespace {
@@ -92,6 +96,33 @@ describe("handleResearchCreate — chatbot SEAT metering", () => {
         userKey: "gh:42",
         sinceIso: "2000-01-01T00:00:00.000Z",
       },
+    )
+    expect(seat).toEqual({ ok: true, count: 1 })
+  })
+
+  it("stamps the org installation on the chatbot event when the session user is account_tenant-linked", async () => {
+    // account_tenant links github user 42 → installation 7, so the SEAT chatbot
+    // event carries that org (context only) for the admin per-member drill.
+    await db.exec(M3)
+    await db
+      .prepare(
+        "INSERT INTO account_tenant (github_user_id, installation_id, role, created_at)" +
+          " VALUES ('42', 7, 'member', '2026-01-01T00:00:00.000Z')",
+      )
+      .run()
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+      DEEP_RESEARCH: makeDeepResearchNs(true),
+    } as unknown as Env
+
+    const res = await handleResearchCreate(researchReq("s1", { question: "why?" }), env, ctx)
+    expect(res.status).toBe(200)
+    // Event is keyed to the developer AND stamped with their org (installation 7).
+    const seat = await readUsageEventCount(
+      { SIGILIX_PLATFORM_DB: db },
+      { meter: "chatbot", userKey: "gh:42", installationId: 7, sinceIso: "2000-01-01T00:00:00.000Z" },
     )
     expect(seat).toEqual({ ok: true, count: 1 })
   })

@@ -15,6 +15,7 @@
 
 import { requireSession } from "@/src/lib/auth-middleware"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
+import { getInstallationsForUser } from "@/src/lib/api-key-store"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
 import { parseEffort, parseTier } from "./config"
@@ -70,6 +71,37 @@ export function seatIdentityFromCreator(creator: string): { userKey: string; ins
     return { userKey: `inst:${Number.isInteger(id) ? id : creator.slice("tenant:".length)}`, installationId }
   }
   return { userKey: creator, installationId: 0 }
+}
+
+/**
+ * SIG-303 — resolve the ORG installation to stamp on a chatbot SEAT event so an
+ * org admin can drill into a specific member's seat usage. chatbot stays a SEAT
+ * meter (installation_id is org CONTEXT only — it never draws the org pool), but
+ * the usage read scopes a per-member drill by installation_id for tenant-safety,
+ * so the event MUST carry the developer's org link. A portal session's github
+ * user is looked up in `account_tenant` (the SAME link `/setup` + CLI-login
+ * write); its newest installation wins. Non-session creators (api tenants) keep
+ * their own `fallback` context. FAILS SOFT — no D1 / no github link / a fault →
+ * the `fallback` (0 = no org context), never throws.
+ *
+ * KNOWN LIMITATION (multi-org member): a portal chat request has no org in its
+ * context, so every chatbot event for a member in >1 org is stamped with their
+ * NEWEST installation only. It is always ONE of the member's own orgs (never a
+ * cross-tenant leak), but an admin of an OLDER org drilling into such a member
+ * sees zero chatbot usage (their coding_agent still shows — each CLI key carries
+ * its own real installation). Correct for the common single-org case; the read
+ * path stays tenant-safe either way.
+ */
+async function resolveSeatOrgInstallation(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  creator: string,
+  fallback: number,
+): Promise<number> {
+  if (!env.SIGILIX_PLATFORM_DB || !creator.startsWith("session:")) return fallback
+  const githubUserId = creator.slice("session:".length)
+  if (!githubUserId || githubUserId === "anon") return fallback
+  const installs = await getInstallationsForUser(env.SIGILIX_PLATFORM_DB, githubUserId)
+  return installs[0] ?? fallback
 }
 
 /** POST /v1/research — body { question, model?, effort? } → { id }. */
@@ -144,10 +176,15 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   // DO id → idempotent on a retry. Fire-and-forget (fail-open; never fails the run).
   // mode="off" is a true kill switch — shed the D1 write entirely.
   if (meterDecision.mode !== "off") {
+    // Resolve the developer's org link (account_tenant) so the SEAT event carries
+    // the org for the admin per-member drill. One D1 read (fail-soft), in the
+    // same synchronous style as the checkUsagePool reads above; the append itself
+    // stays fire-and-forget via waitUntil (never adds latency, never fails the run).
+    const orgInstallationId = await resolveSeatOrgInstallation(env, auth.creator, seat.installationId)
     ctx.waitUntil(
       appendUsageEvent(env, {
         meter: "chatbot",
-        installationId: seat.installationId,
+        installationId: orgInstallationId,
         userKey: seat.userKey,
         surface: "portal",
         eventId: id.toString(),

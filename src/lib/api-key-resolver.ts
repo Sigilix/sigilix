@@ -52,6 +52,13 @@ export const LEGACY_TENANT_INSTALLATION_ID = -1
 
 export interface ResolvedApiKey {
   installationId: number
+  /**
+   * SIG-303 — the GitHub user id (as TEXT) that minted this key
+   * (`api_key.created_by`), i.e. the DEVELOPER behind the key. Lets the CLI
+   * coding-agent seat be attributed per developer (`gh:<createdBy>`) instead of
+   * per installation. `null` for the legacy shared global key (no developer).
+   */
+  createdBy: string | null
 }
 
 type ResolverEnv = Pick<Env, "SIGILIX_PLATFORM_DB" | "OPENCLAW_SIGILIX_API_KEY">
@@ -67,12 +74,12 @@ export async function resolveApiKey(
   if (env.SIGILIX_PLATFORM_DB) {
     const db = env.SIGILIX_PLATFORM_DB
     const keyHash = await sha256Hex(presented)
-    let row: { installation_id: number } | null
+    let row: { installation_id: number; created_by: string | null } | null
     try {
       row = await db
-        .prepare("SELECT installation_id FROM api_key WHERE key_hash = ? AND revoked_at IS NULL")
+        .prepare("SELECT installation_id, created_by FROM api_key WHERE key_hash = ? AND revoked_at IS NULL")
         .bind(keyHash)
-        .first<{ installation_id: number }>()
+        .first<{ installation_id: number; created_by: string | null }>()
     } catch (error) {
       // FAIL CLOSED. See file header — never fall through on a genuine D1 fault.
       console.error(
@@ -99,7 +106,10 @@ export async function resolveApiKey(
           warnTouchFailed(error)
         }
       }
-      return { installationId: row.installation_id }
+      return {
+        installationId: row.installation_id,
+        createdBy: typeof row.created_by === "string" && row.created_by !== "" ? row.created_by : null,
+      }
     }
     // Clean "not found" (never issued, or revoked) — fall through below.
   }
@@ -107,7 +117,8 @@ export async function resolveApiKey(
   // Legacy fallback — constant-time compare against the single shared global
   // key, preserving the existing /v1/review-style auth behavior unchanged.
   if (await requireBearerToken(request, env.OPENCLAW_SIGILIX_API_KEY ?? "")) {
-    return { installationId: LEGACY_TENANT_INSTALLATION_ID }
+    // The legacy shared global key is Sigilix-internal — no developer behind it.
+    return { installationId: LEGACY_TENANT_INSTALLATION_ID, createdBy: null }
   }
   return null
 }

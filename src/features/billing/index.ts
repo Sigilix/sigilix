@@ -4,6 +4,11 @@
 // price-config, the pure checkout builder/validator, the Stripe REST calls, and the
 // customer↔installation link store.
 export { handleStripeWebhookRoute, resolvePriceTierConfig } from "./adapters/stripe-webhook-route"
+// sig-admin-metrics: the admin metrics reader (src/lib/admin/stripe-admin.ts) maps a
+// listed subscription's price → Sigilix tier for the per-tier revenue rollup, using
+// the SAME mapping the webhook uses. Exposed here so that cross-feature read goes
+// through the barrel (COMPLIANCE §2) rather than reaching into domain/stripe-events.
+export { mapPriceToTier, type PriceTierConfig } from "./domain/stripe-events"
 export {
   validateCheckoutRequest,
   resolvePriceForTier,

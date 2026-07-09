@@ -810,6 +810,16 @@ export interface Env {
   // (POST /admin/index-repo manual (re)index trigger / backfill). Unset → those
   // routes return 503. Set via `wrangler secret put OPENCLAW_ADMIN_TOKEN`.
   OPENCLAW_ADMIN_TOKEN?: string
+
+  // sig-admin-metrics: dedicated server-to-server shared secret for the STAFF-ONLY
+  // aggregate endpoint GET /v1/admin/metrics (powers admin.sigilix.ai). SEPARATE
+  // from OPENCLAW_ADMIN_TOKEN so the admin dashboard's read-only aggregate access
+  // and the operator index/migration tools rotate independently. FAIL-CLOSED: unset
+  // → the route returns 503 (never an open dashboard); a present-but-wrong bearer →
+  // 401 via a constant-time compare (requireBearerToken). Only the admin site's
+  // SERVER routes ever hold this — it is never shipped to a browser. Set via
+  // `wrangler secret put ADMIN_API_SECRET`.
+  ADMIN_API_SECRET?: string
   OPENCLAW_GRAPH_RPC_TIMEOUT_MS?: string
   /** SIG-392: recall-eliciting logic-specialist prompt — "on" appends the recall
    *  directive to the logic prompt (~6→16/20 logic recall on the dense fixture).

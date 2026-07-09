@@ -85,6 +85,7 @@ import { handleOrgRoutes } from "@/src/lib/org-routes"
 import { tryHandlePortalAccountRoute } from "@/src/lib/portal-account-routes"
 import { tryHandleAccountRoute } from "@/src/lib/account-routes"
 import { handleMetricsDashboardRoute } from "@/src/lib/metrics-dashboard-route"
+import { handleAdminMetricsRoute } from "@/src/lib/admin/admin-metrics-route"
 import { handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
 import { handleBadgeAssetRoute } from "@/src/lib/badge-assets"
 import { parseValidateMode, validateEnv } from "@/src/lib/env-validate"
@@ -224,9 +225,8 @@ export default {
       return handleValidationMetricsRoute(request, env)
     }
 
-    // SIG-347 (SIG-166 AC #4): tests-gate per-drop-reason suppression rates —
-    // a focused projection of /metrics/validation's tests gate for the
-    // tests-specialist over-fire precision dogwatch.
+    // SIG-347 (SIG-166 AC #4): tests-gate per-drop-reason suppression rates — a focused
+    // projection of /metrics/validation's tests gate for the tests over-fire precision dogwatch.
     if (request.method === "GET" && url.pathname === "/metrics/test-suppressions") {
       return handleTestSuppressionsMetricsRoute(request, env)
     }
@@ -236,14 +236,12 @@ export default {
       return handleDismissalMetricsRoute(request, env)
     }
 
-    // SIG-217: authenticated read of rolling repeat-FP rollup (per-reason +
-    // per-specialist) — surfaces dismissal-re-fire + severity-escalation rates.
+    // SIG-217: rolling repeat-FP rollup (per-reason + per-specialist) — dismissal-re-fire + escalation rates.
     if (request.method === "GET" && url.pathname === "/metrics/repeat-fps") {
       return handleRepeatFpsMetricsRoute(request, env)
     }
 
-    // SIG-147: authenticated read of a repo's precision profile (FP-reduction
-    // signal — how many repeatedly-dismissed patterns are now suppressed).
+    // SIG-147: a repo's precision profile (FP-reduction signal — repeatedly-dismissed patterns now suppressed).
     if (request.method === "GET" && url.pathname === "/metrics/precision") {
       return handlePrecisionMetricsRoute(request, env)
     }
@@ -253,20 +251,17 @@ export default {
       return handleGraphMetricsRoute(request, env)
     }
 
-    // SIG-286 PR2.5: authenticated read of the rolling graph-context-expansion
-    // shadow measurement (netNewTokens median + cross-file rates + GO/KILL hint).
+    // SIG-286 PR2.5: rolling graph-context-expansion shadow (netNewTokens median + cross-file rates + GO/KILL).
     if (request.method === "GET" && url.pathname === "/metrics/graph-expansion") {
       return handleGraphExpansionMetricsRoute(request, env)
     }
 
-    // SIG-286 PR3: per-arm read of the targeted-inject A/B (treatment vs control
-    // finding rate). Reads the graphExpansionAb tags on ensemble-review-telemetry.
+    // SIG-286 PR3: per-arm targeted-inject A/B (treatment vs control) from graphExpansionAb telemetry tags.
     if (request.method === "GET" && url.pathname === "/metrics/graph-expansion-ab") {
       return handleGraphExpansionAbMetricsRoute(request, env)
     }
 
-    // SIG-114 PR 5: authenticated live read of the per-specialist dismissal-
-    // based false-positive rate (the "floor" metric), computed per repo.
+    // SIG-114 PR 5: per-specialist dismissal-based false-positive rate (the "floor" metric), per repo.
     if (request.method === "GET" && url.pathname === "/metrics/fp-rate") {
       return handleFpRateMetricsRoute(request, env)
     }
@@ -274,6 +269,11 @@ export default {
     // SIG-543 PR D Task 5: authenticated per-tenant usage rollup from D1.
     if (request.method === "GET" && url.pathname === "/metrics/tenant-usage") {
       return handleTenantUsageMetricsRoute(request, env)
+    }
+
+    // sig-admin-metrics: STAFF-ONLY aggregates for admin.sigilix.ai (server-to-server, ADMIN_API_SECRET-gated, fail-closed).
+    if (request.method === "GET" && url.pathname === "/v1/admin/metrics") {
+      return handleAdminMetricsRoute(request, env)
     }
 
     // SIG-184 PR 5b: authenticated read of rolling runner-evidence presence

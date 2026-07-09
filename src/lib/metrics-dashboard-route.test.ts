@@ -30,6 +30,10 @@ const MIGRATION_API_KEY_SQL = readFileSync(
   new URL("../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_USAGE_EVENTS_SQL = readFileSync(
+  new URL("../../migrations/0004_create_usage_events.sql", import.meta.url),
+  "utf8",
+)
 
 /** KV stub: string store + `get(key,"json")` parse + a single-page `list`. */
 function makeKV(): KVNamespace {
@@ -61,7 +65,22 @@ async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(MIGRATION_USAGE_SQL)
   await db.exec(MIGRATION_API_KEY_SQL)
+  await db.exec(MIGRATION_USAGE_EVENTS_SQL)
   return db
+}
+
+/** Append one chatbot usage_events row (SIG-303 metering) for a seat. */
+async function insertChatbotEvent(
+  db: D1Database,
+  args: { userKey: string; installationId?: number; createdAt: string },
+) {
+  await db
+    .prepare(
+      "INSERT INTO usage_events (meter, installation_id, user_key, surface, event_id, created_at)" +
+        " VALUES ('chatbot', ?, ?, 'portal', NULL, ?)",
+    )
+    .bind(args.installationId ?? 0, args.userKey, args.createdAt)
+    .run()
 }
 
 async function seedSession(kv: KVNamespace, sessionId: string, login: string, githubUserId: number): Promise<void> {
@@ -249,7 +268,7 @@ describe("handleMetricsDashboardRoute (GET /v1/metrics/dashboard)", () => {
     expect(b.facets.users.some((u) => u.login === "secret-agent")).toBe(false)
   })
 
-  it("null for fields with no instrumented source; teams facet is empty", async () => {
+  it("null for fields with no instrumented source (medianTime/pipelineFailures); teams facet is empty", async () => {
     const db = await makeDb()
     const kv = makeKV()
     await seedSession(kv, "sess-1", "octocat", 111)
@@ -261,11 +280,47 @@ describe("handleMetricsDashboardRoute (GET /v1/metrics/dashboard)", () => {
     stubInstallations([1])
     const res = await handleMetricsDashboardRoute(reqWithSession("sess-1"), env)
     const b = (await res.json()) as MetricsDashboardResponse
-    expect(b.chatUsage).toBeNull()
+    // chatUsage is instrumented (usage_events, meter='chatbot'): with no events
+    // for this seat it is a real 0, never null — null is reserved for a fault.
+    expect(b.chatUsage).toEqual({ runs: 0, prevRuns: 0 })
     expect(b.medianTime).toBeNull()
     expect(b.toolFindings).toBeNull()
     expect(b.pipelineFailures).toBeNull()
     expect(b.facets.teams).toEqual([])
+  })
+
+  it("chatUsage: counts the caller's OWN chatbot seat events, with a previous-window delta", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+    stubInstallations([1])
+
+    // The caller's seat is gh:111 (githubUserId). Two runs in the last 30d, one
+    // in the preceding 30d window (30–60d ago), and one 90d ago (outside both).
+    await insertChatbotEvent(db, { userKey: "gh:111", createdAt: iso(2 * DAY) })
+    await insertChatbotEvent(db, { userKey: "gh:111", createdAt: iso(10 * DAY) })
+    await insertChatbotEvent(db, { userKey: "gh:111", createdAt: iso(45 * DAY) })
+    await insertChatbotEvent(db, { userKey: "gh:111", createdAt: iso(90 * DAY) })
+    // Another seat's runs must NEVER be counted for this caller (tenant safety).
+    await insertChatbotEvent(db, { userKey: "gh:999", createdAt: iso(1 * DAY) })
+    // A non-chatbot meter for this seat must not be counted either.
+    await db
+      .prepare(
+        "INSERT INTO usage_events (meter, installation_id, user_key, surface, event_id, created_at)" +
+          " VALUES ('coding_agent', 0, 'gh:111', 'cli', NULL, ?)",
+      )
+      .bind(iso(1 * DAY))
+      .run()
+
+    const res = await handleMetricsDashboardRoute(reqWithSession("sess-1", "?window=30d"), env)
+    const b = (await res.json()) as MetricsDashboardResponse
+    // 2 in the current 30d window; 1 in the preceding 30d window (the 45d row).
+    expect(b.chatUsage).toEqual({ runs: 2, prevRuns: 1 })
   })
 
   it("toolFindings: banded from the RunnerToolMetrics DO, scoped to owned repos", async () => {

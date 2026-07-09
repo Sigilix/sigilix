@@ -28,6 +28,27 @@ import { normalizeEnv } from "@/src/shared/util/normalize-env"
 const MCP_CLIENT_NAME = "sigilix-portal-mcp"
 const MCP_CLIENT_VERSION = "1.0.0"
 
+/** The SDK's `MCPClientManager` persists every registered server into a
+ *  `cf_agents_mcp_servers` SQLite table (INSERT/SELECT/UPDATE/DELETE), but it
+ *  never CREATEs that table itself — the DDL lives ONLY in the SDK's `Agent`
+ *  base class (`_ensureSchema`), which this DO deliberately does NOT extend
+ *  (see the file header). So we own the schema here, matching the SDK's table
+ *  shape verbatim (agents/dist/index.js `_ensureSchema`). Without it the very
+ *  first `saveServerToStorage` INSERT throws "no such table:
+ *  cf_agents_mcp_servers", which the connect handler swallowed into a blanket
+ *  "registration failed" for EVERY app. */
+const MCP_SERVERS_TABLE_DDL = `
+  CREATE TABLE IF NOT EXISTS cf_agents_mcp_servers (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    server_url TEXT NOT NULL,
+    callback_url TEXT NOT NULL,
+    client_id TEXT,
+    auth_url TEXT,
+    server_options TEXT
+  )
+`
+
 export type McpConnectResult =
   | { status: "connected"; id: string; toolCount: number }
   | { status: "auth_required"; id: string; authUrl: string }
@@ -49,6 +70,11 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     // sig-worker-debrand-openclaw: SIGILIX_-preferred / OPENCLAW_-fallback env on
     // `this.env` (see normalize-env.ts).
     super(ctx, normalizeEnv(env))
+    // Create the SDK's server table BEFORE handing storage to the manager, so
+    // its restore/register/list SQL always has the table it assumes exists.
+    // `sql.exec` is synchronous on a SQLite-backed DO and `IF NOT EXISTS`
+    // keeps this idempotent across DO wakes.
+    ctx.storage.sql.exec(MCP_SERVERS_TABLE_DDL)
     this.mcp = new MCPClientManager(MCP_CLIENT_NAME, MCP_CLIENT_VERSION, {
       storage: ctx.storage,
       // Restored connections do NOT persist a transport.authProvider
@@ -142,8 +168,13 @@ export class McpConnectionsAgent extends DurableObject<Env> {
         transport: { authProvider },
       })
     } catch (err) {
-      console.error("mcp-connections: registerServer failed", err instanceof Error ? err.message : err)
-      return connectJson({ status: "error", error: "registration failed" }, 502)
+      // registerServer only touches LOCAL state (SSRF re-check + this DO's own
+      // SQLite) — never third-party content — so the detail is safe to surface
+      // and specific enough to be actionable instead of a blanket
+      // "registration failed" for every app.
+      const detail = err instanceof Error ? err.message : String(err)
+      console.error("mcp-connections: registerServer failed", detail)
+      return connectJson({ status: "error", error: `registration failed: ${detail}` }, 502)
     }
 
     let result

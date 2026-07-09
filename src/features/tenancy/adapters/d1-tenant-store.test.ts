@@ -352,6 +352,51 @@ describe("upsertTenantTier", () => {
       .first<{ subscription_status: string | null }>()
     expect(row?.subscription_status).toBeNull()
   })
+
+  // Enterprise (contract tier) protection: a Stripe event must NEVER downgrade a
+  // manually-set `enterprise` tenant. The ON CONFLICT ... WHERE guard no-ops the UPDATE.
+  it("NEVER overwrites a manually-set enterprise tenant (Stripe downgrade → free is a no-op)", async () => {
+    await upsertTenantTier(makeEnv(db), 100, "enterprise", "2026-01-01T00:00:00Z", "active")
+    // Simulate a stray/late Stripe event trying to drop the contract tenant to free.
+    const res = await upsertTenantTier(makeEnv(db), 100, "free", "2026-03-03T00:00:00Z", null)
+    expect(res).toEqual({ ok: true }) // a skipped no-op still succeeds → webhook acks 200
+    const row = await db
+      .prepare("SELECT tier, subscription_status FROM tenant WHERE installation_id = ?")
+      .bind(100)
+      .first<{ tier: string; subscription_status: string }>()
+    // Unchanged: still enterprise + active (keeps all entitlements + the top cap).
+    expect(row).toEqual({ tier: "enterprise", subscription_status: "active" })
+  })
+
+  it("the enterprise guard is case/space-insensitive (' Enterprise ' is protected too)", async () => {
+    await upsertTenantTier(makeEnv(db), 101, " Enterprise ", "2026-01-01T00:00:00Z", "active")
+    await upsertTenantTier(makeEnv(db), 101, "pro", "2026-03-03T00:00:00Z", "active")
+    const row = await db
+      .prepare("SELECT tier FROM tenant WHERE installation_id = ?")
+      .bind(101)
+      .first<{ tier: string }>()
+    expect(row?.tier).toBe(" Enterprise ")
+  })
+
+  it("a brand-new Stripe tenant still inserts normally (guard only blocks overwriting enterprise)", async () => {
+    const res = await upsertTenantTier(makeEnv(db), 102, "ultra", "2026-01-01T00:00:00Z", "active")
+    expect(res).toEqual({ ok: true })
+    const row = await db
+      .prepare("SELECT tier FROM tenant WHERE installation_id = ?")
+      .bind(102)
+      .first<{ tier: string }>()
+    expect(row?.tier).toBe("ultra")
+  })
+
+  it("a non-enterprise tenant is still updated normally (guard does not block pro→max, etc.)", async () => {
+    await upsertTenantTier(makeEnv(db), 103, "pro", "2026-01-01T00:00:00Z", "active")
+    await upsertTenantTier(makeEnv(db), 103, "max", "2026-02-02T00:00:00Z", "active")
+    const row = await db
+      .prepare("SELECT tier FROM tenant WHERE installation_id = ?")
+      .bind(103)
+      .first<{ tier: string }>()
+    expect(row?.tier).toBe("max")
+  })
 })
 
 describe("readTenantSubscriptionStatus", () => {
@@ -413,8 +458,9 @@ describe("migration 0011 subscription_status backfill", () => {
     await seed(204, "free")
     await seed(205, "default")
     await seed(206, "teams")
-    // Legacy + case/space variants that resolveRateLimitCap still gives a full cap —
-    // the backfill must reach these too, or they'd fall to NULL → halved (regression).
+    // Contract (enterprise) + legacy + case/space variants that resolveRateLimitCap
+    // gives a full cap — the backfill must reach these too, or they'd fall to NULL →
+    // halved (regression). enterprise is the contract TOP tier (full cap 500).
     await seed(207, "enterprise")
     await seed(208, "pro_plus")
     await seed(209, "MAX")

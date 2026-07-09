@@ -443,3 +443,90 @@ describe("repo grounding", () => {
     expect(seenPrompts.some((p) => /Authoritative repository context/i.test(p))).toBe(true)
   })
 })
+
+// sig-chat-conversational-mode — Deep Research OFF (mode "chat") + the trivial-
+// message short-circuit. Both must answer directly with NO web search.
+describe("conversational mode + trivial short-circuit", () => {
+  const grounding = {
+    namespace: "acme/widgets",
+    context: "[symbol] src/session/cache.ts\nexport function cacheSession() {}",
+    sources: [
+      {
+        url: "https://github.com/acme/widgets/blob/HEAD/src/session/cache.ts#L1-L20",
+        title: "src/session/cache.ts:1-20",
+        domain: "acme/widgets",
+        kind: "repo" as const,
+      },
+    ],
+    chunkCount: 1,
+  }
+
+  it("mode 'chat' answers directly with NO web search (Deep Research off)", async () => {
+    const { deps, events } = makeDeps({
+      question: "what's a good way to structure a monorepo?",
+      mode: "chat",
+      // Fail loudly if the conversational path ever hits web search.
+      search: () => Promise.reject(new Error("web search must not run in conversational mode")),
+    })
+    await runResearchLoop(deps)
+
+    // No search phase, no queries — a single direct answer.
+    expect(countSearching(events)).toBe(0)
+    expect(events.some((e) => e.type === "queries")).toBe(false)
+    // NOT the no-provider degradation note — this is a normal chat reply.
+    expect(events.some((e) => e.type === "note" && /live web search isn't enabled/i.test(e.text))).toBe(false)
+    // First status still carries model + effort; ends with a source-less final then done.
+    expect(events[0]).toEqual({ type: "status", phase: "planning", round: 0, model: "astraeus", effort: "medium" })
+    const final = events.find((e) => e.type === "final")
+    expect(final && final.type === "final" ? final.sources : null).toEqual([])
+    const types = typesOf(events)
+    expect(types[types.length - 1]).toBe("done")
+    expect(types[types.length - 2]).toBe("final")
+  })
+
+  it("mode 'chat' still repo-grounds a codebase-ish question (repo cites, no web)", async () => {
+    const { deps, events } = makeDeps({
+      question: "how do we cache sessions?",
+      mode: "chat",
+      repoGrounding: grounding,
+      hasIndexedRepo: true,
+      search: () => Promise.reject(new Error("web search must not run in conversational mode")),
+    })
+    await runResearchLoop(deps)
+    expect(countSearching(events)).toBe(0)
+    const final = events.find((e) => e.type === "final")
+    expect(final && final.type === "final" ? final.sources.every((s) => s.kind === "repo") : false).toBe(true)
+  })
+
+  it("a greeting short-circuits to a direct reply even with Deep Research ON", async () => {
+    const { deps, events } = makeDeps({
+      question: "hey!",
+      mode: "deep",
+      // The exact bug: 'hey!' must NOT trigger a web run.
+      search: () => Promise.reject(new Error("a greeting must not run web search")),
+    })
+    await runResearchLoop(deps)
+    expect(countSearching(events)).toBe(0)
+    expect(events.some((e) => e.type === "queries")).toBe(false)
+    const types = typesOf(events)
+    expect(types[types.length - 1]).toBe("done")
+    expect(types[types.length - 2]).toBe("final")
+    expect(events.some((e) => e.type === "error")).toBe(false)
+  })
+
+  it("a trivial message skips even repo grounding (no web, no sources)", async () => {
+    const { deps, events } = makeDeps({
+      question: "thanks!",
+      mode: "deep",
+      repoGrounding: grounding,
+      hasIndexedRepo: true,
+      search: () => Promise.reject(new Error("a greeting must not run web search")),
+    })
+    await runResearchLoop(deps)
+    expect(countSearching(events)).toBe(0)
+    // No sources at all — the greeting never touches grounding.
+    expect(events.some((e) => e.type === "source")).toBe(false)
+    const final = events.find((e) => e.type === "final")
+    expect(final && final.type === "final" ? final.sources : null).toEqual([])
+  })
+})

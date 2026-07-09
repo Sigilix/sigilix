@@ -16,12 +16,13 @@ import { DurableObject } from "cloudflare:workers"
 import type { Env } from "@/src/shared/types/env"
 import { normalizeEnv } from "@/src/shared/util/normalize-env"
 import { runResearchLoop, type EngineDeps } from "./engine"
-import { parseEffort, parseTier, resolveResearchConfig } from "./config"
+import { parseEffort, parseMode, parseTier, resolveResearchConfig } from "./config"
 import { buildModelFn } from "./model"
 import { hasAnySearchProvider, searchWeb } from "./search"
 import { fetchPage } from "./fetch-guard"
 import { gatherRepoGrounding, type GatherRepoGroundingArgs } from "./repo-grounding"
-import type { RepoGrounding, ResearchEffort, ResearchEvent, ResearchTier } from "./types"
+import { isTrivialMessage } from "./text-utils"
+import type { RepoGrounding, ResearchEffort, ResearchEvent, ResearchMode, ResearchTier } from "./types"
 
 const META_KEY = "meta"
 const EVENT_PREFIX = "evt:"
@@ -40,6 +41,8 @@ interface RunMeta {
   creator: string
   model: ResearchTier
   effort: ResearchEffort
+  /** sig-chat-conversational-mode: the run mode (Deep Research toggle). */
+  mode: ResearchMode
   /** sig-deep-research-repo-grounding: the repo (if any) resolved for this run
    *  from the caller's identity, and whether they have ANY indexed repo. */
   owner?: string
@@ -68,6 +71,7 @@ export class DeepResearchDO extends DurableObject<Env> {
   private creator = ""
   private model: ResearchTier = "astraeus"
   private effort: ResearchEffort = "medium"
+  private mode: ResearchMode = "deep"
   private owner = ""
   private repo = ""
   private hasIndexedRepo = false
@@ -99,6 +103,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       question?: unknown
       model?: unknown
       effort?: unknown
+      mode?: unknown
       creator?: unknown
       owner?: unknown
       repo?: unknown
@@ -116,6 +121,9 @@ export class DeepResearchDO extends DurableObject<Env> {
     // ever reaching the DO; here we simply default anything absent/unknown.
     this.model = parseTier(body.model) ?? "astraeus"
     this.effort = parseEffort(body.effort) ?? "medium"
+    // sig-chat-conversational-mode: the Deep Research toggle. Default "deep" so an
+    // API-key caller (or an older portal) that omits it keeps full research.
+    this.mode = parseMode(body.mode) ?? "deep"
     this.creator = typeof body.creator === "string" ? body.creator : ""
     // sig-deep-research-repo-grounding: the repo target (resolved in the route from
     // the caller's identity) + whether they have any indexed repo. Absent ⇒ no
@@ -134,6 +142,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       creator: this.creator,
       model: this.model,
       effort: this.effort,
+      mode: this.mode,
       ...(this.owner ? { owner: this.owner } : {}),
       ...(this.repo ? { repo: this.repo } : {}),
       hasIndexedRepo: this.hasIndexedRepo,
@@ -157,7 +166,10 @@ export class DeepResearchDO extends DurableObject<Env> {
     // fails to null (the run then falls back to web research) — grounding must
     // never break a run.
     let repoGrounding: RepoGrounding | null = null
-    if (this.owner && this.repo) {
+    // Skip the (heavier) grounding retrieval for a greeting / trivial message — it
+    // short-circuits to a direct reply in the engine anyway, so retrieving code for
+    // "hey!" would only add latency to a message that never uses it.
+    if (this.owner && this.repo && !isTrivialMessage(question)) {
       const gather = this.hooks?.gatherGrounding ?? gatherRepoGrounding
       try {
         repoGrounding = await gather({ env: this.env, owner: this.owner, repo: this.repo, query: question })
@@ -173,6 +185,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       hasSearchProvider: hasAnySearchProvider(this.env),
       repoGrounding,
       hasIndexedRepo: this.hasIndexedRepo,
+      mode: this.mode,
       emit: (event) => this.emit(event),
       model: this.hooks?.model ?? buildModelFn(this.env, config),
       search: this.hooks?.search ?? ((query) => searchWeb({ query, env: this.env, runId, tenant })),
@@ -224,6 +237,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       creator: this.creator,
       model: this.model,
       effort: this.effort,
+      mode: this.mode,
     }
     meta.seq = this.seq
     if (event.type === "done") meta.done = true

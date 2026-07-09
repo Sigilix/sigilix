@@ -10,7 +10,7 @@
 // the empty-round kill (2) apply at every effort.
 
 import type { Env } from "@/src/shared/types/env"
-import type { ResearchConfig, ResearchEffort, ResearchModelConfig, ResearchTier } from "./types"
+import type { ResearchConfig, ResearchEffort, ResearchMode, ResearchModelConfig, ResearchTier } from "./types"
 
 /** Fixed defaults that do not vary with effort (minRounds/empty-kill apply at
  *  every effort per the addendum). */
@@ -142,4 +142,9 @@ export function parseTier(raw: unknown): ResearchTier | null {
 /** Validate a raw effort value from a request; null when invalid. */
 export function parseEffort(raw: unknown): ResearchEffort | null {
   return raw === "low" || raw === "medium" || raw === "high" ? raw : null
+}
+
+/** Validate a raw run-mode value from a request; null when invalid. */
+export function parseMode(raw: unknown): ResearchMode | null {
+  return raw === "deep" || raw === "chat" ? raw : null
 }

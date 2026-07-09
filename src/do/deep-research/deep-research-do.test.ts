@@ -378,3 +378,54 @@ describe("DeepResearchDO — repo grounding", () => {
     expect(events.some((e) => e.type === "status" && (e as { phase?: string }).phase === "searching")).toBe(false)
   })
 })
+
+// sig-chat-conversational-mode — the DO threads the run mode through to the engine
+// and skips (heavier) grounding retrieval for a trivial greeting.
+describe("DeepResearchDO — conversational mode + trivial guard", () => {
+  it("mode 'chat' answers without running web search", async () => {
+    const { ctx } = makeDoState()
+    const instance = new DeepResearchDO(ctx, makeEnv())
+    instance.setTestHooks(
+      baseHooks({ search: () => Promise.reject(new Error("web search must not run in chat mode")) }),
+    )
+    await instance.fetch(
+      req("/start", "POST", { question: "how should I name things?", mode: "chat", creator: "session:alice" }),
+    )
+    await drive(instance)
+    const events = await readSse(await instance.fetch(req("/stream", "GET", undefined, "session:alice")))
+    expect(events.some((e) => e.type === "status" && (e as { phase?: string }).phase === "searching")).toBe(false)
+    expect(events.some((e) => e.type === "final")).toBe(true)
+    expect(events[events.length - 1]!.type).toBe("done")
+  })
+
+  it("a trivial greeting skips grounding entirely and never web-searches", async () => {
+    const { ctx } = makeDoState()
+    const instance = new DeepResearchDO(ctx, makeEnv())
+    let gatherCalls = 0
+    instance.setTestHooks(
+      baseHooks({
+        search: () => Promise.reject(new Error("a greeting must not run web search")),
+        gatherGrounding: async () => {
+          gatherCalls++
+          return null
+        },
+      }),
+    )
+    await instance.fetch(
+      req("/start", "POST", {
+        question: "hey!",
+        mode: "deep",
+        creator: "session:alice",
+        owner: "acme",
+        repo: "widgets",
+        hasIndexedRepo: true,
+      }),
+    )
+    await drive(instance)
+    // Grounding was never gathered for the greeting (cheap-path guard).
+    expect(gatherCalls).toBe(0)
+    const events = await readSse(await instance.fetch(req("/stream", "GET", undefined, "session:alice")))
+    expect(events.some((e) => e.type === "status" && (e as { phase?: string }).phase === "searching")).toBe(false)
+    expect(events.some((e) => e.type === "final")).toBe(true)
+  })
+})

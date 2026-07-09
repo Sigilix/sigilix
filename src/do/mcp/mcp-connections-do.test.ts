@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import type { Env } from "@/src/shared/types/env"
+import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
 // ── fake MCPClientManager (mocks the SDK/transport, per the task brief) ──
 
@@ -108,13 +109,22 @@ vi.mock("agents/mcp/client", () => ({ MCPClientManager: FakeMCPClientManager }))
 // at module scope too, but keeping it explicit here documents the ordering).
 const { McpConnectionsAgent } = await import("./mcp-connections-do")
 
-// ── fake DO state (KV-only — the fake manager needs no real SQLite) ──
+// ── fake DO state ──
+// The DO's constructor now runs `ctx.storage.sql.exec(<CREATE TABLE …>)` to
+// create the `cf_agents_mcp_servers` table the SDK's MCPClientManager assumes
+// exists (the SDK never CREATEs it — that DDL lives only in the SDK's `Agent`
+// base class, which this DO deliberately does not extend). So the fake state
+// must expose a REAL SQLite `sql` (the shared node:sqlite harness) — a KV-only
+// stub would make the constructor throw — and it lets the test below assert the
+// table is actually created.
 
-function makeDoState(): DurableObjectState {
+function makeDoState(): { state: DurableObjectState; sql: NodeSqliteStorage } {
   const store = new Map<string, unknown>()
-  return {
+  const sql = new NodeSqliteStorage()
+  const state = {
     id: { toString: () => "mcp-connections-instance-1" },
     storage: {
+      sql,
       async get<T>(k: string): Promise<T | undefined> {
         return store.get(k) as T | undefined
       },
@@ -126,10 +136,11 @@ function makeDoState(): DurableObjectState {
       },
     },
   } as unknown as DurableObjectState
+  return { state, sql }
 }
 
 function makeInstance() {
-  return new McpConnectionsAgent(makeDoState(), {} as Env)
+  return new McpConnectionsAgent(makeDoState().state, {} as Env)
 }
 
 function connectRequest(body: unknown): Request {
@@ -210,6 +221,30 @@ describe("McpConnectionsAgent — POST /connect", () => {
     const res = await instance.fetch(connectRequest({ callbackUrl: "https://cb" }))
     expect(res.status).toBe(400)
     expect(registerServerSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe("McpConnectionsAgent — SDK storage schema", () => {
+  it("creates the cf_agents_mcp_servers table the SDK persists into (regression: 'registration failed')", () => {
+    // Before this fix the DO never CREATEd the table the SDK's
+    // saveServerToStorage() INSERTs into, so the first registerServer threw
+    // "no such table: cf_agents_mcp_servers" → a blanket "registration failed"
+    // for every Connect. The constructor must create it up front.
+    const { state, sql } = makeDoState()
+    new McpConnectionsAgent(state, {} as Env)
+    const rows = sql
+      .exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cf_agents_mcp_servers'")
+      .toArray()
+    expect(rows).toHaveLength(1)
+    // The exact column shape the SDK's INSERT/SELECT depend on must be present,
+    // so a real registerServer INSERT would succeed against it.
+    const cols = sql
+      .exec("SELECT name FROM pragma_table_info('cf_agents_mcp_servers')")
+      .toArray()
+      .map((r) => (r as { name: string }).name)
+    expect(cols).toEqual(
+      expect.arrayContaining(["id", "name", "server_url", "callback_url", "client_id", "auth_url", "server_options"]),
+    )
   })
 })
 

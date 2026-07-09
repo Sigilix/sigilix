@@ -32,9 +32,22 @@
 // persistence and endpoint discovery are left to the base class.
 
 import { DurableObjectOAuthClientProvider } from "agents/mcp/do-oauth-client-provider"
+import type { OAuthClientMetadata } from "@modelcontextprotocol/sdk/shared/auth.js"
 
 /** Host of Slack's hosted MCP server. Static-client OAuth applies only here. */
 const SLACK_MCP_HOST = "mcp.slack.com"
+
+/** Human-facing DCR (Dynamic Client Registration, RFC 7591) client metadata a
+ *  provider shows on its OAuth consent screen when the portal connects an MCP
+ *  server (e.g. Linear). The base `DurableObjectOAuthClientProvider` sends only
+ *  a bare `client_name` (the storage-key namespace, "sigilix-portal-mcp"),
+ *  derives `client_uri` from the callback origin, and never sends a `logo_uri`
+ *  at all — so providers rendered a placeholder logo. We override all three to
+ *  the official Sigilix brand: the display name, the marketing site, and the
+ *  canonical square Sigilix mark served on the primary brand domain. */
+const MCP_CLIENT_DISPLAY_NAME = "Sigilix"
+const MCP_CLIENT_URI = "https://sigilix.ai"
+const MCP_CLIENT_LOGO_URI = "https://sigilix.ai/Sigilix.png"
 
 /** The `agents` SDK's server table — the base provider knows only its
  *  `serverId`, so we resolve this connection's URL from the same DO SQLite the
@@ -55,6 +68,20 @@ export class SlackAwareOAuthProvider extends DurableObjectOAuthClientProvider {
     private readonly slackClientSecret: string | undefined,
   ) {
     super(storage, clientName, baseRedirectUrl)
+  }
+
+  /** Brand the DCR consent screen for every server that registers via DCR. The
+   *  base getter carries only the storage-key `client_name` and no `logo_uri`;
+   *  we extend it with the official Sigilix name, site, and square logo. (Slack
+   *  uses the static confidential client above and never runs DCR, so this
+   *  metadata is only ever sent for DCR servers — exactly where it's wanted.) */
+  override get clientMetadata(): OAuthClientMetadata {
+    return {
+      ...super.clientMetadata,
+      client_name: MCP_CLIENT_DISPLAY_NAME,
+      client_uri: MCP_CLIENT_URI,
+      logo_uri: MCP_CLIENT_LOGO_URI,
+    }
   }
 
   /** True only when this connection targets Slack's hosted MCP host AND both

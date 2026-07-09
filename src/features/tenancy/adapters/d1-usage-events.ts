@@ -88,10 +88,18 @@ export async function appendUsageEvent(
  * Idempotent + fail-safe: matches on `(meter, event_id)` (the same key the append
  * dedups on), so an `event_id` is REQUIRED — a null/blank one no-ops. A
  * missing/non-finite/negative value coerces to 0. FAILS OPEN — never throws.
+ *
+ * TENANT SAFETY (`userKey`): when the `event_id` is CLIENT-generated (the CLI
+ * coding_agent correlation id, vs the deep-research DO's server-minted run id), a
+ * caller could otherwise late-bind cost onto ANOTHER seat's row. Pass the caller's
+ * resolved seat as `userKey` and the UPDATE additionally scopes `AND user_key = ?`,
+ * so a caller can only ever stamp cost on its OWN events. Omitted (chatbot) → the
+ * seam is unchanged (the run id is unguessable + server-minted, so it needs no
+ * scope). A blank `userKey` is treated as "no scope" (never widens the match).
  */
 export async function updateUsageEventCost(
   env: Pick<Env, "SIGILIX_PLATFORM_DB">,
-  args: { meter: UsageEventMeter; eventId: string; tokens?: number; costUsd?: number },
+  args: { meter: UsageEventMeter; eventId: string; tokens?: number; costUsd?: number; userKey?: string | null },
 ): Promise<void> {
   if (!env.SIGILIX_PLATFORM_DB) return
   const eventId = args.eventId?.trim()
@@ -99,11 +107,18 @@ export async function updateUsageEventCost(
   const tokens = typeof args.tokens === "number" && Number.isFinite(args.tokens) && args.tokens > 0 ? args.tokens : 0
   const costUsd =
     typeof args.costUsd === "number" && Number.isFinite(args.costUsd) && args.costUsd > 0 ? args.costUsd : 0
+  const userKey = typeof args.userKey === "string" ? args.userKey.trim() : ""
   const db = env.SIGILIX_PLATFORM_DB
   try {
+    const sql =
+      "UPDATE usage_events SET tokens = ?, cost_usd = ? WHERE meter = ? AND event_id = ?" +
+      (userKey ? " AND user_key = ?" : "")
+    const binds: (string | number)[] = userKey
+      ? [tokens, costUsd, args.meter, eventId, userKey]
+      : [tokens, costUsd, args.meter, eventId]
     await db
-      .prepare("UPDATE usage_events SET tokens = ?, cost_usd = ? WHERE meter = ? AND event_id = ?")
-      .bind(tokens, costUsd, args.meter, eventId)
+      .prepare(sql)
+      .bind(...binds)
       .run()
   } catch (error) {
     console.warn(

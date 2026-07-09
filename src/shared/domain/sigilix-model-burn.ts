@@ -24,6 +24,41 @@ export const SIGILIX_MODEL_BURN_USD_PER_MTOK: Readonly<Record<string, number>> =
 const BURN_MODEL_ORDER = ["boreas", "pyroeis", "astraeus"] as const
 
 /**
+ * Normalize a reported model id to a burn-map KEY. The CLI names its models
+ * `sigilix/boreas` (providerID/modelID) or the bare `boreas`; the burn map is keyed
+ * by the bare, lowercase id. Strips a leading `sigilix/` and lowercases so both
+ * shapes resolve. Unknown ids pass through unchanged (→ rate 0 downstream, cost 0).
+ */
+export function normalizeBurnModelKey(model: string): string {
+  return model
+    .trim()
+    .toLowerCase()
+    .replace(/^sigilix\//, "")
+}
+
+/**
+ * The tokens + blended model COST (USD) of one metered CLI (coding_agent) turn,
+ * derived from the SAME representative burn rate the deep-research chatbot uses
+ * (`SIGILIX_MODEL_BURN_USD_PER_MTOK`) so the two seat surfaces price identically.
+ * `tokens = inputTokens + outputTokens`; `costUsd = tokens/1e6 × rate`. An unknown
+ * model or non-finite/negative counts fail SAFE to 0 (a 0 never inflates a budget).
+ * Pure leaf — the /v1/usage/report route computes cost through this before it
+ * late-binds it onto the gateway's coding_agent event.
+ */
+export function codingAgentEventCost(
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+): { tokens: number; costUsd: number } {
+  const inTok = Number.isFinite(inputTokens) && inputTokens > 0 ? inputTokens : 0
+  const outTok = Number.isFinite(outputTokens) && outputTokens > 0 ? outputTokens : 0
+  const tokens = inTok + outTok
+  const rate = SIGILIX_MODEL_BURN_USD_PER_MTOK[normalizeBurnModelKey(model)] ?? 0
+  const costUsd = tokens > 0 && rate > 0 ? (tokens / 1_000_000) * rate : 0
+  return { tokens, costUsd }
+}
+
+/**
  * Representative tokens consumed by ONE task, used to translate a remaining USD
  * budget into an intuitive "≈ N Boreas tasks left". Grounded in observed prod
  * ledger data (~400K tokens / PR review). Tunable estimate, not a guarantee.

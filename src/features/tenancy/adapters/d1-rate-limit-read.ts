@@ -22,8 +22,12 @@ import type { Env } from "@/src/shared/types/env"
  *   - rowsStmt: `SELECT created_at … ORDER BY … ASC LIMIT ?` — the oldest
  *     `limit` rows (limit = cap+burst+1) for `computeResetMs`.
  *
- * Returns `{ ok: true, count, windowRowsAscMs }` on success:
+ * Returns `{ ok: true, count, costUsd, windowRowsAscMs }` on success:
  *   - `count` is the TRUE total (not bounded by `limit`).
+ *   - `costUsd` is the TRUE SUM of `cost_usd` over the window (blended per-review
+ *     model spend, migration 0014) — the DOLLAR dimension the cost budget gates
+ *     on. `COALESCE(SUM(cost_usd),0)` so a window with rows predating the column
+ *     (default 0) or genuinely no rows both read 0.0, never NULL/NaN.
  *   - `windowRowsAscMs` is bounded by `limit` (enough oldest rows for reset
  *     math; `computeResetMs` falls back to `windowMs` when the needed index
  *     exceeds what was fetched — that conservative fallback is correct, never
@@ -38,14 +42,14 @@ import type { Env } from "@/src/shared/types/env"
 export async function readRollingReviewCount(
   env: Pick<Env, "SIGILIX_PLATFORM_DB">,
   args: { installationId: number; authorLogin: string; sinceIso: string; limit: number },
-): Promise<{ ok: true; count: number; windowRowsAscMs: number[] } | { ok: false }> {
+): Promise<{ ok: true; count: number; costUsd: number; windowRowsAscMs: number[] } | { ok: false }> {
   if (!env.SIGILIX_PLATFORM_DB) return { ok: false }
   const db = env.SIGILIX_PLATFORM_DB
   const { installationId, authorLogin, sinceIso, limit } = args
   try {
     const countStmt = db
       .prepare(
-        "SELECT COUNT(*) AS n FROM usage_ledger" +
+        "SELECT COUNT(*) AS n, COALESCE(SUM(cost_usd), 0) AS cost FROM usage_ledger" +
           " WHERE installation_id = ? AND author_login = ? AND created_at >= ?",
       )
       .bind(installationId, authorLogin, sinceIso)
@@ -60,12 +64,13 @@ export async function readRollingReviewCount(
     const countRes = batchRes[0]
     const rowsRes = batchRes[1]
     if (!countRes || !rowsRes) return { ok: false }
-    const firstRow = countRes.results[0] as { n?: number } | undefined
+    const firstRow = countRes.results[0] as { n?: number; cost?: number } | undefined
     const count = typeof firstRow?.n === "number" ? firstRow.n : 0
+    const costUsd = Number(firstRow?.cost) || 0
     const windowRowsAscMs = (rowsRes.results as Array<{ created_at?: unknown }>)
       .map((r) => Date.parse(typeof r.created_at === "string" ? r.created_at : ""))
       .filter(Number.isFinite)
-    return { ok: true, count, windowRowsAscMs }
+    return { ok: true, count, costUsd, windowRowsAscMs }
   } catch (error) {
     console.warn(
       JSON.stringify({

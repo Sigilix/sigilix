@@ -11,6 +11,9 @@ src/lib/dep-vulns/db
 # Vendored binary WebAssembly module (SIG-477 QuickJS sandbox runner).
 *.wasm
 .claude
+# Local git worktrees (each is a separate branch checkout with its own tooling);
+# never format sibling worktrees from the root — they are not this branch's code.
+.git-wt
 # Golden fixtures + captured eval data are records, not hand-authored code.
 e2e/_golden
 # Email templates are email-client-safe HTML/text that must byte-match the

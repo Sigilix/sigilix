@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
 import { handleResearchCreate, seatIdentityFromCreator } from "@/src/do/deep-research/routes"
 import { readUsageEventCount } from "@/src/features/tenancy"
 import { base64urlEncode, createSession } from "@/src/lib/auth-session"
@@ -67,6 +68,7 @@ describe("handleResearchCreate — chatbot SEAT metering", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(M4)
+    await applyCostMigrations(db)
     kv = makeKV()
     await createSession({
       kv,

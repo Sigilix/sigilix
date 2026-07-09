@@ -4,13 +4,17 @@ import {
   DEFAULT_TRIAGE_RATE_LIMIT_CAP,
   RATE_LIMIT_WINDOW_MS,
   TRIAGE_RATE_LIMIT_WINDOW_MS,
+  TIER_COST_BUDGET_USD,
   computeResetMs,
   decideRateLimit,
+  decideCostBudget,
+  resolveTierCostBudgetUsd,
   formatUsageFooter,
   isFullPaidStatus,
   resolveRateLimitCap,
   resolveRateLimitMode,
 } from "./rate-limit"
+import type { Env } from "@/src/shared/types/env"
 
 // ─── resolveRateLimitMode ────────────────────────────────────────────────────
 
@@ -309,5 +313,88 @@ describe("triage rate-limit constants", () => {
     // source, not by this test.
     expect(RATE_LIMIT_WINDOW_MS).toBe(5 * 60 * 60 * 1000)
     expect(TRIAGE_RATE_LIMIT_WINDOW_MS).toBe(5 * 60 * 60 * 1000)
+  })
+})
+
+// ─── decideCostBudget (sig-cost-based-metering) ──────────────────────────────
+
+describe("decideCostBudget", () => {
+  it("allows when consumed is strictly under the budget", () => {
+    expect(decideCostBudget(0.49, 0.5)).toBe(true)
+  })
+
+  it("blocks at the budget ceiling (>= blocks, budget is a ceiling on prior spend)", () => {
+    expect(decideCostBudget(0.5, 0.5)).toBe(false)
+    expect(decideCostBudget(0.51, 0.5)).toBe(false)
+  })
+
+  it("a null budget is UNBOUNDED → always allowed (enterprise)", () => {
+    expect(decideCostBudget(1_000_000, null)).toBe(true)
+  })
+
+  it("fails open on a non-finite consumed or budget (a read fault never blocks)", () => {
+    expect(decideCostBudget(NaN, 0.5)).toBe(true)
+    expect(decideCostBudget(0.5, Infinity)).toBe(true)
+  })
+})
+
+// ─── resolveTierCostBudgetUsd + the generosity ladder ────────────────────────
+
+describe("resolveTierCostBudgetUsd", () => {
+  const noEnv = {} as Partial<Env>
+
+  it("resolves the table budget per tier/window (case-insensitive)", () => {
+    expect(resolveTierCostBudgetUsd(noEnv, "pro", "session")).toBe(TIER_COST_BUDGET_USD.pro.session)
+    expect(resolveTierCostBudgetUsd(noEnv, "PRO", "weekly")).toBe(TIER_COST_BUDGET_USD.pro.weekly)
+  })
+
+  it("enterprise is UNBOUNDED (null) and ignores the trial flag", () => {
+    expect(resolveTierCostBudgetUsd(noEnv, "enterprise", "session")).toBeNull()
+    expect(resolveTierCostBudgetUsd(noEnv, "enterprise", "weekly", true)).toBeNull()
+  })
+
+  it("unknown/oss/cli/null tiers fall back to the Free budget", () => {
+    expect(resolveTierCostBudgetUsd(noEnv, "oss", "session")).toBe(TIER_COST_BUDGET_USD.free.session)
+    expect(resolveTierCostBudgetUsd(noEnv, null, "weekly")).toBe(TIER_COST_BUDGET_USD.free.weekly)
+  })
+
+  it('the "team" alias maps to the teams budget row', () => {
+    expect(resolveTierCostBudgetUsd(noEnv, "team", "weekly")).toBe(TIER_COST_BUDGET_USD.teams.weekly)
+  })
+
+  it("follows the founder ladder Free ≪ Pro < Teams < Max < Ultra (weekly)", () => {
+    const w = (t: string) => resolveTierCostBudgetUsd(noEnv, t, "weekly") as number
+    expect(w("free")).toBeLessThan(w("pro"))
+    expect(w("pro")).toBeLessThan(w("teams"))
+    expect(w("teams")).toBeLessThan(w("max"))
+    expect(w("max")).toBeLessThan(w("ultra"))
+  })
+
+  it("an env override wins over the table; a negative override means UNBOUNDED", () => {
+    expect(resolveTierCostBudgetUsd({ SIGILIX_COST_BUDGET_PRO_SESSION: "9" }, "pro", "session")).toBe(9)
+    expect(resolveTierCostBudgetUsd({ SIGILIX_COST_BUDGET_PRO_SESSION: "-1" }, "pro", "session")).toBeNull()
+  })
+
+  it("a blank/non-numeric override is ignored (falls back to the table)", () => {
+    expect(resolveTierCostBudgetUsd({ SIGILIX_COST_BUDGET_PRO_SESSION: "  " }, "pro", "session")).toBe(
+      TIER_COST_BUDGET_USD.pro.session,
+    )
+    expect(resolveTierCostBudgetUsd({ SIGILIX_COST_BUDGET_PRO_SESSION: "abc" }, "pro", "session")).toBe(
+      TIER_COST_BUDGET_USD.pro.session,
+    )
+  })
+
+  it("trial halves the budget, floored at Free and CLAMPED at the full budget", () => {
+    // Pro session 3.75 → trial 1.875 (half, above the free floor 0.375).
+    expect(resolveTierCostBudgetUsd(noEnv, "pro", "session", true)).toBeCloseTo(
+      TIER_COST_BUDGET_USD.pro.session! / 2,
+      6,
+    )
+    // An override BELOW the free floor must NOT let a trial exceed the paid budget
+    // (verify-math §2 clamp): base 0.10 → trial min(0.10, max(0.375, 0.05)) = 0.10.
+    const trial = resolveTierCostBudgetUsd({ SIGILIX_COST_BUDGET_PRO_SESSION: "0.10" }, "pro", "session", true)
+    const paid = resolveTierCostBudgetUsd({ SIGILIX_COST_BUDGET_PRO_SESSION: "0.10" }, "pro", "session", false)
+    expect(trial).toBeLessThanOrEqual(paid as number)
+    expect(trial).toBe(0.1)
   })
 })

@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
 import { handleUsageRoute, type UsageResponse } from "@/src/lib/usage-route"
 import worker from "@/src/index"
 import { base64urlEncode, createSession } from "@/src/lib/auth-session"
@@ -54,6 +55,7 @@ async function makeDb(): Promise<D1Database> {
   await db.exec(MIGRATION_USAGE_SQL)
   await db.exec(MIGRATION_API_KEY_SQL)
   await db.exec(MIGRATION_EVENTS_SQL)
+  await applyCostMigrations(db)
   return db
 }
 
@@ -299,6 +301,17 @@ describe("handleUsageRoute (GET /v1/usage) — SIG-303 two pools", () => {
     expect(body.totals.weekly.limit).toBe(200) // DEFAULT_POOL_CAPS.seat.weekly (headline)
     expect(body.windows.session.window_label).toBe("5h")
     expect(body.windows.weekly.window_label).toBe("Mon 9:00")
+
+    // sig-cost-based-metering: the cost dimension + burn transparency are present.
+    expect(body.cost.session).toHaveProperty("used_usd")
+    expect(body.cost.session).toHaveProperty("budget_usd")
+    expect(body.cost.session).toHaveProperty("remaining_usd")
+    expect(body.cost.session).toHaveProperty("remaining_pct")
+    expect(body.cost.weekly).toHaveProperty("budget_usd")
+    // Every model is available on every tier — the burn table is transparency, not a gate.
+    expect(body.model_burn.map((m) => m.model)).toContain("astraeus")
+    expect(body.model_burn.find((m) => m.model === "boreas")?.relative).toBe(1)
+    expect(body).toHaveProperty("hint") // null unless the budget is running low
   })
 
   it("plan reflects the installation's REAL tenant.tier, not the OPENCLAW_PLAN default", async () => {

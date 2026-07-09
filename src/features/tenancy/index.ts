@@ -21,6 +21,9 @@ export type { QuotaMode } from "./domain/quota"
 export {
   resolveRateLimitMode,
   resolveRateLimitCap,
+  resolveTierCostBudgetUsd,
+  decideCostBudget,
+  TIER_COST_BUDGET_USD,
   isFullPaidStatus,
   decideRateLimit,
   computeResetMs,
@@ -31,7 +34,7 @@ export {
   TRIAGE_RATE_LIMIT_WINDOW_MS,
   DEFAULT_TRIAGE_RATE_LIMIT_CAP,
 } from "./domain/rate-limit"
-export type { RateLimitMode } from "./domain/rate-limit"
+export type { RateLimitMode, CostBudgetWindow } from "./domain/rate-limit"
 export {
   upsertTenantAndRepo,
   upsertTenantTier,
@@ -64,8 +67,12 @@ export {
   weeklyWindowResetMs,
 } from "./domain/usage-meters"
 export type { UsagePool, UsageMeter, UsageWindow, UsageEventMeter, UsageMeterMode } from "./domain/usage-meters"
-export { appendUsageEvent } from "./adapters/d1-usage-events"
-export { readUsageEventCount, readUsageEventAuthorBreakdown } from "./adapters/d1-usage-events-read"
+export { appendUsageEvent, updateUsageEventCost } from "./adapters/d1-usage-events"
+export {
+  readUsageEventCount,
+  readUsageEventCostSince,
+  readUsageEventAuthorBreakdown,
+} from "./adapters/d1-usage-events-read"
 export { checkUsagePool } from "./adapters/check-usage-pool"
 export type { UsagePoolDecision, UsagePoolWindowState } from "./adapters/check-usage-pool"
 export { checkShadowQuota } from "./adapters/check-shadow-quota"

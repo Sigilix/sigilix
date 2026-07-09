@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
 import { checkUsagePool } from "@/src/features/tenancy/adapters/check-usage-pool"
 import { appendUsageEvent } from "@/src/features/tenancy/adapters/d1-usage-events"
 import type { Env } from "@/src/shared/types/env"
@@ -37,6 +38,7 @@ describe("checkUsagePool", () => {
     db = makeD1()
     await db.exec(M1)
     await db.exec(M4)
+    await applyCostMigrations(db)
   })
 
   it("mode=off → allow, zero reads", async () => {
@@ -137,6 +139,78 @@ describe("checkUsagePool", () => {
       SIGILIX_USAGE_CAP_SEAT_SESSION: "1",
     }
     const d = await checkUsagePool(env, { pool: "seat", userKey: "gh:1", nowMs: Date.now() })
+    expect(d.allowed).toBe(true)
+  })
+})
+
+// ─── seat-pool COST enforcement (sig-cost-based-metering) ─────────────────────
+
+/** Seed one seat event carrying an explicit cost (a chatbot/CLI run's model spend). */
+async function seedSeatCost(
+  db: D1Database,
+  userKey: string,
+  meter: "coding_agent" | "chatbot",
+  costUsd: number,
+  iso: string,
+) {
+  await appendUsageEvent(
+    { SIGILIX_PLATFORM_DB: db },
+    { meter, installationId: 0, userKey, surface: "test", tokens: 100_000, costUsd, nowIso: iso },
+  )
+}
+
+describe("checkUsagePool — cost budget (free CLI/chatbot capped)", () => {
+  let db: D1Database
+  beforeEach(async () => {
+    db = makeD1()
+    await db.exec(M1)
+    await db.exec(M4)
+    await applyCostMigrations(db)
+  })
+
+  it("FREE seat pool blocks on COST while UNDER the count cap (chatbot spend)", async () => {
+    const now = Date.now()
+    // One chatbot run at $0.50 > free session budget $0.375, with no count cap set →
+    // count is fine (1 run), but the dollar budget is exceeded → blocked on cost.
+    await seedSeatCost(db, "gh:9", "chatbot", 0.5, new Date(now).toISOString())
+    const env: CheckEnv = {
+      SIGILIX_PLATFORM_DB: db,
+      SIGILIX_USAGE_METER_MODE: "enforce",
+      SIGILIX_USAGE_CAP_SEAT_SESSION: "-1", // no count cap → isolate the cost gate
+      SIGILIX_USAGE_CAP_SEAT_WEEKLY: "-1",
+    }
+    const d = await checkUsagePool(env, { pool: "seat", userKey: "gh:9", nowMs: now, tier: "free" })
+    expect(d.session.usedCostUsd).toBeCloseTo(0.5, 6)
+    expect(d.session.costBudgetUsd).toBeCloseTo(0.375, 6)
+    expect(d.allowed).toBe(false)
+  })
+
+  it("enterprise seat pool is never cost-blocked (unbounded budget)", async () => {
+    const now = Date.now()
+    await seedSeatCost(db, "gh:10", "chatbot", 500, new Date(now).toISOString())
+    const env: CheckEnv = {
+      SIGILIX_PLATFORM_DB: db,
+      SIGILIX_USAGE_METER_MODE: "enforce",
+      SIGILIX_USAGE_CAP_SEAT_SESSION: "-1",
+      SIGILIX_USAGE_CAP_SEAT_WEEKLY: "-1",
+    }
+    const d = await checkUsagePool(env, { pool: "seat", userKey: "gh:10", nowMs: now, tier: "enterprise" })
+    expect(d.session.costBudgetUsd).toBeNull()
+    expect(d.allowed).toBe(true)
+  })
+
+  it("omitting the tier keeps the cost gate INERT (count-only, unchanged)", async () => {
+    const now = Date.now()
+    await seedSeatCost(db, "gh:11", "chatbot", 999, new Date(now).toISOString())
+    const env: CheckEnv = {
+      SIGILIX_PLATFORM_DB: db,
+      SIGILIX_USAGE_METER_MODE: "enforce",
+      SIGILIX_USAGE_CAP_SEAT_SESSION: "-1",
+      SIGILIX_USAGE_CAP_SEAT_WEEKLY: "-1",
+    }
+    // No tier → no cost gate; the huge $999 spend is ignored (count is 1, no cap).
+    const d = await checkUsagePool(env, { pool: "seat", userKey: "gh:11", nowMs: now })
+    expect(d.session.usedCostUsd).toBeUndefined()
     expect(d.allowed).toBe(true)
   })
 })

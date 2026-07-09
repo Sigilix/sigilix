@@ -19,7 +19,13 @@ import { getInstallationsForUser } from "@/src/lib/api-key-store"
 import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { listGithubUserInstallationRepos } from "@/src/lib/github-user-repo-scope"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
-import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
+import {
+  appendUsageEvent,
+  checkUsagePool,
+  readTenantSubscriptionStatus,
+  isFullPaidStatus,
+} from "@/src/features/tenancy"
+import { resolveInstallationPlan } from "@/src/lib/resolve-plan"
 import { parseEffort, parseMode, parseTier } from "./config"
 import { CREATOR_HEADER } from "./deep-research-do"
 import { isCodebaseQuestion, resolveRepoTarget } from "./repo-grounding"
@@ -116,7 +122,26 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   // an in-flight one. Behind SIGILIX_USAGE_METER_MODE (default shadow → no block).
   const seat = seatIdentityFromCreator(auth.creator)
   const now = Date.now()
-  const meterDecision = await checkUsagePool(env, { pool: "seat", userKey: seat.userKey, nowMs: now })
+  // sig-cost-based-metering: resolve the seat's org + tier so the SEAT pool is
+  // COST-capped (chatbot spend) the same way as the org PR pool — this is what caps
+  // a FREE user's chatbot usage. Resolved once here and reused for the event stamp
+  // below. The plan + status reads both depend only on the org id → issued in ONE
+  // round-trip. FAULT DIRECTION (deliberate, matches the PR gate): a fault degrades to
+  // free / not-active — the TIGHTEST budget (spend-protective), latent while the meter
+  // mode defaults to shadow.
+  const orgInstallationId = await resolveSeatOrgInstallation(env, auth.creator, seat.installationId)
+  const [tier, subStatus] = await Promise.all([
+    resolveInstallationPlan(env, orgInstallationId),
+    readTenantSubscriptionStatus(env, orgInstallationId),
+  ])
+  const trialing = !isFullPaidStatus(subStatus)
+  const meterDecision = await checkUsagePool(env, {
+    pool: "seat",
+    userKey: seat.userKey,
+    nowMs: now,
+    tier,
+    trialing,
+  })
   if (!meterDecision.allowed) return json({ error: "usage_limit_exceeded", pool: "seat" }, 429)
 
   let body: { question?: unknown; model?: unknown; effort?: unknown; mode?: unknown; owner?: unknown; repo?: unknown }
@@ -215,11 +240,9 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   // DO id → idempotent on a retry. Fire-and-forget (fail-open; never fails the run).
   // mode="off" is a true kill switch — shed the D1 write entirely.
   if (meterDecision.mode !== "off") {
-    // Resolve the developer's org link (account_tenant) so the SEAT event carries
-    // the org for the admin per-member drill. One D1 read (fail-soft), in the
-    // same synchronous style as the checkUsagePool reads above; the append itself
-    // stays fire-and-forget via waitUntil (never adds latency, never fails the run).
-    const orgInstallationId = await resolveSeatOrgInstallation(env, auth.creator, seat.installationId)
+    // The SEAT event carries the org (account_tenant link, resolved above as
+    // `orgInstallationId`) for the admin per-member drill. The append stays
+    // fire-and-forget via waitUntil (never adds latency, never fails the run).
     ctx.waitUntil(
       appendUsageEvent(env, {
         meter: "chatbot",

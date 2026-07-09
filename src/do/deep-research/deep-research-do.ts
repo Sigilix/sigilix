@@ -17,7 +17,9 @@ import type { Env } from "@/src/shared/types/env"
 import { normalizeEnv } from "@/src/shared/util/normalize-env"
 import { runResearchLoop, type EngineDeps } from "./engine"
 import { parseEffort, parseMode, parseTier, resolveResearchConfig } from "./config"
-import { buildModelFn } from "./model"
+import { buildModelFn, type ResearchModelFn } from "./model"
+import { updateUsageEventCost } from "@/src/features/tenancy"
+import { SIGILIX_MODEL_BURN_USD_PER_MTOK } from "@/src/shared/domain/sigilix-model-burn"
 import { hasAnySearchProvider, searchWeb } from "./search"
 import { fetchPage } from "./fetch-guard"
 import { gatherRepoGrounding, type GatherRepoGroundingArgs } from "./repo-grounding"
@@ -181,6 +183,19 @@ export class DeepResearchDO extends DurableObject<Env> {
       }
     }
 
+    // sig-cost-based-metering: wrap the model fn to tally this run's total tokens
+    // across EVERY model call (every engine path routes through deps.model), so we
+    // can stamp the chatbot's real token spend + estimated cost onto its usage_events
+    // row after the run — the CLI/chat surfaces previously recorded ZERO token/cost
+    // data. Engine untouched; the wrapper only sums (pure aside from the counter).
+    let tokensAccum = 0
+    const baseModel: ResearchModelFn = this.hooks?.model ?? buildModelFn(this.env, config)
+    const meteredModel: ResearchModelFn = async (role, messages) => {
+      const r = await baseModel(role, messages)
+      if (Number.isFinite(r.tokens) && r.tokens > 0) tokensAccum += r.tokens
+      return r
+    }
+
     const deps: EngineDeps = {
       question,
       runId,
@@ -190,13 +205,34 @@ export class DeepResearchDO extends DurableObject<Env> {
       hasIndexedRepo: this.hasIndexedRepo,
       mode: this.mode,
       emit: (event) => this.emit(event),
-      model: this.hooks?.model ?? buildModelFn(this.env, config),
+      model: meteredModel,
       search: this.hooks?.search ?? ((query) => searchWeb({ query, env: this.env, runId, tenant })),
       fetchPage: this.hooks?.fetchPage ?? ((pageUrl) => fetchPage({ url: pageUrl, runId, tenant })),
       isCancelled: () => this.cancelled,
       now: this.hooks?.now ?? (() => Date.now()),
     }
     await runResearchLoop(deps)
+
+    // Late-bind the chatbot event's tokens + cost (the row was appended at run-start
+    // by the route, keyed by runId = this DO id). Cost is ESTIMATED from the tier's
+    // representative burn rate — the DO has a combined token total, not a per-model
+    // split, so this is a documented estimate, not a billed figure. Fail-open: a
+    // metering fault must never surface on the (already-streamed) research run.
+    // ORDERING: the route appends the row (fire-and-forget) at run START; this UPDATE
+    // runs at run COMPLETION (seconds–minutes later), so the row is reliably present.
+    // In the pathological case where it isn't, the UPDATE matches 0 rows (harmless
+    // no-op) and the row keeps cost 0 — an under-count, never a wrong block.
+    try {
+      const costUsd = (tokensAccum / 1_000_000) * (SIGILIX_MODEL_BURN_USD_PER_MTOK[this.model] ?? 0)
+      await updateUsageEventCost(this.env, { meter: "chatbot", eventId: runId, tokens: tokensAccum, costUsd })
+    } catch (err) {
+      console.warn(
+        JSON.stringify({
+          event: "chatbot-usage-cost-update-failed",
+          err: err instanceof Error ? err.message : String(err),
+        }),
+      )
+    }
   }
 
   /** Append an event to the buffer, persist it, and fan it out to live writers. */

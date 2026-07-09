@@ -1,0 +1,16 @@
+-- sig-cost-based-metering — add per-review model COST (USD) to the usage ledger.
+-- Forward-only; immutable once applied. Applied via `wrangler d1 migrations apply` (NOT auto on deploy).
+--
+-- Why: SIG-38 rate limiting caps a developer on a COUNT of reviews per rolling
+-- window; that ignores that one 200K-token ensemble review costs far more than a
+-- 5K-token one. This column lets the rate-limit read SUM the real per-review model
+-- spend in the window so enforcement can gate on DOLLARS, not just request count.
+--
+-- Value source: `computeReviewCost(tokenUsageByModel).totalUsd` — the blended
+-- measured (OpenRouter `usage.cost`) + `MODEL_PRICING`-estimated per-review cost
+-- (ensemble-slo-telemetry.ts / model-pricing.ts). REAL (fractional USD).
+--
+-- Backfill: existing rows default to 0 (their real cost is unknown pre-migration);
+-- a 0 cost never inflates a window's spend against a budget, so it fails safe (an
+-- old row can only UNDER-count, never wrongly block).
+ALTER TABLE usage_ledger ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0;

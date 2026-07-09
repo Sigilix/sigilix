@@ -260,6 +260,13 @@ export async function finalize<Tel extends FinalizeTelemetry>(
           (Number.isFinite(m.outputTokens) ? m.outputTokens : 0),
         0,
       )
+      // sig-cost-based-metering: meter the blended per-review model COST (USD) too,
+      // so the rate-limit read can SUM real spend in the window and enforce on
+      // dollars, not just a request count. Same `computeReviewCost` the SLO roll-up
+      // uses (measured OpenRouter usage.cost + MODEL_PRICING estimate for unpriced
+      // tokens). Recomputed independently by the daily-cost block below — a pure,
+      // cheap function; kept local so this fail-open block stays self-contained.
+      const costUsd = computeReviewCost(telemetry.tokenUsageByModel).totalUsd
       await appendUsage(env, {
         installationId: telemetry.installationId,
         repoId: telemetry.repoId,
@@ -267,6 +274,7 @@ export async function finalize<Tel extends FinalizeTelemetry>(
         headSha: telemetry.headSha,
         modelCalls: callsUsed,
         tokens,
+        costUsd,
         authorLogin: telemetry.authorLogin ?? null,
         nowIso: new Date().toISOString(),
       })

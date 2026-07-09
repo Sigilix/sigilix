@@ -15,7 +15,9 @@ import type { Env } from "@/src/shared/types/env"
 import {
   resolveRateLimitMode,
   resolveRateLimitCap,
+  resolveTierCostBudgetUsd,
   decideRateLimit,
+  decideCostBudget,
   computeResetMs,
   formatUsageFooter,
   RATE_LIMIT_WINDOW_MS,
@@ -33,6 +35,16 @@ export interface RateLimitDecision {
   used: number
   cap: number
   resetMs: number
+  /**
+   * sig-cost-based-metering — the DOLLAR dimension, the PRIMARY enforced cap.
+   * `usedCostUsd` is the summed `cost_usd` (blended model spend) in the window;
+   * `costBudgetUsd` is the tier's per-window USD budget (null = UNBOUNDED, e.g.
+   * enterprise); `costRemainingUsd` = max(0, budget − used) or null when unbounded.
+   * Zeroed on off/bypass/no-author/fault (same as the count fields).
+   */
+  usedCostUsd: number
+  costBudgetUsd: number | null
+  costRemainingUsd: number | null
   /**
    * Empty string when no usage data (off / bypass / no-author / fault).
    * Otherwise `formatUsageFooter(used, cap, resetMs)`.
@@ -64,14 +76,24 @@ export async function checkRateLimit(
   const mode = resolveRateLimitMode(env)
   const cap = resolveRateLimitCap(args.tier, args.trialing)
   const burst = RATE_LIMIT_BURST
+  // sig-cost-based-metering: the DOLLAR budget for this tier over the SAME 5h
+  // rolling window (RATE_LIMIT_WINDOW_MS). `null` → UNBOUNDED (enterprise) → the
+  // cost dimension never blocks. This is the PRIMARY enforced dimension; the count
+  // `cap` above stays as a cheap secondary guardrail against many-tiny-request abuse.
+  const costBudgetUsd = resolveTierCostBudgetUsd(env, args.tier, "session", args.trialing)
+  const costRemaining = (usedCostUsd: number): number | null =>
+    costBudgetUsd === null ? null : Math.max(0, costBudgetUsd - usedCostUsd)
 
   /** Convenience: always-allowed response with optional usage fields. */
-  const allow = (used = 0, resetMs = 0, footer = ""): RateLimitDecision => ({
+  const allow = (used = 0, resetMs = 0, footer = "", usedCostUsd = 0): RateLimitDecision => ({
     allowed: true,
     mode,
     used,
     cap,
     resetMs,
+    usedCostUsd,
+    costBudgetUsd,
+    costRemainingUsd: costRemaining(usedCostUsd),
     footer,
   })
 
@@ -112,32 +134,82 @@ export async function checkRateLimit(
       return allow()
     }
 
-    // 6. Compute decision values.
+    // 6. Compute decision values. Cost is the PRIMARY dimension; count is the
+    //    secondary guardrail. A request is allowed only when it is under BOTH —
+    //    blocked when EITHER the window's summed cost has reached the tier budget
+    //    OR the request count has reached the cap. Each decider fails open on its
+    //    own non-finite/null input, so a partial fault never over-blocks.
     const used = res.count
-    const rawAllowed = decideRateLimit(used, cap, burst)
+    const usedCostUsd = res.costUsd
+    const costRemainingUsd = costRemaining(usedCostUsd)
+    const countAllowed = decideRateLimit(used, cap, burst)
+    const costAllowed = decideCostBudget(usedCostUsd, costBudgetUsd)
+    const rawAllowed = countAllowed && costAllowed
+    // resetMs is COUNT-based (when the oldest review ages out of the window). When
+    // the COST dimension is what blocks (count still under cap), this is 0 — an
+    // approximation: the true cost-reset instant needs every in-window row's cost,
+    // not just the `cap+burst+1` slice fetched for count-reset math. The BLOCK is
+    // still correct; only the "resets in ~Nm" hint understates the wait. Acceptable
+    // for v1 (a retry just re-blocks) — an exact cost countdown is a later refinement.
     const resetMs = computeResetMs(res.windowRowsAscMs, RATE_LIMIT_WINDOW_MS, used, cap, burst, args.nowMs)
     const footer = formatUsageFooter(used, cap, resetMs)
+    const base = { mode, used, cap, resetMs, usedCostUsd, costBudgetUsd, costRemainingUsd, footer } as const
 
-    // 7. Under cap+burst → allowed for all modes.
+    // 7. Under BOTH caps → allowed for all modes.
     if (rawAllowed) {
-      console.log(JSON.stringify({ event: "rate-limit-ok", installationId: args.installationId, mode, used, cap }))
-      return { allowed: true, mode, used, cap, resetMs, footer }
+      console.log(
+        JSON.stringify({ event: "rate-limit-ok", installationId: args.installationId, mode, used, cap, usedCostUsd }),
+      )
+      return { allowed: true, ...base }
     }
 
-    // 8. Over cap+burst — split by mode.
+    // The binding dimension (which cap was hit) — for telemetry only.
+    const limitedBy = !costAllowed ? "cost" : "count"
+
+    // 8. Over a cap — split by mode.
     if (mode === "shadow") {
       // Shadow: observe but never block; carry real numbers for the footer.
       console.log(
-        JSON.stringify({ event: "rate-limit-would-skip", installationId: args.installationId, used, cap, resetMs }),
+        JSON.stringify({
+          event: "rate-limit-would-skip",
+          installationId: args.installationId,
+          limitedBy,
+          used,
+          cap,
+          usedCostUsd,
+          costBudgetUsd,
+          resetMs,
+        }),
       )
-      return { allowed: true, mode, used, cap, resetMs, footer }
+      return { allowed: true, ...base }
     }
 
     // enforce: real gate fires.
-    console.log(JSON.stringify({ event: "rate-limit-skip", installationId: args.installationId, used, cap, resetMs }))
-    return { allowed: false, mode, used, cap, resetMs, footer }
+    console.log(
+      JSON.stringify({
+        event: "rate-limit-skip",
+        installationId: args.installationId,
+        limitedBy,
+        used,
+        cap,
+        usedCostUsd,
+        costBudgetUsd,
+        resetMs,
+      }),
+    )
+    return { allowed: false, ...base }
   } catch (err) {
     console.warn(JSON.stringify({ event: "rate-limit-check-failed", err }))
-    return { allowed: true, mode, used: 0, cap, resetMs: 0, footer: "" }
+    return {
+      allowed: true,
+      mode,
+      used: 0,
+      cap,
+      resetMs: 0,
+      usedCostUsd: 0,
+      costBudgetUsd,
+      costRemainingUsd: costRemaining(0),
+      footer: "",
+    }
   }
 }

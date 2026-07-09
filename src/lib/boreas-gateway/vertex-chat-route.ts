@@ -21,9 +21,15 @@
 // NOTHING here logs or returns the SA token / the request body.
 
 import type { Env } from "@/src/shared/types/env"
-import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
+import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID, seatKeyFor } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
-import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
+import {
+  appendUsageEvent,
+  checkUsagePool,
+  readTenantSubscriptionStatus,
+  isFullPaidStatus,
+} from "@/src/features/tenancy"
+import { resolveInstallationPlan } from "@/src/lib/resolve-plan"
 import { runGatewayChain } from "./fallback-chain"
 
 // Chat bodies carry the full prompt/history, so the cap is generous (vs the tiny
@@ -59,6 +65,25 @@ export interface VertexChatRouteConfig {
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+}
+
+/** Max correlation-id length kept as an event_id (a UUID is 36 chars; bound abuse). */
+const MAX_CORRELATION_ID_LEN = 128
+
+/**
+ * Sanitize a client-supplied correlation id into a safe `event_id`: trim, reject
+ * anything with control/whitespace chars (a UUID has none), cap the length. Returns
+ * `undefined` for a missing/blank/oversized/garbage value so the caller records an
+ * unkeyed row rather than a poisoned one. Shared with the /v1/usage/report route so
+ * both ends agree on what a valid correlation id is.
+ */
+export function sanitizeCorrelationId(raw: string | null | undefined): string | undefined {
+  if (typeof raw !== "string") return undefined
+  const trimmed = raw.trim()
+  if (trimmed === "" || trimmed.length > MAX_CORRELATION_ID_LEN) return undefined
+  // Allowlist printable ASCII only (no space/control/DEL/non-ASCII) — a UUID qualifies.
+  if (!/^[\x21-\x7e]+$/.test(trimmed)) return undefined
+  return trimmed
 }
 
 /**
@@ -123,9 +148,36 @@ export async function handleVertexChatRoute(
   // GRACE POLICY: checked at admission BEFORE the token mint / Vertex call — an
   // over-cap request never mints a GCP token; an in-flight stream is never aborted.
   // Behind SIGILIX_USAGE_METER_MODE (default shadow → never blocks). Fail-open.
-  const seatKey = auth.caller.createdBy ? `gh:${auth.caller.createdBy}` : `inst:${auth.caller.installationId}`
+  const seatKey = seatKeyFor(auth.caller)
   const now = Date.now()
-  const meterDecision = await checkUsagePool(env, { pool: "seat", userKey: seatKey, nowMs: now })
+  // sig-cost-based-metering: resolve the caller's tier so the SEAT pool is COST-capped
+  // (the same $ budget as the org PR pool) — this is what caps a FREE user's CLI usage.
+  // The legacy global key has no real org → tier resolves to the deployment default
+  // (free). The two reads are independent → issued in ONE round-trip (Promise.all).
+  //
+  // FAULT DIRECTION (deliberate, matches the PR rate-limit gate): a D1 blip or an
+  // unresolvable tenant degrades tier→free / status→not-active, i.e. the TIGHTEST
+  // budget — the spend-protective direction (never widen a cap on a fault). This is
+  // fail-CLOSED for the customer (a paid tenant could be under-served during a blip),
+  // NOT fail-open — accepted here exactly as index-dispatch-rate-limit-gate.ts accepts
+  // it for the PR path, and latent while SIGILIX_USAGE_METER_MODE defaults to shadow.
+  //
+  // sig-cli-cost-report: `coding_agent` cost is late-bound. The gateway stays a
+  // founder-locked streaming passthrough (never inspects the body), so it can't
+  // read the model usage itself. Instead the CLI stamps a per-request correlation
+  // id header (x-sigilix-correlation-id); this route records the coding_agent event
+  // KEYED by that id (as event_id), and the CLI — which already knows the turn's
+  // token usage — POSTs it to /v1/usage/report, which computes cost and late-binds
+  // it onto THIS row via updateUsageEventCost. No second event → the count stays
+  // correct. A request with no correlation header records an unkeyed row exactly as
+  // before (its cost simply never binds — a documented under-count, never a block).
+  const orgId = auth.caller.installationId === LEGACY_TENANT_INSTALLATION_ID ? 0 : auth.caller.installationId
+  const [tier, subStatus] = await Promise.all([
+    resolveInstallationPlan(env, orgId),
+    readTenantSubscriptionStatus(env, orgId),
+  ])
+  const trialing = !isFullPaidStatus(subStatus)
+  const meterDecision = await checkUsagePool(env, { pool: "seat", userKey: seatKey, nowMs: now, tier, trialing })
   if (!meterDecision.allowed) return json({ error: "usage_limit_exceeded", pool: "seat" }, 429)
 
   // Daily cost ceiling — checked AFTER auth but BEFORE the token mint / Vertex call, so
@@ -156,6 +208,10 @@ export async function handleVertexChatRoute(
   // design: the append is fire-and-forget (never awaited), so under burst a few
   // events may land just after an admission read — same non-atomic posture as SIG-38.
   const installationId = auth.caller.installationId === LEGACY_TENANT_INSTALLATION_ID ? 0 : auth.caller.installationId
+  // sig-cli-cost-report: key the row by the CLI's per-request correlation id so
+  // /v1/usage/report can late-bind cost onto it. Sanitized (bounded length, control
+  // chars stripped); absent/blank → undefined → an unkeyed row (unchanged behavior).
+  const correlationId = sanitizeCorrelationId(request.headers.get("x-sigilix-correlation-id"))
   if (meterDecision.mode !== "off") {
     ctx.waitUntil(
       appendUsageEvent(env, {
@@ -163,6 +219,7 @@ export async function handleVertexChatRoute(
         installationId,
         userKey: seatKey,
         surface: "cli",
+        eventId: correlationId ?? null,
         nowIso: new Date(now).toISOString(),
       }),
     )

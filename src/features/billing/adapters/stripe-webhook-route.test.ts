@@ -17,6 +17,7 @@ const NOW = 1_700_000_000
 const MIGRATION_SQL = [
   readFileSync(new URL("../../../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8"),
   readFileSync(new URL("../../../../migrations/0011_add_tenant_subscription_status.sql", import.meta.url), "utf8"),
+  readFileSync(new URL("../../../../migrations/0012_add_tenant_billing_source.sql", import.meta.url), "utf8"),
 ].join("\n")
 
 function makeKv() {
@@ -393,6 +394,31 @@ describe("handleStripeWebhookRoute", () => {
       e2,
     )
     expect(res.status).toBe(500)
+  })
+
+  it("sig-github-marketplace-billing: a stale Stripe event does NOT clobber an ACTIVE Marketplace payer", async () => {
+    // Seed installation 44 as an active GitHub Marketplace subscriber (tier ultra), and a
+    // stale Stripe customer link that still points at it.
+    await db
+      .prepare(
+        "INSERT INTO tenant (installation_id, tier, subscription_status, billing_source, created_at, updated_at)" +
+          " VALUES (?, 'ultra', 'active', 'github_marketplace', ?, ?)",
+      )
+      .bind(44, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+      .run()
+    store.set("stripe-customer:cus_MP", "44")
+    // A late Stripe subscription.deleted for the old link would normally downgrade to free.
+    const res = await handleStripeWebhookRoute(
+      await signedReq({
+        id: "e_mp_guard",
+        type: "customer.subscription.deleted",
+        data: { object: { customer: "cus_MP" } },
+      }),
+      env,
+    )
+    expect(res.status).toBe(200)
+    expect((await res.text()).trim()).toBe("marketplace active not clobbered")
+    expect(await readTier(db, 44)).toBe("ultra") // Marketplace tier preserved
   })
 
   it("unhandled event type → 200 ack no-op", async () => {

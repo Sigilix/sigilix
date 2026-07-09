@@ -33,15 +33,21 @@
 //     the verifier.
 //   - The plaintext key is returned exactly once, in the exchange response BODY
 //     (never a query string), and is never logged.
-//   - Minting requires an authenticated session that is account_tenant-linked to
-//     the installation; a session with no linked installation is refused (409),
-//     never minted against an unverified installation.
+//   - Minting requires an authenticated session that can access the
+//     installation. The fast path is an existing account_tenant link (the
+//     /setup flow / POST /v1/keys); when none exists (the ORG-OWNER/MEMBER case
+//     — the App is installed on the user's ORG, not their personal account) we
+//     resolve + persist it LIVE from GitHub's `GET /user/installations` (which
+//     returns org installs the caller can access). A session with NO visible
+//     installation is refused (409), never minted against an install the
+//     caller's own token can't see.
 
-import { requireSession } from "@/src/lib/auth-middleware"
+import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
 import { base64urlEncode } from "@/src/lib/auth-session"
 import { sha256Hex } from "@/src/lib/auth-bearer"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { handlePortalPreflight, hasJsonContentType, withPortalCors } from "@/src/lib/portal-cors"
-import { getInstallationsForUser, insertApiKey, mintApiKeyPlaintext } from "@/src/lib/api-key-store"
+import { getInstallationsForUser, insertApiKey, linkAccountTenant, mintApiKeyPlaintext } from "@/src/lib/api-key-store"
 import { requireApiTenant } from "@/src/lib/api-key-resolver"
 import { isFeatureEntitled, readInstallationPlan, upsellFor } from "@/src/features/entitlements"
 import type { Env } from "@/src/shared/types/env"
@@ -49,6 +55,11 @@ import type { Env } from "@/src/shared/types/env"
 const CLI_CODE_KV_PREFIX = "cli_login_code:"
 const CLI_CODE_TTL_SECONDS = 300 // 5 minutes — a browser hop, not a session.
 const CLI_KEY_NAME = "Sigilix CLI"
+
+// Defensive pagination cap on the live GET /user/installations fallback —
+// mirrors auth-setup-route.ts / org-overview-route.ts. Real users never approach
+// it; hitting it means something's wrong upstream, not that we should spin.
+const MAX_INSTALLATION_PAGES = 20
 
 // Defensive length bounds on the CLI-supplied opaque nonces so a malformed
 // caller can't push oversized values into KV. Both are base64url-ish tokens the
@@ -160,11 +171,20 @@ export async function handleCliAuthorizeRoute(request: Request, env: Env, ctx?: 
   }
 
   // Bind the key to the SAME account_tenant installation the /setup flow linked.
-  // No linked installation → refuse (the user must install the GitHub App first);
-  // we never mint against an unverified installation.
   const githubUserId = String(authed.record.githubUserId)
   const installations = await getInstallationsForUser(db, githubUserId)
-  const installationId = installations[0]
+  let installationId = installations[0]
+  // No D1 account_tenant link yet? That's the ORG-OWNER/MEMBER case
+  // (sig-cli-login-org): the GitHub App is installed on the user's ORG (not
+  // their personal account), so the per-user /setup link was never written even
+  // though they can legitimately use that installation. Resolve it LIVE from
+  // GitHub — `GET /user/installations` returns BOTH personal AND org installs
+  // the caller can access — then persist the link so the next login is fast. If
+  // the user genuinely has NO visible installation, we still refuse (409); we
+  // never mint against an installation the caller's token can't see.
+  if (installationId === undefined) {
+    installationId = await resolveInstallationLive(env, authed, githubUserId, db)
+  }
   if (installationId === undefined) {
     return json({ error: "no_installation" }, 409)
   }
@@ -212,6 +232,109 @@ export async function handleCliAuthorizeRoute(request: Request, env: Env, ctx?: 
 
   // Only the code + the display login leave here — never the key.
   return json({ code, login: authed.record.login }, 200)
+}
+
+interface UserInstallationsResponse {
+  total_count?: number
+  installations?: Array<{ id?: number }>
+}
+
+/**
+ * Every installation id the session's GitHub user-to-server token can see via
+ * `GET /user/installations` — which includes BOTH the caller's PERSONAL installs
+ * AND every ORG install they're an owner/member of. FAILS SOFT to [] on any
+ * network/HTTP/JSON error so the caller cleanly refuses (409) rather than
+ * minting against an unverified installation. Never logs the token.
+ */
+async function fetchVisibleInstallationIds(accessToken: string): Promise<number[]> {
+  const ids: number[] = []
+  let seen = 0
+  for (let page = 1; page <= MAX_INSTALLATION_PAGES; page++) {
+    let res: Response
+    try {
+      res = await fetch(`https://api.github.com/user/installations?per_page=100&page=${page}`, {
+        headers: {
+          accept: "application/vnd.github+json",
+          "x-github-api-version": "2022-11-28",
+          authorization: `Bearer ${accessToken}`,
+          "user-agent": "sigilix-worker",
+        },
+      })
+    } catch {
+      return []
+    }
+    if (!res.ok) return []
+    let body: UserInstallationsResponse
+    try {
+      body = (await res.json()) as UserInstallationsResponse
+    } catch {
+      return []
+    }
+    const installs = Array.isArray(body.installations) ? body.installations : []
+    for (const inst of installs) {
+      if (typeof inst.id === "number") ids.push(inst.id)
+    }
+    seen += installs.length
+    const total = typeof body.total_count === "number" ? body.total_count : seen
+    if (installs.length === 0 || seen >= total) break
+  }
+  return ids
+}
+
+/**
+ * Resolve the installation to mint the CLI key against when the caller has NO
+ * account_tenant link yet — the ORG-OWNER/MEMBER case (sig-cli-login-org). We
+ * resolve it LIVE from GitHub (which returns org installs the user can access),
+ * then persist the account_tenant link (idempotent) so subsequent logins take
+ * the fast D1 path. FAILS SOFT to undefined (missing encryption key / decrypt
+ * fault / GitHub outage / no visible install) so the caller cleanly refuses
+ * (409); we never mint against an installation the caller's token can't see.
+ * Never logs the token.
+ *
+ * TRUST MODEL (deliberate): the proof required is exactly what the GitHub-App
+ * /setup flow already requires — that the installation is VISIBLE to the user's
+ * own user-to-server token (auth-setup-route.ts `userControlsInstallation`,
+ * which is also visibility-based, NOT admin-gated) — so any org member who can
+ * access the install resolves, matching /setup. We link with the same
+ * placeholder DEFAULT_ROLE "owner"; portal admin/member gating is NOT read from
+ * this row — it is re-derived LIVE from GitHub per request (resolve-user-role.ts
+ * `isAdminOfInstallation`), so a plain member linked here is still gated to
+ * member-scoped data in the portal.
+ */
+async function resolveInstallationLive(
+  env: Env,
+  authed: AuthedSession,
+  githubUserId: string,
+  db: D1Database,
+): Promise<number | undefined> {
+  try {
+    if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) {
+      console.error(JSON.stringify({ event: "cli-authorize-live-install-encryption-key-missing" }))
+      return undefined
+    }
+    // Refresh the (short-lived) GitHub App user token before the lookup — a
+    // stale token 401s /user/installations and would falsely read as "no
+    // installation" for an org owner (mirrors auth-me-route.ts).
+    const accessToken = await getValidGithubToken({
+      env,
+      sessionId: authed.sessionId,
+      record: authed.record,
+      encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+    })
+    const installationId = (await fetchVisibleInstallationIds(accessToken))[0]
+    if (installationId === undefined) return undefined
+    // Persist the trust link (idempotent — mirrors the /setup DEFAULT_ROLE).
+    await linkAccountTenant(db, { githubUserId, installationId, role: "owner", nowIso: new Date().toISOString() })
+    return installationId
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "cli-authorize-live-install-resolve-failed",
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return undefined
+  }
 }
 
 /**

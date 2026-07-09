@@ -19,10 +19,41 @@ import type { Env } from "@/src/shared/types/env"
 
 const SESSION_COOKIE = "__Host-sigilix_session"
 // 32-byte AES-256 key (base64url) — the production secret shape. Only the
-// org-install fallback test decrypts a token, so it seeds a REAL encrypted
+// org-install fallback tests decrypt a token, so they seed a REAL encrypted
 // session (createSession) under this key; the other tests use the token-less
 // seedSession above.
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(7))
+
+// A valid RSA PKCS#8 test key so `signGitHubAppJwt` can sign a real JWT in the
+// app-server-to-server fallback test (same key github-app.test.ts uses).
+const APP_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDPU6dL7pYqPYf2
+ihBoPf5DzpBUS8q1CHDcEKt/2W/bCOGpItIS/5hkBgGwvR6Mhzj3fgYg0LOctJVS
+RITY5KxVxtWcM2DCcRMpPp3Dd9vIfL2uzBjv4HUFPXzHGZbE9spoBPiRtT9eaALP
+UbqXZcv2idz/V5L3Zd6BcK/iE71HE6WG7DsnPJQgUjWl9wUgIzPe7PSHkBEMPB7g
+AIwhOIgxBL/UWv/BWAajCLSa0mDqq7Tg0SO1jCsutJv33sGKb/uVzs2tlSEBs9b6
+PyT74ihbhPATzyCD+nfDzg/8b7P6EDTKDBVTOgC+fizSnpDLpc3eS0wsBQKNeyRu
+6oIKBIDTAgMBAAECggEAJPXL4O9bDrzlh+BwK5yEZVe9XyZvsHmSdghlb5C1NFmd
+8gIOWY9QNh7G6CSffUlrcM83A5N0agT+e8Lax6KjIs8tTZc/+6yi3qpJyjmTm+aN
+y4ynoUdvkB4UVy5K0CuU6qoRmigMpyeDzFFGT6qAvFmLLNgbIc0wrWJlLU2g5j3w
+WWXKgGuwm78W9tu2spKSi70uXTuxTCO4yZH2kPsFUF5DzNL7S0K+9MwMlOOmgs9I
+XmeWHpcsfaxqcNTmNKJxSZUIHXGyXFOOGnCT/EcLSO4r8O4zBCbE5oCeEtrt3tSD
+HeAmwKpvWkKr2ekTbvzu7NAXYeKidTnZxfmaQjW4MQKBgQD5gaG0eevtVeqAvmFV
+HDVVsXmrxaOKHwoeJDYxJKB8/YQE5QsKt3pQzQ8AcLoTeB4uRrMBZWG0mc15rEUl
+NtnMEcwo2MTS0JEAvfrUMbMcR2KjuKkXHOhCGkA1bGJ45a6dWJK3tbSU3epLFP2+
+ZOg3aZKkIQR0d36C8iY1Yh7H8wKBgQDUuTWHDGSvBzcSNRGsfUK+sXGB1m/pZAjg
+Z21PCbTAJ87GsWICmpbtv2QwOzTLOL4vmIuPoTfuIRHSMzgncXf29jxDU9kFKnJq
+J6Fa28UGLTvIQs3nUKWpeQmO6ms2MWBHsOoKpUdlkVMdR6S1tYsZIJjsIThs9uNR
+RfDJn28EYQKBgFLSVNqYRiufEQWrVeyW/NNuU1G4bRC9ulXJsqxr06lDJU3XutIO
+lcBtuVwJOCPMtgwHL9WrK9IS2dVcm04agnSwiK0nVc4rUTxHhxr7sttQhE5QEmFW
+H9D63iN0a0GvB28GTlpAH+xtN64ad6QOGcVYS8XSCQfXsqVaDRSFFzBLAoGAdj4d
+JG8l9rB/HojlvsM3OLYK7aA7y+KXUXNlw84cM3Fk5QVwfxaZJg2wRC+jl+FX8aD9
+NVDIrTqQXhZA89EEQg5bDr/r5FPfLFLZ7ksoOFi+aIrNOHM9amNmbaArfdACVoPH
+K2eTOsiHkrbT+kEQwdFJhi8jzMRuiGeIpHRQ0aECgYEAvOZfcF3cVEqEOXXgsybr
+Z/Q0FEJU+R0jZfiRq0J+7MS5I7NU/SnK8InhTzDPaPWpc6dD7nhyf0GbxsmdzSDP
+CGqDb+pJeS0+t3ToB7Ql8q4n7FlafZmW8R7q40RJn0RqKaG2YyCoIPjnRf1mqXQO
+VJ2u1IhcD24WrhOpFGFtUbY=
+-----END PRIVATE KEY-----`
 
 // A KV shim that HONORS expirationTtl so the expiry test is real: an entry
 // written with { expirationTtl } older than now is treated as absent.
@@ -88,6 +119,46 @@ function stubUserInstallations(ids: number[]): void {
           headers: { "content-type": "application/json" },
         }),
     ),
+  )
+}
+
+const jsonRes = (body: unknown, status = 200): Response =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+
+/**
+ * Route GitHub calls for the app-server-to-server fallback test, mirroring the
+ * REAL production failure: the user-to-server token is DEAD (`/user/installations`
+ * 401s), so resolution must go through the App's own JWT + org-members roster.
+ */
+function stubAppFallback(opts: {
+  installations: Array<{ id: number; accountId: number; login: string; type: string }>
+  /** org login → the IMMUTABLE numeric ids of its members (matched, not the login). */
+  orgMembers: Record<string, number[]>
+}): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+      // 1) user-token path is dead → 401 (the production symptom).
+      if (url.includes("/user/installations")) return new Response("unauthorized", { status: 401 })
+      // 2) App JWT lists installations WITH account info (id + login + type).
+      if (url.includes("/app/installations?")) {
+        return jsonRes(
+          opts.installations.map((i) => ({ id: i.id, account: { id: i.accountId, login: i.login, type: i.type } })),
+        )
+      }
+      // 3) installation access-token mint (for the org-members roster call).
+      if (/\/app\/installations\/\d+\/access_tokens$/.test(url)) {
+        return jsonRes({ token: "inst-tok", expires_at: new Date(Date.now() + 3600_000).toISOString() })
+      }
+      // 4) org member roster via the installation token — matched on member id.
+      const m = /\/orgs\/([^/]+)\/members/.exec(url)
+      if (m) {
+        const ids = opts.orgMembers[decodeURIComponent(m[1]!)] ?? []
+        return jsonRes(ids.map((id) => ({ id })))
+      }
+      throw new Error(`unexpected fetch in test: ${url}`)
+    }),
   )
 }
 
@@ -250,6 +321,72 @@ describe("handleCliAuthorizeRoute (POST /v1/cli/authorize)", () => {
       .bind("4242")
       .first<{ installation_id: number }>()
     expect(key?.installation_id).toBe(134811639)
+  })
+
+  it("resolves an org install via the APP server-to-server path when the user token is DEAD", async () => {
+    // The REAL production failure: the founder (org owner) reused a browser
+    // session whose short-lived GitHub App user token had expired without
+    // refresh material, so `GET /user/installations` 401s and the user-token
+    // path finds nothing. Resolution must fall back to the App's OWN credentials
+    // (JWT → /app/installations → org member roster), which don't depend on the
+    // caller's token being fresh.
+    await seedRealSession(kv, "sess-dead", 145802438, "damartinezjulio")
+    const appEnv = {
+      OPENCLAW_STATE: kv,
+      SIGILIX_PLATFORM_DB: db,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      GITHUB_APP_ID: "12345",
+      GITHUB_PRIVATE_KEY: APP_PRIVATE_KEY,
+    } as unknown as Env
+    stubAppFallback({
+      installations: [{ id: 134811639, accountId: 9001, login: "Sigilix", type: "Organization" }],
+      orgMembers: { Sigilix: [555, 145802438] }, // the founder's immutable id is a member
+    })
+
+    const { challenge, state } = await pkce()
+    const res = await handleCliAuthorizeRoute(
+      jsonPost("https://x/v1/cli/authorize", "sess-dead", { state, challenge }),
+      appEnv,
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { code: string; login: string }
+    expect(body.code).toBeTruthy()
+
+    // The trust link + key are bound to the org install resolved server-side.
+    const link = await db
+      .prepare("SELECT installation_id FROM account_tenant WHERE github_user_id = ?")
+      .bind("145802438")
+      .first<{ installation_id: number }>()
+    expect(link?.installation_id).toBe(134811639)
+    const key = await db
+      .prepare("SELECT installation_id FROM api_key WHERE created_by = ?")
+      .bind("145802438")
+      .first<{ installation_id: number }>()
+    expect(key?.installation_id).toBe(134811639)
+  })
+
+  it("still 409s when the user token is dead AND the caller is not an org member", async () => {
+    await seedRealSession(kv, "sess-nomember", 999, "stranger")
+    const appEnv = {
+      OPENCLAW_STATE: kv,
+      SIGILIX_PLATFORM_DB: db,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      GITHUB_APP_ID: "12345",
+      GITHUB_PRIVATE_KEY: APP_PRIVATE_KEY,
+    } as unknown as Env
+    // The org install exists, but id 999 is NOT in its member roster.
+    stubAppFallback({
+      installations: [{ id: 134811639, accountId: 9001, login: "Sigilix", type: "Organization" }],
+      orgMembers: { Sigilix: [145802438] },
+    })
+
+    const { challenge, state } = await pkce()
+    const res = await handleCliAuthorizeRoute(
+      jsonPost("https://x/v1/cli/authorize", "sess-nomember", { state, challenge }),
+      appEnv,
+    )
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { error: string }).error).toBe("no_installation")
   })
 })
 

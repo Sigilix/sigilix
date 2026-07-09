@@ -16,8 +16,10 @@ import {
   signGitHubAppJwt,
   resolveRepoInstallationId,
   listAppInstallationIds,
+  listAppInstallations,
   listInstallationRepoFullNames,
   listOrgMembers,
+  listOrgMemberIds,
   listInstallationCollaborators,
 } from "@/src/shared/adapters/github/github-app"
 
@@ -219,6 +221,87 @@ describe("listAppInstallationIds (pagination)", () => {
     const r = await listAppInstallationIds("123", PKCS8_PEM)
     expect(r.complete).toBe(false)
     expect(r.items.length).toBe(50 * 100) // MAX_PAGES × per_page
+  })
+})
+
+describe("listAppInstallations (with account id/login/type)", () => {
+  afterEach(() => vi.unstubAllGlobals())
+  const resp = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
+
+  it("keeps account id, login and type; defaults missing account fields", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const p = new URL(url).searchParams.get("page")
+        if (p === "1") {
+          return resp(200, [
+            { id: 1, account: { id: 9001, login: "Sigilix", type: "Organization" } },
+            { id: 2, account: { login: "octocat", type: "User" } }, // missing account.id → 0
+          ])
+        }
+        return resp(200, [])
+      }),
+    )
+    const r = await listAppInstallations("123", PKCS8_PEM)
+    expect(r.complete).toBe(true)
+    expect(r.items).toEqual([
+      { id: 1, accountId: 9001, accountLogin: "Sigilix", accountType: "Organization" },
+      { id: 2, accountId: 0, accountLogin: "octocat", accountType: "User" },
+    ])
+  })
+
+  it("fetch throw → complete:false, empty", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("net")
+      }),
+    )
+    expect(await listAppInstallations("123", PKCS8_PEM)).toEqual({ items: [], complete: false })
+  })
+})
+
+describe("listOrgMemberIds", () => {
+  afterEach(() => vi.unstubAllGlobals())
+  const kv = {
+    get: async () => null,
+    put: async () => {},
+    delete: async () => {},
+  } as unknown as KVNamespace
+
+  it("returns the immutable numeric member ids", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        // First call mints the installation token, then the members page.
+        if (url.endsWith("/access_tokens")) {
+          return new Response(JSON.stringify({ token: "t", expires_at: new Date(Date.now() + 3.6e6).toISOString() }), {
+            status: 200,
+          })
+        }
+        const p = new URL(url).searchParams.get("page")
+        if (p === "1") return new Response(JSON.stringify([{ id: 555 }, { id: 145802438 }]), { status: 200 })
+        return new Response(JSON.stringify([]), { status: 200 })
+      }),
+    )
+    const r = await listOrgMemberIds(kv, "123", PKCS8_PEM, 42, "Sigilix")
+    expect(r.complete).toBe(true)
+    expect(r.items).toEqual([555, 145802438])
+  })
+
+  it("403 (App lacks Members read) → empty + complete:false", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/access_tokens")) {
+          return new Response(JSON.stringify({ token: "t", expires_at: new Date(Date.now() + 3.6e6).toISOString() }), {
+            status: 200,
+          })
+        }
+        return new Response("forbidden", { status: 403 })
+      }),
+    )
+    expect(await listOrgMemberIds(kv, "123", PKCS8_PEM, 42, "Sigilix")).toEqual({ items: [], complete: false })
   })
 })
 

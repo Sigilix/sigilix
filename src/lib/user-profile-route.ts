@@ -20,14 +20,17 @@
 //
 // CORS'd for the portal origins (portal-cors.ts, wired in index.ts).
 
-import { requireSession } from "@/src/lib/auth-middleware"
-import { resolveUserPlan, type PlanName } from "@/src/lib/resolve-plan"
+import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
+import { resolveUserPlan, resolveInstallationPlan, planRank, type PlanName } from "@/src/lib/resolve-plan"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { readUserProfile, upsertUserProfile, type UserSettings } from "@/src/lib/user-profile-store"
 import type { Env } from "@/src/shared/types/env"
 
 const MAX_DISPLAY_NAME_LEN = 80
 /** A generous cap on the serialized settings blob to bound D1 row size + abuse. */
 const MAX_SETTINGS_BYTES = 8 * 1024
+/** Defensive pagination cap on GET /user/installations (mirrors usage-route.ts). */
+const MAX_INSTALLATION_PAGES = 20
 
 export type DisplayNameSource = "profile" | "github" | "login"
 
@@ -54,6 +57,92 @@ function resolveDisplayName(
   return { name: login, source: "login" }
 }
 
+function githubHeaders(accessToken: string): HeadersInit {
+  return {
+    accept: "application/vnd.github+json",
+    "x-github-api-version": "2022-11-28",
+    authorization: `Bearer ${accessToken}`,
+    "user-agent": "sigilix-worker",
+  }
+}
+
+/** Every installation id the user-to-server token can see. Soft-fails to []. */
+async function fetchUserInstallationIds(accessToken: string): Promise<number[]> {
+  const ids: number[] = []
+  let seen = 0
+  for (let page = 1; page <= MAX_INSTALLATION_PAGES; page++) {
+    let res: Response
+    try {
+      res = await fetch(`https://api.github.com/user/installations?per_page=100&page=${page}`, {
+        headers: githubHeaders(accessToken),
+      })
+    } catch {
+      break
+    }
+    if (!res.ok) break
+    let body: { total_count?: number; installations?: Array<{ id?: number }> }
+    try {
+      body = (await res.json()) as { total_count?: number; installations?: Array<{ id?: number }> }
+    } catch {
+      break
+    }
+    const installs = Array.isArray(body.installations) ? body.installations : []
+    for (const inst of installs) {
+      if (typeof inst.id === "number" && inst.id > 0) ids.push(inst.id)
+    }
+    seen += installs.length
+    const total = typeof body.total_count === "number" ? body.total_count : seen
+    if (installs.length === 0 || seen >= total) break
+  }
+  return ids
+}
+
+/**
+ * The caller's REAL plan — the HIGHEST `tenant.tier` across all installations the
+ * user can see (resolveInstallationPlan reads each through the same entitlements
+ * source the gate enforces on), so the account badge + plan-under-name reflect a
+ * paid org's true tier (e.g. "Ultra"/"Enterprise") rather than the OPENCLAW_PLAN
+ * placeholder that previously read "Free". Taking the MAX (not the first install)
+ * means a member of a paid org never sees "free" just because a free personal
+ * install happens to be listed first.
+ *
+ * Token freshness uses getValidGithubToken (refreshing a stale GitHub App user
+ * token) — the same primitive org-overview/workspace-prs use, so an expired token
+ * doesn't silently downgrade a paid user to "free". Best-effort throughout: any
+ * decrypt/refresh/read fault degrades to resolveUserPlan(env) — a profile read
+ * never 5xxes on this path.
+ */
+async function resolveCallerPlan(env: Env, authed: AuthedSession): Promise<PlanName> {
+  const fallback = () => resolveUserPlan(env, authed.record.githubUserId)
+  if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) return fallback()
+  try {
+    const accessToken = await getValidGithubToken({
+      env,
+      sessionId: authed.sessionId,
+      record: authed.record,
+      encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+    })
+    const ids = await fetchUserInstallationIds(accessToken)
+    if (ids.length === 0) return fallback()
+    const plans = await Promise.all(ids.map((id) => resolveInstallationPlan(env, id)))
+    // Highest tier wins — a paid org outranks a free personal install regardless
+    // of GitHub's listing order.
+    let best: PlanName | null = null
+    for (const p of plans) {
+      if (best === null || planRank(p) > planRank(best)) best = p
+    }
+    if (best !== null) return best
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "profile-plan-resolve-failed",
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+  }
+  return fallback()
+}
+
 /** GET /v1/profile — session-authed. Returns the caller's own profile. */
 export async function handleUserProfileGetRoute(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   const authed = await requireSession(request, env, ctx)
@@ -78,7 +167,7 @@ export async function handleUserProfileGetRoute(request: Request, env: Env, ctx?
   // we fall back to the GitHub identity. Never a 5xx on the read path.
   const profile = await readUserProfile(env, githubUserId)
   const { name, source } = resolveDisplayName(profile?.displayName ?? null, authed.record.name, login)
-  const plan = await resolveUserPlan(env, githubUserId)
+  const plan = await resolveCallerPlan(env, authed)
 
   const body: ProfileResponse = {
     display_name: name,

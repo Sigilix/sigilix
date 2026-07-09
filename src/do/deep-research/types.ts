@@ -15,6 +15,15 @@ export type ResearchTier = "boreas" | "pyroeis" | "astraeus"
 /** The effort level — scales the loop budgets (rounds / queries / pages / time). */
 export type ResearchEffort = "low" | "medium" | "high"
 
+/**
+ * The run mode, picked by the portal's "Deep research" toggle. `"deep"` runs the
+ * full multi-round web-research pipeline (search + fetch + synthesize + cite);
+ * `"chat"` is a plain conversational reply — a single direct model call with NO
+ * web search (still repo-grounded when the question is about the caller's own
+ * code). `"deep"` is the back-compat default when a caller omits `mode`.
+ */
+export type ResearchMode = "deep" | "chat"
+
 /** A source surfaced during the run. `kind` distinguishes a web hit/page from a
  *  file in the user's own connected repository (the codebase-grounding moat). It
  *  is OPTIONAL and additive — legacy UIs that ignore it treat every source as a

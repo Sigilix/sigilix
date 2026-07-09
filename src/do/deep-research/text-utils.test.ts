@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { stripThinking, isLowQuality, htmlToText, extractTitle, truncate } from "./text-utils"
+import { stripThinking, isLowQuality, htmlToText, extractTitle, truncate, isTrivialMessage } from "./text-utils"
 
 describe("stripThinking", () => {
   it("removes paired <think> blocks and trims", () => {
@@ -88,5 +88,44 @@ describe("truncate", () => {
   })
   it("caps long text with a marker", () => {
     expect(truncate("abcdefgh", 3)).toBe("abc\n…[truncated]")
+  })
+})
+
+describe("isTrivialMessage", () => {
+  it("flags greetings / thanks / acknowledgements (case + punctuation insensitive)", () => {
+    for (const m of [
+      "hey!",
+      "Hi",
+      "hello there",
+      "thanks",
+      "Thank you!",
+      "ok",
+      "cool",
+      "sounds good",
+      "bye",
+      "what's up?",
+    ]) {
+      expect(isTrivialMessage(m)).toBe(true)
+    }
+  })
+
+  it("flags pure emoji / punctuation", () => {
+    expect(isTrivialMessage("\u{1F44B}")).toBe(true)
+    expect(isTrivialMessage("!!!")).toBe(true)
+  })
+
+  it("does NOT flag a real question, even one that opens with a greeting", () => {
+    for (const m of [
+      "hey, where does auth live in our repo?",
+      "what is the latest stable Node.js version?",
+      "fix the failing CI job",
+      "compare our approach to OAuth 2.1",
+    ]) {
+      expect(isTrivialMessage(m)).toBe(false)
+    }
+  })
+
+  it("does NOT flag a real non-latin-script question as empty/trivial", () => {
+    expect(isTrivialMessage("\u8BA4\u8BC1\u5728\u54EA\u91CC\u5B9A\u4E49\uFF1F")).toBe(false)
   })
 })

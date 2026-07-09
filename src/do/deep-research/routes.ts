@@ -18,7 +18,7 @@ import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-k
 import { getInstallationsForUser } from "@/src/lib/api-key-store"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
-import { parseEffort, parseTier } from "./config"
+import { parseEffort, parseMode, parseTier } from "./config"
 import { CREATOR_HEADER } from "./deep-research-do"
 import { resolveRepoTarget } from "./repo-grounding"
 import type { Env } from "@/src/shared/types/env"
@@ -104,7 +104,7 @@ async function resolveSeatOrgInstallation(
   return installs[0] ?? fallback
 }
 
-/** POST /v1/research — body { question, model?, effort? } → { id }. */
+/** POST /v1/research — body { question, model?, effort?, mode? } → { id }. */
 export async function handleResearchCreate(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (!hasJsonContentType(request)) return json({ error: "content-type must be application/json" }, 415)
   const auth = await authorize(request, env, ctx)
@@ -118,7 +118,7 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   const meterDecision = await checkUsagePool(env, { pool: "seat", userKey: seat.userKey, nowMs: now })
   if (!meterDecision.allowed) return json({ error: "usage_limit_exceeded", pool: "seat" }, 429)
 
-  let body: { question?: unknown; model?: unknown; effort?: unknown; owner?: unknown; repo?: unknown }
+  let body: { question?: unknown; model?: unknown; effort?: unknown; mode?: unknown; owner?: unknown; repo?: unknown }
   try {
     body = (await request.json()) as typeof body
   } catch {
@@ -132,6 +132,10 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   if (model === null) return json({ error: "model must be one of: boreas, pyroeis, astraeus" }, 400)
   const effort = body.effort === undefined ? "medium" : parseEffort(body.effort)
   if (effort === null) return json({ error: "effort must be one of: low, medium, high" }, 400)
+  // sig-chat-conversational-mode: the portal's Deep Research toggle. Default "deep"
+  // so an API-key caller (or an older portal) that omits it keeps full research.
+  const mode = body.mode === undefined ? "deep" : parseMode(body.mode)
+  if (mode === null) return json({ error: "mode must be one of: deep, chat" }, 400)
 
   // sig-deep-research-repo-grounding: resolve which indexed repo (if any) to ground
   // this run in — an explicit owner/repo the portal sent, else the caller's own
@@ -163,6 +167,7 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
       question,
       model,
       effort,
+      mode,
       creator: auth.creator,
       ...(repoTarget ? { owner: repoTarget.owner, repo: repoTarget.repo } : {}),
       hasIndexedRepo,

@@ -22,11 +22,18 @@ import {
   buildSynthesisPrompt,
   NO_REPO_ANSWER,
 } from "./prompts"
-import { isCodebaseQuestion, isLowQuality, truncate } from "./text-utils"
+import { isCodebaseQuestion, isLowQuality, isTrivialMessage, truncate } from "./text-utils"
 import type { ResearchModelFn } from "./model"
 import type { SearchQueryResult } from "./search"
 import type { FetchPageResult } from "./fetch-guard"
-import type { QuestionCategory, RepoGrounding, ResearchConfig, ResearchEvent, ResearchSource } from "./types"
+import type {
+  QuestionCategory,
+  RepoGrounding,
+  ResearchConfig,
+  ResearchEvent,
+  ResearchMode,
+  ResearchSource,
+} from "./types"
 
 /** Everything the loop needs from the outside world. All IO is here. */
 export interface EngineDeps {
@@ -34,7 +41,7 @@ export interface EngineDeps {
   runId: string
   config: ResearchConfig
   /** Whether at least one search provider is configured. When false the loop
-   *  degrades gracefully to a model-only answer (see `runWithoutSearch`) instead
+   *  degrades gracefully to a model-only answer (see `runDirectAnswer`) instead
    *  of running the search rounds. */
   hasSearchProvider: boolean
   /** Codebase grounding gathered before the loop from the caller's connected +
@@ -45,6 +52,11 @@ export interface EngineDeps {
   /** Whether the caller has ANY indexed repo. Lets a codebase question with NO
    *  connected repo return a clear "connect a repo" answer instead of a generic one. */
   hasIndexedRepo?: boolean
+  /** The run mode from the portal's Deep Research toggle. `"chat"` (toggle off) is
+   *  a plain conversational reply — one direct model call, repo-grounded when the
+   *  question is about the caller's code, but never a web-search run. `"deep"` (or
+   *  undefined, the back-compat default) runs the full web-research pipeline. */
+  mode?: ResearchMode
   emit: (event: ResearchEvent) => Promise<void> | void
   model: ResearchModelFn
   search: (query: string) => Promise<SearchQueryResult>
@@ -62,31 +74,57 @@ const MAX_REPORT_SOURCES = 30
 const VALID_CATEGORIES: QuestionCategory[] = ["factual", "comparative", "howto", "exploratory", "troubleshooting"]
 const NO_INFO = "NO RELEVANT INFORMATION"
 
+/** The note shown when Deep Research is ON but no search provider is configured —
+ *  the run still answers from the model instead of erroring. Declared here (above
+ *  its use in runResearchLoop) so there's no doubt it's initialized at call time. */
+const NO_SEARCH_NOTE = "Live web search isn't enabled — answering from the model's knowledge."
+
 /**
  * Run the full research loop, emitting the SSE event contract in order. Never
  * throws — any internal failure is surfaced as an `error` event followed by
  * `done`. Always emits a terminal `done`.
  *
- * When NO search provider is configured we DEGRADE GRACEFULLY rather than
- * erroring: the run answers from the model's own knowledge and surfaces a clear
- * (non-error) note, so a user with Deep Research on still gets a real answer
- * instead of a dead error. See `runWithoutSearch`.
+ * Routing: a greeting / trivial message short-circuits to a direct reply; Deep
+ * Research OFF (`mode: "chat"`) answers conversationally with one direct model call
+ * (repo-grounded for codebase questions) and NO web search; Deep Research ON runs
+ * the full pipeline. When NO search provider is configured a run that would have
+ * web-searched DEGRADES GRACEFULLY to a model-only answer with a clear (non-error)
+ * note rather than erroring. See `runDirectAnswer`.
  */
 export async function runResearchLoop(deps: EngineDeps): Promise<void> {
   try {
+    // Greeting / trivial small-talk ("hey!", "thanks") → a short, direct, friendly
+    // reply with NO web research and NO repo retrieval, regardless of the Deep
+    // Research toggle. This is the cheap guard that stops a casual message from
+    // kicking off a multi-round web run (the "hey!" → 23s SearXNG essay bug).
+    if (isTrivialMessage(deps.question)) {
+      await runDirectAnswer(deps)
+      return
+    }
+
     const codebaseQ = isCodebaseQuestion(deps.question)
+    // Deep Research OFF → a plain conversational turn: a single direct model call,
+    // repo-grounded when the question is about the caller's own code, but never a
+    // web-search / multi-round research run.
+    const conversational = deps.mode === "chat"
 
     // Repo grounding retrieved real code → answer from the user's OWN codebase.
-    // For a codebase question (or when no web provider is configured) answer
-    // DIRECTLY from the repo and cite files — no web rounds needed. Otherwise the
-    // repo context is folded into the web loop as authoritative augmentation.
+    // A codebase question (or no web provider configured) is answered DIRECTLY from
+    // the repo with file-path citations — no web rounds. Grounding augments a
+    // CODEBASE question only: a general/non-codebase question is never forced into
+    // repo context just because the caller has a repo connected.
     if (deps.repoGrounding) {
       if (codebaseQ || !deps.hasSearchProvider) {
         await runRepoGrounded(deps, deps.repoGrounding)
         return
       }
-      await runInner(deps)
-      return
+      // Non-codebase question with a connected repo: deep mode folds the repo
+      // context into the web loop as authoritative augmentation. Chat mode never
+      // web-searches, so it falls through to a plain direct answer below.
+      if (!conversational) {
+        await runInner(deps)
+        return
+      }
     }
 
     // Codebase question but NO indexed repo connected → tell them to connect one
@@ -96,10 +134,15 @@ export async function runResearchLoop(deps: EngineDeps): Promise<void> {
       return
     }
 
-    if (!deps.hasSearchProvider) {
-      await runWithoutSearch(deps)
+    // Conversational mode (Deep Research OFF) or no web provider → a single direct
+    // model answer, no web search. Only the no-provider DEGRADATION shows the note;
+    // a conversational reply doesn't — the user turned Deep Research off, so "web
+    // search isn't enabled" would be misleading noise.
+    if (conversational || !deps.hasSearchProvider) {
+      await runDirectAnswer(deps, conversational ? undefined : NO_SEARCH_NOTE)
       return
     }
+
     await runInner(deps)
   } catch (err) {
     await deps.emit({ type: "error", message: err instanceof Error ? err.message : String(err) })
@@ -109,19 +152,17 @@ export async function runResearchLoop(deps: EngineDeps): Promise<void> {
 }
 
 /**
- * Graceful degradation when no search provider is configured: emit the same
- * first `status` (so the UI still gets the resolved model + effort), a clear
- * non-error `note` explaining live search is off, then answer straight from the
- * model and emit a `final` with an empty source list. The caller's `finally`
- * emits the single terminal `done`.
+ * A single direct, conversational model answer with NO web search — the plain-chat
+ * reply (Deep Research off), a greeting / trivial message, or the graceful
+ * degradation when no search provider is configured. Emits the same first `status`
+ * (so the UI still gets the resolved model + effort), an OPTIONAL non-error `note`,
+ * then answers straight from the model and emits a `final` with an empty source
+ * list. The caller's `finally` emits the single terminal `done`.
  */
-async function runWithoutSearch(deps: EngineDeps): Promise<void> {
+async function runDirectAnswer(deps: EngineDeps, note?: string): Promise<void> {
   const { config } = deps
   await deps.emit({ type: "status", phase: "planning", round: 0, model: config.tier, effort: config.effort })
-  await deps.emit({
-    type: "note",
-    text: "Live web search isn't enabled — answering from the model's knowledge.",
-  })
+  if (note) await deps.emit({ type: "note", text: note })
   if (deps.isCancelled()) return cancel(deps)
   await deps.emit({ type: "status", phase: "finalizing", round: 0 })
   const answer = await deps.model("finalReport", toMessages(buildDirectAnswerPrompt(deps.question)))

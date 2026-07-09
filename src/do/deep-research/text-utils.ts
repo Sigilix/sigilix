@@ -42,6 +42,136 @@ export function isCodebaseQuestion(question: string): boolean {
   return CODEBASE_PATTERNS.some((re) => re.test(q))
 }
 
+// sig-chat-conversational-mode — greeting / small-talk / acknowledgement messages
+// that must get a short, direct reply instead of kicking off a web-research run
+// (the "hey!" → 23s SearXNG essay bug). Matched after lowercasing, stripping
+// punctuation/emoji, and collapsing whitespace, so "Hey!!" and "hey" both hit.
+// Deliberately CONSERVATIVE: only WHOLE-message chit-chat matches — a real question
+// that merely opens with a greeting ("hey, where does auth live?") carries extra
+// content and is NOT trivial, so it still routes to grounding / research.
+const TRIVIAL_MESSAGES = new Set<string>([
+  // greetings
+  "hi",
+  "hey",
+  "hello",
+  "heya",
+  "hiya",
+  "yo",
+  "sup",
+  "wassup",
+  "wasup",
+  "whats up",
+  "howdy",
+  "hola",
+  "greetings",
+  "hey there",
+  "hi there",
+  "hello there",
+  "hey sigilix",
+  "hi sigilix",
+  "hello sigilix",
+  "good morning",
+  "good afternoon",
+  "good evening",
+  "good night",
+  "morning",
+  "gm",
+  "gn",
+  // small talk
+  "how are you",
+  "how are you doing",
+  "hows it going",
+  "how is it going",
+  "how goes it",
+  "whats new",
+  "you there",
+  "are you there",
+  "anyone there",
+  "hello world",
+  // thanks
+  "thanks",
+  "thank you",
+  "thanks so much",
+  "thank you so much",
+  "thanks a lot",
+  "thanks a ton",
+  "many thanks",
+  "thx",
+  "ty",
+  "tysm",
+  "cheers",
+  "much appreciated",
+  "appreciate it",
+  "thanks sigilix",
+  // acknowledgements
+  "ok",
+  "okay",
+  "k",
+  "kk",
+  "cool",
+  "nice",
+  "great",
+  "awesome",
+  "perfect",
+  "sweet",
+  "gotcha",
+  "got it",
+  "sounds good",
+  "makes sense",
+  "understood",
+  "noted",
+  "good to know",
+  "fair enough",
+  "no problem",
+  "np",
+  "youre welcome",
+  "yw",
+  "roger",
+  // reactions
+  "lol",
+  "lmao",
+  "haha",
+  "hahaha",
+  "hehe",
+  "nice one",
+  "amazing",
+  "wow",
+  // farewells
+  "bye",
+  "goodbye",
+  "see you",
+  "see ya",
+  "cya",
+  "later",
+  "take care",
+  "talk soon",
+  // connectivity check
+  "ping",
+])
+
+/**
+ * Whether a message is a greeting / acknowledgement / small-talk utterance that
+ * should get a short, direct conversational reply rather than a full web-research
+ * run — even when Deep Research is on. Pure; never throws. Conservative on purpose:
+ * only whole-message chit-chat matches, so a real question that merely starts with
+ * "hey" is not short-circuited.
+ */
+export function isTrivialMessage(question: string): boolean {
+  const norm = question
+    .toLowerCase()
+    .replace(/['\u2019`]/g, "") // drop apostrophes so "what's" → "whats"
+    .replace(/[^a-z0-9\s]/g, " ") // drop remaining punctuation, emoji, symbols
+    .replace(/\s+/g, " ")
+    .trim()
+  if (!norm) {
+    // Empty only because we stripped latin punctuation/emoji. A message that still
+    // holds letters/numbers in ANOTHER script (e.g. CJK) is a real question, not
+    // trivial; pure emoji/punctuation ("👋", "!!!") IS trivial small-talk.
+    return !/[\p{L}\p{N}]/u.test(question)
+  }
+  return TRIVIAL_MESSAGES.has(norm)
+}
+
 export function stripThinking(raw: string): string {
   if (!raw) return ""
   const tags = ["think", "thinking", "reasoning"]

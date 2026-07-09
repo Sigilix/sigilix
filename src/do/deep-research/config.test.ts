@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { resolveResearchConfig, parseTier, parseEffort, TIER_MODELS } from "./config"
+import { resolveResearchConfig, parseTier, parseEffort, parseMode, TIER_MODELS } from "./config"
 import type { Env } from "@/src/shared/types/env"
 
 function env(over: Partial<Env> = {}): Env {
@@ -127,5 +127,14 @@ describe("validators", () => {
     expect(parseEffort("high")).toBe("high")
     expect(parseEffort("extreme")).toBeNull()
     expect(parseEffort(null)).toBeNull()
+  })
+
+  it("parseMode accepts deep + chat, rejects everything else", () => {
+    expect(parseMode("deep")).toBe("deep")
+    expect(parseMode("chat")).toBe("chat")
+    expect(parseMode("web")).toBeNull()
+    expect(parseMode("")).toBeNull()
+    expect(parseMode(undefined)).toBeNull()
+    expect(parseMode(1)).toBeNull()
   })
 })

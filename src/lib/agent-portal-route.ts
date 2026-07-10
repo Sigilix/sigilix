@@ -9,6 +9,8 @@
 //        → { runId, dispatched, status }                        — real dispatch
 //   GET  /v1/agent/runs/:runId
 //        → { runId, status, prUrl?, error? } | null             — run status
+//   GET  /v1/agent/runs/:runId/diff
+//        → { runId, ready, status, files?, additions?, ... }    — opened-PR diff
 //
 // TENANT-SAFETY (the whole point). Every route authorizes SERVER-SIDE that the
 // signed-in session controls the exact installation + repository before doing
@@ -336,6 +338,34 @@ export interface AgentRunResponse {
   error?: string
 }
 
+/** One changed file in a run's opened pull request. `patch` is the unified diff
+ *  hunk GitHub returns (absent for pure-binary or over-large files). */
+export interface AgentDiffFile {
+  path: string
+  status: string
+  additions: number
+  deletions: number
+  patch?: string
+}
+
+/** The diff of the pull request a run opened, for the portal's live diff pane.
+ *  `ready:false` means the run hasn't opened a PR yet (nothing to diff). */
+export interface AgentRunDiffResponse {
+  runId: string
+  ready: boolean
+  status: AgentRunResponse["status"] | "pending"
+  prUrl?: string
+  prNumber?: number
+  files?: AgentDiffFile[]
+  additions?: number
+  deletions?: number
+  /** True when the PR had more changed files than the cap and the list was clipped. */
+  truncated?: boolean
+}
+
+const MAX_DIFF_FILES = 300
+const MAX_DIFF_PAGES = 10
+
 /** A separate default-off portal gate keeps the already-live global runner private. */
 function isPortalAgentRunnerEnabled(env: Env): boolean {
   const config = env as Env & { SIGILIX_PORTAL_AGENT_RUNNER_MODE?: string }
@@ -482,9 +512,176 @@ export async function handleAgentRunStatusRoute(
   return json(record, 200)
 }
 
+/** Parse a github.com pull-request url into `{ owner, repo, number }`; null otherwise. */
+function parsePrUrl(prUrl: string): { owner: string; repo: string; number: number } | null {
+  let u: URL
+  try {
+    u = new URL(prUrl)
+  } catch {
+    return null
+  }
+  if (u.hostname !== "github.com") return null
+  const m = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)$/.exec(u.pathname)
+  if (!m) return null
+  const number = Number(m[3])
+  if (!Number.isSafeInteger(number) || number <= 0) return null
+  return { owner: m[1]!, repo: m[2]!, number }
+}
+
+/** The changed files (unified-diff hunks) of a PR — paginated, and capped so a
+ *  huge PR can never blow the response or the request budget. */
+async function fetchPullRequestFiles(
+  token: string,
+  owner: string,
+  name: string,
+  number: number,
+): Promise<{ files: AgentDiffFile[]; truncated: boolean }> {
+  const files: AgentDiffFile[] = []
+  let truncated = false
+  for (let page = 1; page <= MAX_DIFF_PAGES; page++) {
+    let res: Response
+    try {
+      res = await fetch(
+        `https://api.github.com/repos/${owner}/${name}/pulls/${number}/files?per_page=100&page=${page}`,
+        {
+          headers: githubHeaders(token),
+        },
+      )
+    } catch {
+      break
+    }
+    if (!res.ok) break
+    let body: Array<{ filename?: string; status?: string; additions?: number; deletions?: number; patch?: string }>
+    try {
+      body = (await res.json()) as typeof body
+    } catch {
+      break
+    }
+    if (!Array.isArray(body) || body.length === 0) break
+    for (const f of body) {
+      if (files.length >= MAX_DIFF_FILES) {
+        truncated = true
+        break
+      }
+      if (typeof f.filename !== "string" || !f.filename) continue
+      files.push({
+        path: f.filename,
+        status: typeof f.status === "string" ? f.status : "modified",
+        additions: typeof f.additions === "number" ? f.additions : 0,
+        deletions: typeof f.deletions === "number" ? f.deletions : 0,
+        ...(typeof f.patch === "string" ? { patch: f.patch } : {}),
+      })
+    }
+    if (truncated || body.length < 100) break
+  }
+  return { files, truncated }
+}
+
+/**
+ * GET /v1/agent/runs/:runId/diff — the diff of the pull request a run opened,
+ * for the portal's diff pane.
+ *
+ * Same tenant/IDOR guard as the status route (owner-binding + live repo scope):
+ * a caller can only read the diff of a run they own, for a repo still in their
+ * exact GitHub scope; unknown id and owner-mismatch BOTH 404 (no existence
+ * oracle). `ready:false` (200) until the run has opened a PR — there is simply
+ * nothing to diff yet, which is not an error. The PR coordinates come from the
+ * run record's own `prUrl` and are cross-checked against the owner binding, so
+ * the diff fetch can only ever resolve to the caller's bound repository.
+ */
+export async function handleAgentRunDiffRoute(
+  request: Request,
+  env: Env,
+  runId: string,
+  ctx?: ExecutionContext,
+): Promise<Response> {
+  const authed = await requireSession(request, env, ctx)
+  if (!authed) return json({ error: "unauthenticated" }, 401)
+  if (!runId) return json({ error: "runId required" }, 400)
+
+  const owner = await readAgentRunOwner(env, runId)
+  if (owner === null) return json({ error: "not_found" }, 404)
+  if (authed.record.githubUserId !== owner.githubUserId) return json({ error: "not_found" }, 404)
+
+  const tok = await sessionAccessToken(authed, env)
+  if (!tok.ok) return tok.response
+
+  const owns = await userControlsRepo(tok.token, owner.installationId, owner.owner, owner.repo)
+  if (!owns.ok) {
+    return owns.reason === "not_owned" ? json({ error: "not_found" }, 404) : json({ error: "lookup_failed" }, 502)
+  }
+
+  const record = await getAgentRunStatus(env, runId)
+  const status = record?.status ?? "pending"
+  const prUrl = record?.prUrl
+  if (!prUrl) {
+    return json({ runId, ready: false, status } satisfies AgentRunDiffResponse, 200)
+  }
+
+  const pr = parsePrUrl(prUrl)
+  // The PR must live in the EXACT repository this run was bound to — a stored url
+  // must never be able to point the diff fetch at some other repo.
+  if (
+    !pr ||
+    pr.owner.toLowerCase() !== owner.owner.toLowerCase() ||
+    pr.repo.toLowerCase() !== owner.repo.toLowerCase()
+  ) {
+    return json({ runId, ready: false, status, prUrl } satisfies AgentRunDiffResponse, 200)
+  }
+
+  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
+    console.error(JSON.stringify({ event: "agent-portal-github-app-unconfigured" }))
+    return json({ error: "misconfigured" }, 503)
+  }
+
+  let installationToken: string
+  try {
+    installationToken = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId: owner.installationId,
+    })
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "agent-portal-install-token-failed",
+        installationId: owner.installationId,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return json({ error: "install_token_failed" }, 502)
+  }
+
+  // Fetch against the already-authorized binding (owner.owner/owner.repo), not
+  // the parsed url segments — defense in depth, though the cross-check above
+  // proved they are equal.
+  const { files, truncated } = await fetchPullRequestFiles(installationToken, owner.owner, owner.repo, pr.number)
+  const additions = files.reduce((sum, f) => sum + f.additions, 0)
+  const deletions = files.reduce((sum, f) => sum + f.deletions, 0)
+
+  return json(
+    {
+      runId,
+      ready: true,
+      status,
+      prUrl,
+      prNumber: pr.number,
+      files,
+      additions,
+      deletions,
+      truncated,
+    } satisfies AgentRunDiffResponse,
+    200,
+  )
+}
+
 export function isAgentPortalPath(pathname: string): boolean {
   return (
-    pathname === "/v1/agent/branches" || pathname === "/v1/agent/runs" || /^\/v1\/agent\/runs\/[^/]+$/.test(pathname)
+    pathname === "/v1/agent/branches" ||
+    pathname === "/v1/agent/runs" ||
+    /^\/v1\/agent\/runs\/[^/]+$/.test(pathname) ||
+    /^\/v1\/agent\/runs\/[^/]+\/diff$/.test(pathname)
   )
 }
 
@@ -500,6 +697,16 @@ export async function tryHandleAgentPortalRoute(
   }
   if (request.method === "POST" && url.pathname === "/v1/agent/runs") {
     return handleAgentRunCreateRoute(request, env, ctx)
+  }
+  const diffMatch = /^\/v1\/agent\/runs\/([^/]+)\/diff$/.exec(url.pathname)
+  if (request.method === "GET" && diffMatch) {
+    let runId: string
+    try {
+      runId = decodeURIComponent(diffMatch[1]!)
+    } catch {
+      return json({ error: "bad runId" }, 400)
+    }
+    return handleAgentRunDiffRoute(request, env, runId, ctx)
   }
   const statusMatch = /^\/v1\/agent\/runs\/([^/]+)$/.exec(url.pathname)
   if (request.method === "GET" && statusMatch) {

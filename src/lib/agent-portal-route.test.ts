@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   handleAgentBranchesRoute,
   handleAgentRunCreateRoute,
+  handleAgentRunDiffRoute,
   handleAgentRunStatusRoute,
 } from "@/src/lib/agent-portal-route"
 import { base64urlEncode, createSession } from "@/src/lib/auth-session"
@@ -144,6 +145,15 @@ function stubGithubOwning42(repos = ["acme/api"]) {
           JSON.stringify([
             { name: "main", protected: true },
             { name: "feature/x", protected: false },
+          ]),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      if (url.startsWith("https://api.github.com/repos/acme/api/pulls/7/files?")) {
+        return new Response(
+          JSON.stringify([
+            { filename: "src/a.ts", status: "modified", additions: 5, deletions: 2, patch: "@@ -1 +1 @@\n-old\n+new" },
+            { filename: "src/b.ts", status: "added", additions: 10, deletions: 0, patch: "@@ -0,0 +1 @@\n+added" },
           ]),
           { status: 200, headers: { "content-type": "application/json" } },
         )
@@ -540,5 +550,94 @@ describe("handleAgentRunStatusRoute (GET /v1/agent/runs/:runId)", () => {
     expect(body.runId).toBe("owned")
     expect(body.status).toBe("pending")
     expect(routeMocks.getAgentRunStatus).toHaveBeenCalledWith(env, "owned")
+  })
+})
+
+describe("handleAgentRunDiffRoute (GET /v1/agent/runs/:runId/diff)", () => {
+  it("401 without a session", async () => {
+    const kv = makeKV()
+    const res = await handleAgentRunDiffRoute(reqGet("https://x/v1/agent/runs/abc/diff", null), baseEnv(kv), "abc")
+    expect(res.status).toBe(401)
+  })
+
+  it("404 for an unknown runId (no owner binding — no oracle)", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "s1")
+    stubGithubOwning42()
+    const res = await handleAgentRunDiffRoute(reqGet("https://x/v1/agent/runs/nope/diff", "s1"), baseEnv(kv), "nope")
+    expect(res.status).toBe(404)
+  })
+
+  it("404 when a different GitHub user owns the run (IDOR guard)", async () => {
+    const kv = makeKV()
+    await seedRunOwner(kv, "foreign")
+    await seedSession(kv, "intruder", 222)
+    stubGithubOwning42()
+    const res = await handleAgentRunDiffRoute(
+      reqGet("https://x/v1/agent/runs/foreign/diff", "intruder"),
+      baseEnv(kv),
+      "foreign",
+    )
+    expect(res.status).toBe(404)
+    expect(routeMocks.getAgentRunStatus).not.toHaveBeenCalled()
+  })
+
+  it("ready:false before the run has opened a PR", async () => {
+    const kv = makeKV()
+    await seedRunOwner(kv, "run1")
+    await seedSession(kv, "owner", 111)
+    stubGithubOwning42()
+    routeMocks.getAgentRunStatus.mockResolvedValue({ status: "started" })
+    const env = baseEnv(kv)
+    const res = await handleAgentRunDiffRoute(reqGet("https://x/v1/agent/runs/run1/diff", "owner"), env, "run1")
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ready: boolean; status: string }
+    expect(body.ready).toBe(false)
+    expect(body.status).toBe("started")
+  })
+
+  it("returns the opened PR's diff files with summed additions/deletions", async () => {
+    const kv = makeKV()
+    await seedRunOwner(kv, "run7")
+    await seedSession(kv, "owner", 111)
+    await seedInstallationToken(kv, 42)
+    stubGithubOwning42()
+    routeMocks.getAgentRunStatus.mockResolvedValue({
+      status: "opened",
+      prUrl: "https://github.com/acme/api/pull/7",
+    })
+    const env = baseEnv(kv)
+    const res = await handleAgentRunDiffRoute(reqGet("https://x/v1/agent/runs/run7/diff", "owner"), env, "run7")
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      ready: boolean
+      prNumber: number
+      files: { path: string; additions: number; deletions: number; patch?: string }[]
+      additions: number
+      deletions: number
+    }
+    expect(body.ready).toBe(true)
+    expect(body.prNumber).toBe(7)
+    expect(body.files.map((f) => f.path)).toEqual(["src/a.ts", "src/b.ts"])
+    expect(body.additions).toBe(15)
+    expect(body.deletions).toBe(2)
+    expect(body.files[0]!.patch).toContain("+new")
+  })
+
+  it("ready:false when the run's prUrl points outside its bound repository (cross-repo guard)", async () => {
+    const kv = makeKV()
+    await seedRunOwner(kv, "runX")
+    await seedSession(kv, "owner", 111)
+    await seedInstallationToken(kv, 42)
+    stubGithubOwning42()
+    routeMocks.getAgentRunStatus.mockResolvedValue({
+      status: "opened",
+      prUrl: "https://github.com/acme/other/pull/9",
+    })
+    const env = baseEnv(kv)
+    const res = await handleAgentRunDiffRoute(reqGet("https://x/v1/agent/runs/runX/diff", "owner"), env, "runX")
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ready: boolean }
+    expect(body.ready).toBe(false)
   })
 })

@@ -7,7 +7,7 @@
 // shape routing the ensemble uses.
 
 import { chat, isOpenRouterModel } from "@/src/shared/adapters/model"
-import type { ChatArgs, ChatMessage } from "@/src/shared/ports/model"
+import type { ChatArgs, ChatMessage, ChatToolDef, ToolCall } from "@/src/shared/ports/model"
 import type { Env } from "@/src/shared/types/env"
 import { stripThinking } from "./text-utils"
 import type { ResearchConfig, ResearchModelRole } from "./types"
@@ -17,10 +17,15 @@ import type { ResearchConfig, ResearchModelRole } from "./types"
 export interface ModelCallResult {
   text: string
   tokens: number
+  toolCalls?: ToolCall[]
 }
 
 /** The injectable model function the engine depends on (fakeable in tests). */
-export type ResearchModelFn = (role: ResearchModelRole, messages: ChatMessage[]) => Promise<ModelCallResult>
+export type ResearchModelFn = (
+  role: ResearchModelRole,
+  messages: ChatMessage[],
+  tools?: ChatToolDef[],
+) => Promise<ModelCallResult>
 
 /** Rough token estimate when the provider doesn't report usage (~4 chars/token). */
 function estimateTokens(messages: ChatMessage[], output: string): number {
@@ -40,19 +45,29 @@ function modelForRole(config: ResearchConfig, role: ResearchModelRole): string {
  */
 export function buildModelFn(env: Env, config: ResearchConfig): ResearchModelFn {
   const chatEnabled = env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off"
-  return async (role, messages) => {
+  return async (role, messages, tools) => {
     const model = modelForRole(config, role)
     const apiKey = isOpenRouterModel(model) ? env.OPENROUTER_API_KEY : env.OLLAMA_API_KEY
     if (!apiKey) throw new MissingModelKeyError(model)
 
     const args: ChatArgs = { model, apiKey, messages }
+    if (tools?.length) {
+      args.tools = tools
+      // Tool selection is an auxiliary, single-pass decision and must not
+      // inherit the provider adapter's ten-minute default.
+      args.timeoutMs = 20_000
+    }
     // OpenRouter models ignore chatEnabled; Ollama honors the kill-switch.
     if (!isOpenRouterModel(model)) args.chatEnabled = chatEnabled
     const result = await chat(args)
     const text = stripThinking(result.message.content ?? "")
     const reported = (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0)
     const tokens = reported > 0 ? reported : estimateTokens(messages, text)
-    return { text, tokens }
+    return {
+      text,
+      tokens,
+      ...(result.message.tool_calls?.length ? { toolCalls: result.message.tool_calls } : {}),
+    }
   }
 }
 

@@ -58,6 +58,17 @@ async function seedSession(kv: KVNamespace, sessionId: string, login: string, gi
   })
 }
 
+async function seedProviderSession(kv: KVNamespace, sessionId: string, userId?: string): Promise<void> {
+  await createSession({
+    kv,
+    sessionId,
+    login: "provider-user",
+    ...(userId !== undefined ? { userId } : {}),
+    accessToken: "",
+    encryptionKeyB64url: ENC_KEY,
+  })
+}
+
 /** A fake DurableObjectNamespace whose stub's fetch is fully test-controlled.
  *  Records every idFromName() call so tests can assert per-caller scoping. */
 function makeMcpNamespace(handler: (req: Request) => Promise<Response> | Response) {
@@ -95,6 +106,16 @@ function deleteServer(id: string, cookie?: string): Request {
   const headers = new Headers()
   if (cookie) headers.set("cookie", `${SESSION_COOKIE}=${cookie}`)
   return new Request(`https://api.sigilix.ai/v1/mcp/servers/${id}`, { method: "DELETE", headers })
+}
+
+function serverPolicy(id: string, method: "GET" | "PUT", cookie: string, body?: unknown): Request {
+  const headers = new Headers({ cookie: `${SESSION_COOKIE}=${cookie}` })
+  if (body !== undefined) headers.set("content-type", "application/json")
+  return new Request(`https://api.sigilix.ai/v1/mcp/servers/${id}/policy`, {
+    method,
+    headers,
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  })
 }
 
 async function dispatch(request: Request, env: Env): Promise<Response> {
@@ -153,6 +174,61 @@ describe("POST /v1/mcp/servers", () => {
     expect(doFetch).not.toHaveBeenCalled()
   })
 
+  it("400s a public plaintext HTTP URL before ever reaching the DO", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111)
+    const env = baseEnv({
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: await makeDb(),
+    })
+    const doFetch = vi.fn(() => new Response("should not be called", { status: 500 }))
+    const { namespace } = makeMcpNamespace(doFetch)
+    const res = await dispatch(postServers({ url: "http://example.com/mcp" }, "sess-1"), {
+      ...env,
+      MCP_CONNECTIONS: namespace,
+    })
+    expect(res.status).toBe(400)
+    expect(doFetch).not.toHaveBeenCalled()
+  })
+
+  it("fails closed for a live session with no stable principal id", async () => {
+    const kv = makeKV()
+    await seedProviderSession(kv, "sess-unstable")
+    const env = baseEnv({
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: await makeDb(),
+    })
+    const doFetch = vi.fn(() => new Response("should not be called", { status: 500 }))
+    const { namespace, idFromNameCalls } = makeMcpNamespace(doFetch)
+    const res = await dispatch(postServers({ url: "https://example.com/mcp" }, "sess-unstable"), {
+      ...env,
+      MCP_CONNECTIONS: namespace,
+    })
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ error: "stable_identity_required" })
+    expect(idFromNameCalls).toEqual([])
+  })
+
+  it("uses the persistent user id for a non-GitHub session", async () => {
+    const kv = makeKV()
+    await seedProviderSession(kv, "sess-provider", "user-uuid-1")
+    const env = baseEnv({
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: await makeDb(),
+    })
+    const { namespace, idFromNameCalls } = makeMcpNamespace(
+      () => new Response(JSON.stringify({ status: "connected", id: "srv-1", toolCount: 0 })),
+    )
+    await dispatch(postServers({ url: "https://example.com/mcp" }, "sess-provider"), {
+      ...env,
+      MCP_CONNECTIONS: namespace,
+    })
+    expect(idFromNameCalls).toEqual(["session:user-uuid-1"])
+  })
+
   it("400s on a missing url", async () => {
     const kv = makeKV()
     await seedSession(kv, "sess-1", "octocat", 111)
@@ -186,6 +262,38 @@ describe("POST /v1/mcp/servers", () => {
     expect(body).toMatchObject({ status: "connected", toolCount: 3 })
   })
 
+  it("relays a duplicate-endpoint conflict with the existing server id", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111)
+    const env = baseEnv({
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: await makeDb(),
+    })
+    const { namespace } = makeMcpNamespace(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "error",
+            error: "this MCP server is already connected",
+            existingId: "srv-existing",
+          }),
+          { status: 409 },
+        ),
+    )
+
+    const res = await dispatch(postServers({ url: "https://example.com/mcp" }, "sess-1"), {
+      ...env,
+      MCP_CONNECTIONS: namespace,
+    })
+
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({
+      error: "this MCP server is already connected",
+      existingServerId: "srv-existing",
+    })
+  })
+
   it("relays an auth_required result with its authUrl", async () => {
     const kv = makeKV()
     await seedSession(kv, "sess-1", "octocat", 111)
@@ -210,7 +318,7 @@ describe("POST /v1/mcp/servers", () => {
     expect(body.authUrl).toBe("https://provider/authorize")
   })
 
-  it("rejects an auth_required result for an api-key (tenant) caller — the OAuth callback can only resolve a session scope", async () => {
+  it("rejects and cleans up auth_required for an api-key caller", async () => {
     const db = await makeDb()
     const plaintext = "sigilix_live_mcp_tenant_oauth"
     await insertApiKey(db, {
@@ -221,12 +329,16 @@ describe("POST /v1/mcp/servers", () => {
       nowIso: "2026-01-01T00:00:00Z",
     })
     const env = baseEnv({ OPENCLAW_STATE: makeKV(), SIGILIX_PLATFORM_DB: db })
-    const { namespace } = makeMcpNamespace(
-      () =>
-        new Response(JSON.stringify({ status: "auth_required", id: "srv-1", authUrl: "https://provider/authorize" }), {
-          status: 200,
-        }),
-    )
+    const seen: Request[] = []
+    const { namespace } = makeMcpNamespace(async (request) => {
+      seen.push(request)
+      if (request.method === "DELETE") return new Response(JSON.stringify({ ok: true }))
+      const body = (await request.json()) as { allowOAuth?: boolean }
+      expect(body.allowOAuth).toBe(false)
+      return new Response(
+        JSON.stringify({ status: "auth_required", id: "srv-1", authUrl: "https://provider/authorize" }),
+      )
+    })
     const request = new Request("https://api.sigilix.ai/v1/mcp/servers", {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${plaintext}` },
@@ -236,6 +348,22 @@ describe("POST /v1/mcp/servers", () => {
     expect(res.status).toBe(400)
     const body = (await res.json()) as { error: string }
     expect(body.error).toMatch(/signed-in browser session/)
+    expect(seen.map((request) => request.method)).toEqual(["POST", "DELETE"])
+  })
+
+  it("denies the legacy global bearer because it has no tenant boundary", async () => {
+    const env = baseEnv({ OPENCLAW_STATE: makeKV(), SIGILIX_PLATFORM_DB: await makeDb() })
+    const doFetch = vi.fn(() => new Response("should not be called", { status: 500 }))
+    const { namespace, idFromNameCalls } = makeMcpNamespace(doFetch)
+    const request = new Request("https://api.sigilix.ai/v1/mcp/servers", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${GLOBAL_KEY}` },
+      body: JSON.stringify({ url: "https://example.com/mcp" }),
+    })
+    const res = await dispatch(request, { ...env, MCP_CONNECTIONS: namespace })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: "tenant_scope_required" })
+    expect(idFromNameCalls).toEqual([])
   })
 
   it("scopes different sessions to different DO instances (cross-seat isolation)", async () => {
@@ -355,6 +483,68 @@ describe("DELETE /v1/mcp/servers/:id", () => {
   })
 })
 
+describe("GET/PUT /v1/mcp/servers/:id/policy", () => {
+  it("relays the owning DO's stable policy envelope", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111)
+    const env = baseEnv({
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: await makeDb(),
+    })
+    const envelope = {
+      server: { id: "srv-1", name: "Linear", url: "https://mcp.linear.app/mcp", status: "ready", vendorId: "linear" },
+      policy: {
+        version: 0,
+        enabled: true,
+        readOnly: true,
+        surfaces: { chat: true, deepResearch: true },
+        allowedReadTools: ["list_comments"],
+        maxCallsPerRun: 4,
+      },
+      tools: [],
+      blockedToolCount: 0,
+      dataSensitivity: "linear-account-data",
+    }
+    const { namespace, idFromNameCalls } = makeMcpNamespace(() => new Response(JSON.stringify(envelope)))
+    const response = await dispatch(serverPolicy("srv-1", "GET", "sess-1"), {
+      ...env,
+      MCP_CONNECTIONS: namespace,
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual(envelope)
+    expect(idFromNameCalls).toEqual(["session:111"])
+  })
+
+  it("forwards a bounded policy update and preserves a 409 stale version", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111)
+    const env = baseEnv({
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: await makeDb(),
+    })
+    const seen = vi.fn(async (request: Request) => {
+      expect(request.method).toBe("PUT")
+      expect(await request.json()).toMatchObject({ version: 0, enabled: false })
+      return new Response(JSON.stringify({ error: "stale_version" }), { status: 409 })
+    })
+    const { namespace } = makeMcpNamespace(seen)
+    const response = await dispatch(
+      serverPolicy("srv-1", "PUT", "sess-1", {
+        version: 0,
+        enabled: false,
+        surfaces: { chat: false, deepResearch: false },
+        allowedReadTools: [],
+        maxCallsPerRun: 0,
+      }),
+      { ...env, MCP_CONNECTIONS: namespace },
+    )
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ error: "stale_version" })
+  })
+})
+
 describe("OPTIONS preflight", () => {
   it("answers a preflight for the allowlisted portal origin", async () => {
     const env = baseEnv({ OPENCLAW_STATE: makeKV(), SIGILIX_PLATFORM_DB: await makeDb() })
@@ -377,6 +567,23 @@ describe("OPTIONS preflight", () => {
     })
     const res = await dispatch(request, { ...env, MCP_CONNECTIONS: namespace })
     expect(res.status).toBe(403)
+  })
+})
+
+describe("runtime routes stay internal to the Durable Object", () => {
+  it("does not expose /v1/mcp/runtime/invoke through the public dispatcher", async () => {
+    const request = new Request("https://api.sigilix.ai/v1/mcp/runtime/invoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    })
+    const result = await tryHandleMcpRoute(
+      request,
+      baseEnv({ OPENCLAW_STATE: makeKV(), SIGILIX_PLATFORM_DB: await makeDb() }),
+      { waitUntil: () => undefined } as unknown as ExecutionContext,
+      new URL(request.url),
+    )
+    expect(result).toBeNull()
   })
 })
 

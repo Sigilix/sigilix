@@ -1,8 +1,8 @@
 // sig-dashboard-review-config — pipeline coverage for the dashboard-config merge
 // point in `fetchDiffAndConfig`. Proves the 4-level precedence AND the recall-
-// safety guarantee: a dashboard config that tries to LOWER EVERYTHING can never
-// drop the file/scanners that would surface a seeded P0 — only a committed
-// `sigilix.json` (config-as-code) can, and it wins when present.
+// safety guarantee: a dashboard config that tries to LOWER EVERYTHING is
+// rejected by the closed schema and can never drop the file/scanners that would
+// surface a seeded P0. Only committed `sigilix.json` can carry that policy.
 
 import { describe, expect, it } from "vitest"
 import { fetchDiffAndConfig, type FetchDiffAndConfigArgs } from "@/src/lib/ensemble/app/context/fetch-and-pack"
@@ -78,15 +78,19 @@ const LOWER_EVERYTHING = JSON.stringify({
 describe("fetchDiffAndConfig — dashboard config merge", () => {
   it("RECALL-SAFETY: a 'lower everything' dashboard config cannot drop the P0's file or scanners", async () => {
     const env = makeEnv()
-    await writeDashboardReviewConfig(env, INSTALLATION_ID, LOWER_EVERYTHING)
-    // Sanity: the blob really is stored under the org key.
-    expect(await env.OPENCLAW_STATE.get(orgConfigKey(INSTALLATION_ID))).not.toBeNull()
+    const write = await writeDashboardReviewConfig(env, INSTALLATION_ID, LOWER_EVERYTHING)
+    expect(write.ok).toBe(false)
+    expect(await env.OPENCLAW_STATE.get(orgConfigKey(INSTALLATION_ID))).toBeNull()
+
+    // Defense in depth: even a stale/out-of-band blob written before the closed
+    // schema shipped fails soft on read instead of entering the runtime merge.
+    await env.OPENCLAW_STATE.put(orgConfigKey(INSTALLATION_ID), LOWER_EVERYTHING)
 
     const res = await fetchDiffAndConfig(baseArgs(env, makeClient(null))) // no committed file
     const cfg = res.sigilixConfig
 
-    // Suppression-capable fields are STRIPPED from the dashboard layer → the auth
-    // file is never filtered out, and every deterministic scanner stays ON.
+    // The whole invalid dashboard layer is ignored → the auth file is never
+    // filtered out, and every deterministic scanner stays ON.
     expect(cfg.pathFilters).toBeUndefined()
     expect(cfg.costControls).toBeUndefined()
     expect(cfg.depVulnScan).toBeUndefined()
@@ -97,13 +101,8 @@ describe("fetchDiffAndConfig — dashboard config merge", () => {
     // No label gate is imposed by the dashboard → review is NOT skipped.
     expect(resolveCostControlsConfig(cfg).runOnLabels).toEqual([])
 
-    // Shaping fields DO apply (they can't lower recall — profile only shifts the
-    // advisory-nit floor). The lenient guidance is preserved BUT wrapped in the
-    // additive-only frame that forbids suppressing a security/logic/P0-P1 finding,
-    // so even "skip security nitpicks" cannot silence a real P0.
-    expect(cfg.profile).toBe("chill")
-    expect(cfg.guidance).toContain("be lenient, skip security nitpicks")
-    expect(cfg.guidance).toMatch(/never .*downgrade, omit, or stay silent on a security, logic, or high-severity/i)
+    expect(cfg.profile).toBeUndefined()
+    expect(cfg.guidance).toBeUndefined()
   })
 
   it("dashboard shaping applies (framed) when there is NO committed file", async () => {
@@ -111,12 +110,19 @@ describe("fetchDiffAndConfig — dashboard config merge", () => {
     await writeDashboardReviewConfig(
       env,
       INSTALLATION_ID,
-      JSON.stringify({ guidance: "enforce our error-handling convention", profile: "assertive" }),
+      JSON.stringify({
+        guidance: "enforce our error-handling convention",
+        profile: "assertive",
+        overview: { showSummary: false, showConfidence: false },
+        preMergeGates: { linkedIssue: { enabled: false } },
+      }),
     )
     const res = await fetchDiffAndConfig(baseArgs(env, makeClient(null)))
     expect(res.sigilixConfig.guidance).toContain("enforce our error-handling convention")
     expect(res.sigilixConfig.guidance).toContain("ORG REVIEW PREFERENCES")
     expect(res.sigilixConfig.profile).toBe("assertive")
+    expect(res.sigilixConfig.overview).toEqual({ showSummary: false, showConfidence: false })
+    expect(res.sigilixConfig.preMergeGates).toEqual({ linkedIssue: { enabled: false } })
   })
 
   it("PRECEDENCE: a committed sigilix.json WINS over the dashboard config", async () => {
@@ -124,16 +130,28 @@ describe("fetchDiffAndConfig — dashboard config merge", () => {
     await writeDashboardReviewConfig(
       env,
       INSTALLATION_ID,
-      JSON.stringify({ guidance: "dashboard guidance", profile: "assertive" }),
+      JSON.stringify({
+        guidance: "dashboard guidance",
+        profile: "assertive",
+        overview: { showSummary: false, showConfidence: false },
+        preMergeGates: { linkedIssue: { enabled: false } },
+      }),
     )
     // Committed file sets guidance + a real pathFilter (config-as-code retains
     // file-drop power). Its guidance must win; the dashboard profile (absent from
     // the committed file) still falls through.
-    const committed = JSON.stringify({ guidance: "committed guidance", pathFilters: ["dist/**"] })
+    const committed = JSON.stringify({
+      guidance: "committed guidance",
+      pathFilters: ["dist/**"],
+      overview: { showSummary: true },
+      preMergeGates: { linkedIssue: { enabled: true, severity: "error" } },
+    })
     const res = await fetchDiffAndConfig(baseArgs(env, makeClient(committed)))
     expect(res.sigilixConfig.guidance).toBe("committed guidance") // committed wins
     expect(res.sigilixConfig.pathFilters).toEqual(["dist/**"]) // committed file keeps file-drop power
     expect(res.sigilixConfig.profile).toBe("assertive") // dashboard shaping fills the gap
+    expect(res.sigilixConfig.overview).toEqual({ showSummary: true, showConfidence: false })
+    expect(res.sigilixConfig.preMergeGates).toEqual({ linkedIssue: { enabled: true, severity: "error" } })
   })
 
   it("no dashboard config + no committed file → built-in defaults (no regression)", async () => {

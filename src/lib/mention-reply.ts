@@ -34,6 +34,15 @@ import { AGENT_SYSTEM_PROMPT } from "@/src/prompts/agent-system"
 import { parseBranchNamespace } from "./index-branch"
 import { extractCodeCitations, verifyAndSanitizeCitations } from "./citation-verifier"
 import { captureInstructiveLearning } from "@/src/features/learnings"
+import {
+  codebaseContextEnabled,
+  codebaseToolsEnabled,
+  getLinearConfig,
+  resolveLinearTeamBinding,
+  teamIsSelected,
+  type LinearConfig,
+  type LinearTenantContext,
+} from "@/src/features/linear-integration"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 // Note: no HTML-comment marker in the rendered body. Linear renders
@@ -149,6 +158,19 @@ export async function resolveLinearAgentRepoScope(
   }
 }
 
+async function resolveTenantLinearRepoScope(
+  env: Env,
+  teamRepo: { owner: string; repo: string } | null,
+): Promise<LinearAgentRepoScope> {
+  if (!teamRepo) return { repo: null, mappedRepo: null, availableRepos: [], status: "unmapped" }
+  const namespace = indexNamespace(teamRepo.owner, teamRepo.repo)
+  const manifest = await readRepoIndexManifest(env, teamRepo.owner, teamRepo.repo)
+  if (manifest.kind !== "ok") {
+    return { repo: null, mappedRepo: namespace, availableRepos: [], status: "mapped_not_indexed" }
+  }
+  return { repo: namespace, mappedRepo: namespace, availableRepos: [namespace], status: "mapped_indexed" }
+}
+
 interface MentionVerdict {
   answer: string
   confidence: number
@@ -164,6 +186,7 @@ export interface HandleMentionOpts {
    *  if absent so existing callers and any redelivered pre-SIG-225
    *  jobs keep the legacy behavior. */
   triggerReason?: "mention" | "thread-followup"
+  tenant?: LinearTenantContext
 }
 
 /**
@@ -270,12 +293,55 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
     return
   }
 
-  const linear = await buildLinearClient(env)
+  const tenant = opts.tenant
+  const linear = await buildLinearClient(env, tenant)
   const data = await linear.getCommentWithIssue(commentId)
   log("comment-fetched")
   if (!data) {
     console.warn("comment not found", { commentId })
     return
+  }
+
+  let tenantConfig: LinearConfig | null = null
+  let tenantRepo: { owner: string; repo: string } | null = null
+  if (tenant) {
+    const [config, binding] = await Promise.all([
+      getLinearConfig(env, tenant.installationId),
+      resolveLinearTeamBinding(env, tenant.organizationId, data.issue.team.id),
+    ])
+    tenantConfig = config
+    const parts = binding?.githubRepoFullName.split("/") ?? []
+    const valid =
+      !!config &&
+      !!binding &&
+      binding.installationId === tenant.installationId &&
+      binding.accessState === "allowed" &&
+      binding.githubRepoId > 0 &&
+      parts.length === 2 &&
+      !!parts[0] &&
+      !!parts[1] &&
+      (tenant.teamId === undefined || tenant.teamId === data.issue.team.id) &&
+      teamIsSelected(config, data.issue.team.id)
+    if (!valid) {
+      if (!config || config.writeback.comments) {
+        try {
+          await linear.createComment(
+            data.issue.id,
+            "**Sigilix configuration warning** — this Linear team is not bound to an accessible repository in the connected GitHub installation.",
+            resolveReplyParentId(data),
+          )
+        } catch {
+          // Best-effort visibility; the tenant guard still fails closed.
+        }
+      }
+      log("missing-tenant-binding", { teamId: data.issue.team.id })
+      return
+    }
+    tenantRepo = { owner: parts[0]!, repo: parts[1]! }
+    if (!config.writeback.comments) {
+      log("comment-writeback-disabled", { teamId: data.issue.team.id })
+      return
+    }
   }
 
   // Skip self — never reply to our own comments. Linear's webhook fires
@@ -310,11 +376,27 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
   // codebase retrieval. Values must be explicit `{ owner, repo }`
   // objects so the agent can scope all indexed namespaces to the
   // requesting tenant owner before advertising or enforcing them.
-  const teamRepo = parseTeamGithubRepo(env.OPENCLAW_TEAM_GITHUB_REPO_MAP, teamKey)
-  const repoScope = await resolveLinearAgentRepoScope(env, teamRepo)
+  const teamRepo = tenantRepo ?? parseTeamGithubRepo(env.OPENCLAW_TEAM_GITHUB_REPO_MAP, teamKey)
+  const contextEnabled = !tenantConfig || codebaseContextEnabled(tenantConfig)
+  const contextToolsEnabled = !tenantConfig || codebaseToolsEnabled(tenantConfig)
+  const repoScope = contextEnabled
+    ? tenant
+      ? await resolveTenantLinearRepoScope(env, teamRepo)
+      : await resolveLinearAgentRepoScope(env, teamRepo)
+    : { repo: null, mappedRepo: null, availableRepos: [], status: "unmapped" as const }
   const inferRepo = (): { owner: string; repo: string } | null => teamRepo
-  const prRefs = extractPullRequestRefs(fullQuestion, inferRepo)
-  const { contexts: linkedPrs, failures: linkedPrFailures } = await fetchLinkedPrs(prRefs, env)
+  const prRefs = contextEnabled
+    ? extractPullRequestRefs(fullQuestion, inferRepo).filter(
+        (ref) =>
+          !tenant ||
+          (teamRepo !== null &&
+            ref.owner.toLowerCase() === teamRepo.owner.toLowerCase() &&
+            ref.repo.toLowerCase() === teamRepo.repo.toLowerCase()),
+      )
+    : []
+  const { contexts: linkedPrs, failures: linkedPrFailures } = contextEnabled
+    ? await fetchLinkedPrs(prRefs, env)
+    : { contexts: [], failures: [] }
   log("linked-prs", {
     refs: prRefs.length,
     fetched: linkedPrs.length,
@@ -324,13 +406,15 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
   // Codebase retrieval scoped to the issue's team. Soft-fails to empty.
   const retrievalText = `${data.issue.title}\n\n${question}`
   const retrievalTeamKey = linearRetrievalTeamKey(teamRepo)
-  const chunks = retrievalTeamKey
-    ? await retrieveChunks({
-        text: retrievalText,
-        teamKey: retrievalTeamKey,
-        env,
-      })
-    : []
+  const chunks =
+    contextEnabled && retrievalTeamKey
+      ? await retrieveChunks({
+          text: retrievalText,
+          teamKey: retrievalTeamKey,
+          env,
+          ...(tenantRepo ? { namespace: `${tenantRepo.owner}/${tenantRepo.repo}` } : {}),
+        })
+      : []
   log("retrieval-done", { chunks: chunks.length, namespace: retrievalTeamKey })
 
   const askerHandle = data.user?.displayName ?? data.user?.name ?? "there"
@@ -351,7 +435,7 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
   let verdict: MentionVerdict | null = null
 
-  if (env.OPENCLAW_AGENTIC_LINEAR_MODE === "on") {
+  if (env.OPENCLAW_AGENTIC_LINEAR_MODE === "on" && contextToolsEnabled) {
     log("agent-loop-start")
     // Resolved once so the prompt's advisory list and the tool's
     // hard enforcement can't drift (CR PR #30 caught the gap where
@@ -453,13 +537,18 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
     return
   }
 
-  const verifiedAnswer = await verifyLinearMentionCitations({
-    env,
-    teamRepo,
-    retrievedChunks: chunks,
-    answer: verdict.answer,
-    log,
-  })
+  const verifiedAnswer = contextEnabled
+    ? await verifyLinearMentionCitations({
+        env,
+        teamRepo,
+        retrievedChunks: chunks,
+        answer: verdict.answer,
+        log,
+        ...(tenant ? { installationId: tenant.installationId } : {}),
+      })
+    : extractCodeCitations(verdict.answer).length > 0
+      ? appendCitationVerificationUnavailable(verdict.answer, "codebase context is disabled")
+      : verdict.answer
   const body = formatReply({ verdict: { ...verdict, answer: verifiedAnswer }, askerHandle })
   const replyParentId = resolveReplyParentId(data)
   const newCommentId = await linear.createComment(data.issue.id, body, replyParentId)
@@ -488,7 +577,11 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
   // surface — ordinary questions never pass. Ships dark behind
   // OPENCLAW_LEARNINGS_MODE + OPENCLAW_ORG_MEMORY_CAPTURE. Best-effort, non-fatal.
   if (teamRepo) {
-    const inst = resolveInstallation(teamRepo.owner, teamRepo.repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
+    const inst = tenant
+      ? { ok: true as const, installationId: tenant.installationId }
+      : env.LINEAR_TOKEN_BROKER
+        ? { ok: false as const }
+        : resolveInstallation(teamRepo.owner, teamRepo.repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
     if (inst.ok) {
       await captureInstructiveLearning({
         env,
@@ -784,6 +877,7 @@ async function verifyLinearMentionCitations(args: {
   retrievedChunks: RetrievedChunk[]
   answer: string
   log: (label: string, extra?: Record<string, unknown>) => void
+  installationId?: number
 }): Promise<string> {
   if (extractCodeCitations(args.answer).length === 0) return args.answer
   if (!args.teamRepo) {
@@ -796,7 +890,9 @@ async function verifyLinearMentionCitations(args: {
     return appendCitationVerificationUnavailable(args.answer, "state storage is unavailable")
   }
   const { owner, repo } = args.teamRepo
-  const installation = resolveInstallation(owner, repo, args.env.OPENCLAW_GITHUB_INSTALLATION_MAP)
+  const installation = args.installationId
+    ? { ok: true as const, installationId: args.installationId }
+    : resolveInstallation(owner, repo, args.env.OPENCLAW_GITHUB_INSTALLATION_MAP)
   if (!installation.ok) {
     return appendCitationVerificationUnavailable(args.answer, `no GitHub installation for ${owner}/${repo}`)
   }

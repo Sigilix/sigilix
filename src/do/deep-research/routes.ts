@@ -13,8 +13,8 @@
 // portal-cors.ts's hasJsonContentType doc comment) because the session cookie is
 // SameSite=None.
 
-import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
-import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
+import type { AuthedSession } from "@/src/lib/auth-middleware"
+import { LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { getInstallationsForUser } from "@/src/lib/api-key-store"
 import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { listGithubUserInstallationRepos } from "@/src/lib/github-user-repo-scope"
@@ -26,6 +26,7 @@ import {
   isFullPaidStatus,
 } from "@/src/features/tenancy"
 import { resolveInstallationPlan } from "@/src/lib/resolve-plan"
+import { requireRuntimePrincipal } from "@/src/lib/runtime-principal"
 import { parseEffort, parseMode, parseTier } from "./config"
 import { CREATOR_HEADER } from "./deep-research-do"
 import { isCodebaseQuestion, resolveRepoTarget } from "./repo-grounding"
@@ -46,21 +47,12 @@ type CallerAuth = { creator: string; installationId?: number; session?: AuthedSe
  * the caller's exact authorized repo scope for codebase grounding.
  */
 async function authorize(request: Request, env: Env, ctx: ExecutionContext): Promise<CallerAuth> {
-  const session = await requireSession(request, env, ctx)
-  // sig-user-identity: prefer the provider-agnostic user_id so Google /
-  // email-password sessions (no githubUserId) get a distinct, non-colliding
-  // creator instead of all sharing "session:undefined".
-  if (session) {
-    return {
-      creator: `session:${session.record.githubUserId ?? session.record.userId ?? "anon"}`,
-      session,
-    }
+  const auth = await requireRuntimePrincipal(request, env, ctx)
+  if ("response" in auth) return auth
+  if (auth.principal.kind === "session") {
+    return { creator: auth.principal.scope, session: auth.principal.session }
   }
-  const tenant = await requireApiTenant(request, env, ctx)
-  if ("caller" in tenant) {
-    return { creator: `tenant:${tenant.caller.installationId}`, installationId: tenant.caller.installationId }
-  }
-  return { response: tenant.response }
+  return { creator: auth.principal.scope, installationId: auth.principal.installationId }
 }
 
 /**

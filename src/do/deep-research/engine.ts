@@ -24,6 +24,8 @@ import {
 } from "./prompts"
 import { isCodebaseQuestion, isLowQuality, isTrivialMessage, truncate } from "./text-utils"
 import type { ResearchModelFn } from "./model"
+import type { ResearchMcpRuntime } from "./mcp-runtime"
+import { describeMcpEvidence, selectMcpEvidence, withMcpEvidence, type ResearchMcpEvidence } from "./mcp-tools"
 import type { SearchQueryResult } from "./search"
 import type { FetchPageResult } from "./fetch-guard"
 import type {
@@ -59,6 +61,9 @@ export interface EngineDeps {
   mode?: ResearchMode
   emit: (event: ResearchEvent) => Promise<void> | void
   model: ResearchModelFn
+  /** Authenticated creator-scoped read-only MCP runtime. Omitted for anonymous
+   *  or otherwise unstable identities. */
+  mcp?: ResearchMcpRuntime
   search: (query: string) => Promise<SearchQueryResult>
   fetchPage: (url: string) => Promise<FetchPageResult>
   isCancelled: () => boolean
@@ -115,14 +120,14 @@ export async function runResearchLoop(deps: EngineDeps): Promise<void> {
     // repo context just because the caller has a repo connected.
     if (deps.repoGrounding) {
       if (codebaseQ || !deps.hasSearchProvider) {
-        await runRepoGrounded(deps, deps.repoGrounding)
+        await runRepoGrounded(deps, deps.repoGrounding, await gatherMcpEvidence(deps))
         return
       }
       // Non-codebase question with a connected repo: deep mode folds the repo
       // context into the web loop as authoritative augmentation. Chat mode never
       // web-searches, so it falls through to a plain direct answer below.
       if (!conversational) {
-        await runInner(deps)
+        await runInner(deps, await gatherMcpEvidence(deps))
         return
       }
     }
@@ -139,11 +144,11 @@ export async function runResearchLoop(deps: EngineDeps): Promise<void> {
     // a conversational reply doesn't — the user turned Deep Research off, so "web
     // search isn't enabled" would be misleading noise.
     if (conversational || !deps.hasSearchProvider) {
-      await runDirectAnswer(deps, conversational ? undefined : NO_SEARCH_NOTE)
+      await runDirectAnswer(deps, conversational ? undefined : NO_SEARCH_NOTE, await gatherMcpEvidence(deps))
       return
     }
 
-    await runInner(deps)
+    await runInner(deps, await gatherMcpEvidence(deps))
   } catch (err) {
     await deps.emit({ type: "error", message: err instanceof Error ? err.message : String(err) })
   } finally {
@@ -159,13 +164,21 @@ export async function runResearchLoop(deps: EngineDeps): Promise<void> {
  * then answers straight from the model and emits a `final` with an empty source
  * list. The caller's `finally` emits the single terminal `done`.
  */
-async function runDirectAnswer(deps: EngineDeps, note?: string): Promise<void> {
+async function runDirectAnswer(
+  deps: EngineDeps,
+  note?: string,
+  mcpEvidence?: ResearchMcpEvidence | null,
+): Promise<void> {
   const { config } = deps
   await deps.emit({ type: "status", phase: "planning", round: 0, model: config.tier, effort: config.effort })
+  if (mcpEvidence) await deps.emit({ type: "note", text: describeMcpEvidence(mcpEvidence) })
   if (note) await deps.emit({ type: "note", text: note })
   if (deps.isCancelled()) return cancel(deps)
   await deps.emit({ type: "status", phase: "finalizing", round: 0 })
-  const answer = await deps.model("finalReport", toMessages(buildDirectAnswerPrompt(deps.question)))
+  const answer = await deps.model(
+    "finalReport",
+    toMessages(withMcpEvidence(buildDirectAnswerPrompt(deps.question), mcpEvidence)),
+  )
   // Re-check after the (awaited) model call so a /cancel that lands mid-answer
   // wins the race — emit the cancel note instead of a stale final.
   if (deps.isCancelled()) return cancel(deps)
@@ -179,9 +192,14 @@ async function runDirectAnswer(deps: EngineDeps, note?: string): Promise<void> {
  * context — no web rounds. This is the moat: "where does X live in our repo?" now
  * answers with real file paths instead of a generic web essay.
  */
-async function runRepoGrounded(deps: EngineDeps, grounding: RepoGrounding): Promise<void> {
+async function runRepoGrounded(
+  deps: EngineDeps,
+  grounding: RepoGrounding,
+  mcpEvidence?: ResearchMcpEvidence | null,
+): Promise<void> {
   const { config } = deps
   await deps.emit({ type: "status", phase: "planning", round: 0, model: config.tier, effort: config.effort })
+  if (mcpEvidence) await deps.emit({ type: "note", text: describeMcpEvidence(mcpEvidence) })
   await deps.emit({
     type: "note",
     text: `Grounding this answer in your connected repository (${grounding.namespace}).`,
@@ -196,7 +214,7 @@ async function runRepoGrounded(deps: EngineDeps, grounding: RepoGrounding): Prom
     repoContext: grounding.context,
     sources: grounding.sources,
   })
-  const answer = await deps.model("finalReport", toMessages(prompt))
+  const answer = await deps.model("finalReport", toMessages(withMcpEvidence(prompt, mcpEvidence)))
   // Re-check after the awaited model call so a mid-answer /cancel wins the race.
   if (deps.isCancelled()) return cancel(deps)
   await deps.emit({ type: "final", markdown: answer.text, sources: grounding.sources })
@@ -215,10 +233,10 @@ async function runNoRepo(deps: EngineDeps): Promise<void> {
   await deps.emit({ type: "final", markdown: NO_REPO_ANSWER, sources: [] })
 }
 
-async function runInner(deps: EngineDeps): Promise<void> {
+async function runInner(deps: EngineDeps, mcpEvidence?: ResearchMcpEvidence | null): Promise<void> {
   const { config } = deps
   const start = deps.now()
-  let tokensUsed = 0
+  let tokensUsed = mcpEvidence?.tokens ?? 0
   const track = (n: number): void => {
     tokensUsed += n
   }
@@ -227,7 +245,8 @@ async function runInner(deps: EngineDeps): Promise<void> {
   // ONLY this first status carries model + effort (the UI reads them here);
   // every other status event omits them (the original contract shape).
   await deps.emit({ type: "status", phase: "planning", round: 0, model: config.tier, effort: config.effort })
-  const planPrompt = buildPlanPrompt(deps.question)
+  if (mcpEvidence) await deps.emit({ type: "note", text: describeMcpEvidence(mcpEvidence) })
+  const planPrompt = withMcpEvidence(buildPlanPrompt(deps.question), mcpEvidence)
   const plan = await deps.model("planner", toMessages(planPrompt))
   track(plan.tokens)
   await deps.emit({ type: "plan", text: plan.text })
@@ -334,9 +353,29 @@ async function runInner(deps: EngineDeps): Promise<void> {
     sources: sourceList,
     ...(repoContext ? { repoContext } : {}),
   })
-  const report = await deps.model("finalReport", toMessages(reportPrompt))
+  const report = await deps.model("finalReport", toMessages(withMcpEvidence(reportPrompt, mcpEvidence)))
   track(report.tokens)
   await deps.emit({ type: "final", markdown: report.text, sources: sourceList })
+}
+
+async function gatherMcpEvidence(deps: EngineDeps): Promise<ResearchMcpEvidence | null> {
+  if (!deps.mcp || deps.isCancelled()) return null
+  try {
+    return await selectMcpEvidence({
+      question: deps.question,
+      surface: deps.mode === "chat" ? "chat" : "deep-research",
+      model: deps.model,
+      runtime: deps.mcp,
+    })
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "research-mcp-evidence-failed",
+        err: err instanceof Error ? err.name : "unknown",
+      }),
+    )
+    return null
+  }
 }
 
 /** Emit the cooperative-cancellation note. `done` is emitted by the caller's finally. */

@@ -1464,6 +1464,9 @@ export interface Env {
   // Install hardening: when SET, the actor=app OAuth callback only accepts installs
   // from this Linear organization id; UNSET → install allowed + a warning is logged.
   OPENCLAW_LINEAR_ALLOWED_ORG_ID?: string
+  /** SIG-242 dogfood-only cutover: the GitHub installation allowed to migrate/read the pre-tenant singleton. Both this and the
+   * allowed Linear org id must match; unset disables the legacy seam. */
+  OPENCLAW_LINEAR_LEGACY_INSTALLATION_ID?: string
 
   // SIG-144 (Linear unification cutover, slice 4): flag-gates `buildLinearAuth`'s
   // credential choice (src/lib/linear.ts).

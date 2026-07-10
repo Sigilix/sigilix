@@ -220,11 +220,11 @@ describe("triageIssue — SIG-38 free-launch Linear-triage rate-limit gate", () 
 })
 
 // ── SIG-144 slice 4 spot-check: the REAL caller (triageIssue) under unified
-// mode, through the REAL buildLinearAuth/buildLinearClient — not the
-// per-suite LinearClientMock above. Proves the production wiring, not just
+// mode, through the REAL tenant-scoped buildLinearAuth/buildLinearClient — not
+// the per-suite LinearClientMock above. Proves the production wiring, not just
 // that triageIssue calls *a* mocked client.
-describe("triageIssue — SIG-144 slice 4 spot-check (real buildLinearAuth/buildLinearClient under unified mode)", () => {
-  it("OPENCLAW_LINEAR_UNIFIED=on routes triageIssue's Linear calls through the broker agent token, never the human LINEAR_API_KEY", async () => {
+describe("triageIssue — tenant-scoped unified Linear auth", () => {
+  it("routes triageIssue through the exact organization shard and never the human LINEAR_API_KEY", async () => {
     const actual = await vi.importActual<typeof import("@/src/lib/linear")>("@/src/lib/linear")
     mockBuildLinearClient.mockImplementationOnce(actual.buildLinearClient)
 
@@ -235,16 +235,17 @@ describe("triageIssue — SIG-144 slice 4 spot-check (real buildLinearAuth/build
       }),
     )
 
+    const idFromName = vi.fn((n: string) => ({ toString: () => n }))
     const env = {
       OLLAMA_API_KEY: "fake-ollama-key",
       OPENCLAW_STATE: {} as unknown as KVNamespace,
       OPENCLAW_LINEAR_UNIFIED: "on",
       LINEAR_API_KEY: "human-key-must-never-be-used",
       LINEAR_TOKEN_BROKER: {
-        idFromName: (n: string) => ({ toString: () => n }),
+        idFromName,
         get: () => ({
-          getValidToken: async () => ({ ok: true, accessToken: "agent-token-xyz" }),
-          forceRefresh: async () => ({ ok: false, reason: "not-installed" }),
+          getValidTenantToken: async () => ({ ok: true, accessToken: "agent-token-xyz" }),
+          forceRefreshTenant: async () => ({ ok: false, reason: "not-installed" }),
         }),
       },
     } as unknown as Env
@@ -252,8 +253,11 @@ describe("triageIssue — SIG-144 slice 4 spot-check (real buildLinearAuth/build
     // issue:null short-circuits triageIssue right after getIssue (before the
     // rate-limit gate / model call / comment post) — the minimal real path
     // that still proves buildLinearAuth picked the broker token.
-    await withFixedNow(() => triageIssue("issue-missing", env))
+    await withFixedNow(() =>
+      triageIssue("issue-missing", env, { organizationId: "org-1", installationId: 42, teamId: "team-1" }),
+    )
 
+    expect(idFromName).toHaveBeenCalledWith("linear-org:v1:org-1")
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     const authHeader = (init.headers as Record<string, string>).authorization

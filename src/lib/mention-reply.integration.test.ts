@@ -225,18 +225,19 @@ describe("handleMention — SIG-207 retrieval proof", () => {
 })
 
 // ── SIG-144 slice 4 spot-check: the REAL caller (handleMention) under
-// unified mode, through the REAL buildLinearAuth/buildLinearClient — not the
-// FakeLinearClient the suite above uses. Proves the production wiring.
-describe("handleMention — SIG-144 slice 4 spot-check (real buildLinearAuth/buildLinearClient under unified mode)", () => {
-  it("OPENCLAW_LINEAR_UNIFIED=on routes handleMention's Linear calls through the broker agent token, never the human LINEAR_API_KEY", async () => {
+// unified mode, through the REAL tenant-scoped buildLinearAuth/buildLinearClient
+// — not the FakeLinearClient the suite above uses. Proves the production wiring.
+describe("handleMention — tenant-scoped unified Linear auth", () => {
+  it("routes handleMention through the exact organization shard and never the human LINEAR_API_KEY", async () => {
     const { env } = makeEnv()
     env.OPENCLAW_LINEAR_UNIFIED = "on"
     env.LINEAR_API_KEY = "human-key-must-never-be-used"
+    const idFromName = vi.fn((n: string) => ({ toString: () => n }))
     env.LINEAR_TOKEN_BROKER = {
-      idFromName: (n: string) => ({ toString: () => n }),
+      idFromName,
       get: () => ({
-        getValidToken: async () => ({ ok: true, accessToken: "agent-token-xyz" }),
-        forceRefresh: async () => ({ ok: false, reason: "not-installed" }),
+        getValidTenantToken: async () => ({ ok: true, accessToken: "agent-token-xyz" }),
+        forceRefreshTenant: async () => ({ ok: false, reason: "not-installed" }),
       }),
     } as unknown as Env["LINEAR_TOKEN_BROKER"]
 
@@ -254,12 +255,36 @@ describe("handleMention — SIG-144 slice 4 spot-check (real buildLinearAuth/bui
     // getCommentWithIssue (before retrieval / model call / reply post) — the
     // minimal real path that still proves buildLinearAuth picked the broker
     // token.
-    await handleMention("comment-missing", env)
+    await handleMention("comment-missing", env, {
+      tenant: { organizationId: "org-1", installationId: 42, teamId: "team-1" },
+    })
 
+    expect(idFromName).toHaveBeenCalledWith("linear-org:v1:org-1")
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     const authHeader = (init.headers as Record<string, string>).authorization
     expect(authHeader).toBe("Bearer agent-token-xyz")
     expect(authHeader).not.toContain("human-key-must-never-be-used")
+  })
+
+  it("fails closed when a broker-bound legacy job has no tenant or explicit dogfood scope", async () => {
+    const { env } = makeEnv()
+    const idFromName = vi.fn()
+    env.OPENCLAW_LINEAR_UNIFIED = "off"
+    env.LINEAR_TOKEN_BROKER = { idFromName } as unknown as Env["LINEAR_TOKEN_BROKER"]
+    let humanKeyRead = false
+    Object.defineProperty(env, "LINEAR_API_KEY", {
+      configurable: true,
+      get() {
+        humanKeyRead = true
+        return "human-key-must-never-be-used"
+      },
+    })
+    const actual = await vi.importActual<typeof import("@/src/lib/linear")>("@/src/lib/linear")
+    mockBuildLinearClient.mockImplementationOnce(actual.buildLinearClient)
+
+    await expect(handleMention("comment-missing-tenant", env)).rejects.toThrow(/explicit dogfood tenant token/)
+    expect(humanKeyRead).toBe(false)
+    expect(idFromName).not.toHaveBeenCalled()
   })
 })

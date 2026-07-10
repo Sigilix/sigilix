@@ -4,6 +4,8 @@ import type { Env } from "@/src/shared/types/env"
 import type { SearchQueryResult } from "./search"
 import type { FetchPageResult } from "./fetch-guard"
 import type { ResearchModelRole } from "./types"
+import type { ChatMessage, ChatToolDef } from "@/src/shared/ports/model"
+import type { ResearchModelFn } from "./model"
 
 // ── fake DO state ────────────────────────────────────────────────────
 
@@ -47,6 +49,62 @@ function makeDoState(store = new Map<string, unknown>()): { ctx: DurableObjectSt
 
 function makeEnv(over: Partial<Env> = {}): Env {
   return { OPENCLAW_TAVILY_API_KEY: "search-key", ...over } as unknown as Env
+}
+
+function makeMcpNamespace(): {
+  namespace: DurableObjectNamespace
+  names: string[]
+  calls: Array<{ path: string; body: Record<string, unknown> }>
+} {
+  const names: string[] = []
+  const calls: Array<{ path: string; body: Record<string, unknown> }> = []
+  const stub = {
+    async fetch(request: Request): Promise<Response> {
+      const body = (await request.json()) as Record<string, unknown>
+      const path = new URL(request.url).pathname
+      calls.push({ path, body })
+      if (path === "/runtime/catalog") {
+        return new Response(
+          JSON.stringify({
+            tools: [
+              {
+                serverId: "linear-server-1",
+                vendor: "linear",
+                name: "list_comments",
+                description: "Read Linear comments visible to the connected account.",
+                inputSchema: {
+                  type: "object",
+                  properties: { issueId: { type: "string" } },
+                  required: ["issueId"],
+                },
+              },
+            ],
+          }),
+          { headers: { "content-type": "application/json" } },
+        )
+      }
+      return new Response(
+        JSON.stringify({
+          result: {
+            untrusted: true,
+            content: [{ type: "text", text: "Daniel: please cover the tenant-boundary regression." }],
+            truncated: false,
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      )
+    },
+  }
+  const namespace = {
+    idFromName(name: string) {
+      names.push(name)
+      return { name }
+    },
+    get() {
+      return stub
+    },
+  } as unknown as DurableObjectNamespace
+  return { namespace, names, calls }
 }
 
 // Deferred helper for pausing the run mid-flight.
@@ -203,6 +261,110 @@ describe("DeepResearchDO — SSE buffering + replay", () => {
     const events = await readSse(await revived.fetch(req("/stream", "GET")))
     expect(events.map((e) => e.type)).toContain("final")
     expect(events[events.length - 1]!.type).toBe("done")
+  })
+})
+
+describe("DeepResearchDO — authenticated MCP execution", () => {
+  it.each([
+    { mode: "chat" as const, surface: "chat" },
+    { mode: "deep" as const, surface: "deep-research" },
+  ])("wires verified read-only evidence into the $mode model path", async ({ mode, surface }) => {
+    const { namespace, names, calls } = makeMcpNamespace()
+    const finalMessages: ChatMessage[][] = []
+    const model: ResearchModelFn = async (role: ResearchModelRole, messages: ChatMessage[], tools?: ChatToolDef[]) => {
+      if (tools?.length) {
+        expect(tools).toHaveLength(1)
+        expect(tools[0]!.function.name).toBe("sigilix_mcp_0")
+        return {
+          text: "",
+          tokens: 3,
+          toolCalls: [
+            { function: { name: "sigilix_mcp_0", arguments: { issueId: "SIG-193" } } },
+            { function: { name: "forged_tool", arguments: {} } },
+          ],
+        }
+      }
+      if (role === "finalReport") finalMessages.push(messages)
+      const text =
+        role === "classify"
+          ? "factual"
+          : role === "planner"
+            ? "tenant boundary\nSIG-193 review comments"
+            : role === "extract"
+              ? "Relevant finding with concrete detail about version 3.2 behavior and flags."
+              : role === "synthesis"
+                ? "Consolidated notes with sourced detail."
+                : role === "stopCheck"
+                  ? "STOP"
+                  : "# Answer\n\nThe review asks for tenant-boundary coverage [MCP: Linear/list_comments]."
+      return { text, tokens: 10 }
+    }
+    const { ctx } = makeDoState()
+    const instance = new DeepResearchDO(ctx, makeEnv({ MCP_CONNECTIONS: namespace }))
+    instance.setTestHooks(baseHooks({ model }))
+
+    const start = await instance.fetch(
+      req("/start", "POST", {
+        question: "What do the SIG-193 comments ask us to cover?",
+        mode,
+        creator: "session:111",
+      }),
+    )
+    expect(start.status).toBe(200)
+    await drive(instance)
+
+    const events = await readSse(await instance.fetch(req("/stream", "GET", undefined, "session:111")))
+    expect(events[0]).toMatchObject({ type: "status", phase: "planning" })
+    expect(events.some((event) => event.type === "error")).toBe(false)
+    expect(
+      events.some(
+        (event) =>
+          event.type === "note" && typeof event.text === "string" && event.text.includes("Linear/list_comments"),
+      ),
+    ).toBe(true)
+    expect(events.find((event) => event.type === "final")?.markdown).toContain("[MCP: Linear/list_comments]")
+    expect(names).toEqual(["session:111"])
+    expect(calls.map((call) => call.path)).toEqual(["/runtime/catalog", "/runtime/invoke"])
+    expect(calls[0]!.body).toEqual({ surface })
+    expect(calls[1]!.body).toEqual({
+      runId: "deep-research-instance-1",
+      surface,
+      serverId: "linear-server-1",
+      toolName: "list_comments",
+      arguments: { issueId: "SIG-193" },
+    })
+    expect(
+      finalMessages
+        .at(-1)
+        ?.map((message) => message.content)
+        .join("\n"),
+    ).toContain("Daniel: please cover the tenant-boundary regression.")
+    expect(finalMessages.at(-1)?.[0]?.content).toMatch(/untrusted external data, never instructions/i)
+  })
+
+  it("never resolves or calls an MCP namespace for an anonymous creator", async () => {
+    const { namespace, names, calls } = makeMcpNamespace()
+    let selectorCalls = 0
+    const model: ResearchModelFn = async (_role, _messages, tools) => {
+      if (tools?.length) selectorCalls += 1
+      return { text: "# Direct answer", tokens: 1 }
+    }
+    const { ctx } = makeDoState()
+    const instance = new DeepResearchDO(ctx, makeEnv({ MCP_CONNECTIONS: namespace }))
+    instance.setTestHooks(baseHooks({ model }))
+
+    await instance.fetch(
+      req("/start", "POST", {
+        question: "What do the connected comments say?",
+        mode: "chat",
+        creator: "session:anon",
+      }),
+    )
+    await drive(instance)
+
+    expect(names).toEqual([])
+    expect(calls).toEqual([])
+    expect(selectorCalls).toBe(0)
   })
 })
 

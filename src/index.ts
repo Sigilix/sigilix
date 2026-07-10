@@ -129,7 +129,7 @@ import { handleLinearWebhook, handleManualTrigger } from "@/src/index-webhooks"
 import { dispatchJob } from "@/src/index-dispatch"
 import { handleSlackRequest } from "@/src/index-slack-webhook"
 import { handleSlackInstall, handleSlackOAuthCallback, handleSlackInstalled } from "@/src/lib/slack/slack-install"
-import { handleLinearOAuthCallback, handleLinearInstall } from "@/src/lib/linear-agent-oauth"
+import { handleLinearOAuthCallback } from "@/src/lib/linear-agent-oauth"
 import { tryHandleGitLabConnectRoute, isGitLabConnectCorsPath } from "@/src/lib/gitlab-connect"
 
 // Re-export the relocated public symbols so the entry module's export
@@ -420,7 +420,7 @@ export default {
     // Linear AGENT install (actor=app) — the founder's one-click install entry. Mints
     // a CSRF nonce + 302s to Linear's actor=app consent screen.
     if (request.method === "GET" && url.pathname === "/linear/install") {
-      return handleLinearInstall(request, env)
+      return new Response("Use the installation-scoped portal Linear install flow.\n", { status: 410 })
     }
 
     // Linear AGENT install (actor=app) — the authorization-code callback. Verifies the

@@ -440,15 +440,21 @@ function parseSigilixConfigObject(parsed: unknown, raw: string): ParseResult {
       out.describe = { enabled: describeIn.enabled }
     }
   }
-  // SIG-84: overview.enabled — strict boolean parsing, same shape as
-  // describe.enabled. Forward-compat: unknown subfields under
-  // `overview` are ignored so future additions (overview.maxFiles,
-  // overview.profile, etc.) can ship without breaking older configs.
+  // SIG-84 + SIG-191: overview enablement + presentation flags. All
+  // use strict boolean parsing. Unknown subfields remain ignored on
+  // the committed config-as-code surface for forward compatibility;
+  // the separately parsed dashboard contract is intentionally closed.
   if (obj.overview && typeof obj.overview === "object" && !Array.isArray(obj.overview)) {
     const overviewIn = obj.overview as Record<string, unknown>
-    if (typeof overviewIn.enabled === "boolean") {
-      out.overview = { enabled: overviewIn.enabled }
+    const overviewOut: NonNullable<SigilixConfig["overview"]> = {}
+    if (typeof overviewIn.enabled === "boolean") overviewOut.enabled = overviewIn.enabled
+    if (typeof overviewIn.showSummary === "boolean") overviewOut.showSummary = overviewIn.showSummary
+    if (typeof overviewIn.showWalkthrough === "boolean") overviewOut.showWalkthrough = overviewIn.showWalkthrough
+    if (typeof overviewIn.showSequenceDiagram === "boolean") {
+      overviewOut.showSequenceDiagram = overviewIn.showSequenceDiagram
     }
+    if (typeof overviewIn.showConfidence === "boolean") overviewOut.showConfidence = overviewIn.showConfidence
+    if (Object.keys(overviewOut).length > 0) out.overview = overviewOut
   }
   // SIG-507: fleet.contribute — strict-bool opt-OUT (default ON). Unknown subfields ignored.
   if (obj.fleet && typeof obj.fleet === "object" && !Array.isArray(obj.fleet)) {

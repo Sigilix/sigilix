@@ -19,6 +19,7 @@ interface InstallationsResponse {
 }
 
 interface Repository {
+  id?: number
   full_name?: string
 }
 
@@ -28,6 +29,7 @@ interface RepositoriesResponse {
 
 export interface GithubUserInstallationRepo {
   installationId: number
+  repoId?: number
   owner: string
   repo: string
 }
@@ -114,7 +116,15 @@ async function listInstallationRepos(
     for (const repository of body.repositories) {
       if (typeof repository.full_name !== "string") continue
       const parsed = splitFullName(repository.full_name)
-      if (parsed) repos.push({ installationId, ...parsed })
+      if (parsed) {
+        repos.push({
+          installationId,
+          ...(Number.isSafeInteger(repository.id) && Number(repository.id) > 0
+            ? { repoId: Number(repository.id) }
+            : {}),
+          ...parsed,
+        })
+      }
     }
     if (body.repositories.length < PER_PAGE) return repos
   }

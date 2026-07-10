@@ -10,9 +10,20 @@ import { buildLinearClient, buildLinearAgentClient } from "@/src/lib/linear"
 import { commentHasSigilixAncestor } from "@/src/lib/linear-thread-ancestor"
 import { isBotAuthoredComment } from "@/src/lib/bot-authored-comments"
 import { bodyMentionsBot, getMentionTriggers, isBotHandle } from "@/src/lib/mention"
-import { multiCorpusEnabled } from "@/src/lib/multi-corpus"
 import { resolveLinearAgentRunMode } from "@/src/lib/agent-runner/mode"
 import { markAgentSessionCancelled, clearAgentSessionCancelled } from "@/src/lib/linear-agent-cancel"
+import {
+  claimLinearDelivery,
+  completeLinearDelivery,
+  getLinearConfig,
+  getLinearConnectionByOrganization,
+  releaseLinearDelivery,
+  resolveLinearTeamBinding,
+  teamIsSelected,
+  type LinearConnection,
+  type LinearTenantContext,
+} from "@/src/features/linear-integration"
+import type { JobMessage } from "@/src/shared/types/job"
 
 export interface LinearWebhookPayload {
   action: "create" | "update" | "remove"
@@ -66,6 +77,8 @@ export interface LinearWebhookPayload {
     updatedFrom?: { assigneeId?: string | null; [k: string]: unknown }
   }
   webhookTimestamp: number
+  /** Immutable organization id Linear includes on every OAuth-app webhook. */
+  organizationId?: string
 }
 
 /**
@@ -86,7 +99,7 @@ export interface LinearAgentSessionWebhook {
   action: "created" | "prompted" | string
   agentSession?: {
     id?: string
-    issue?: { id?: string } | null
+    issue?: { id?: string; team?: { id?: string } | null } | null
   } | null
   /**
    * SIG-145 (stop): present on `prompted` events. A user STOP is delivered as a
@@ -100,11 +113,91 @@ export interface LinearAgentSessionWebhook {
     signal?: string
     body?: string
   } | null
+  webhookTimestamp?: number
+  organizationId?: string
 }
 
 /** Narrow a parsed Linear webhook body to the AgentSessionEvent shape. */
 function isAgentSessionWebhook(raw: unknown): raw is LinearAgentSessionWebhook {
   return typeof raw === "object" && raw !== null && (raw as { type?: unknown }).type === "AgentSessionEvent"
+}
+
+/** Narrow a parsed non-agent webhook before any `data` fields are read. A
+ * signed payload can still be malformed; treating that as a 400 prevents a
+ * retrying 5xx/TypeError loop without weakening signature verification. */
+function isLinearWebhookPayload(raw: unknown): raw is LinearWebhookPayload {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return false
+  const candidate = raw as { action?: unknown; type?: unknown; data?: unknown }
+  if (candidate.action !== "create" && candidate.action !== "update" && candidate.action !== "remove") return false
+  if (typeof candidate.type !== "string" || !candidate.type) return false
+  if (typeof candidate.data !== "object" || candidate.data === null || Array.isArray(candidate.data)) return false
+  return typeof (candidate.data as { id?: unknown }).id === "string" && !!(candidate.data as { id: string }).id
+}
+
+async function runLinearDeliveryOnce(
+  env: Env,
+  tenant: LinearTenantContext | undefined,
+  eventType: string,
+  work: () => Promise<void>,
+): Promise<Response> {
+  // Explicit compatibility for pre-SIG-242 tests/manual deployments with no
+  // platform DB binding. Production has SIGILIX_PLATFORM_DB and always takes
+  // the strict timestamp/org/delivery path below.
+  if (!tenant) {
+    try {
+      await work()
+      return new Response("queued\n", { status: 202 })
+    } catch {
+      return new Response("enqueue failed\n", { status: 500 })
+    }
+  }
+  const deliveryId = tenant.deliveryId
+  if (!deliveryId) return new Response("missing Linear-Delivery\n", { status: 400 })
+  const nowMs = Date.now()
+  let claim: Awaited<ReturnType<typeof claimLinearDelivery>>
+  try {
+    claim = await claimLinearDelivery(env, {
+      deliveryId,
+      organizationId: tenant.organizationId,
+      eventType,
+      nowMs,
+    })
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "linear-delivery-claim-failed",
+        deliveryId,
+        organizationId: tenant.organizationId,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return new Response("delivery claim failed\n", { status: 500 })
+  }
+  if (claim === "duplicate") return new Response("ok\n", { status: 200 })
+  try {
+    await work()
+    await completeLinearDelivery(env, { deliveryId, organizationId: tenant.organizationId, nowMs: Date.now() })
+    return new Response("ok\n", { status: 200 })
+  } catch (error) {
+    try {
+      await releaseLinearDelivery(env, { deliveryId, organizationId: tenant.organizationId, nowMs: Date.now() })
+    } catch {
+      // The 500 still makes Linear retry. A short lease bounds a failed release.
+    }
+    console.error(
+      JSON.stringify({
+        event: "linear-delivery-work-failed",
+        deliveryId,
+        organizationId: tenant.organizationId,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return new Response("enqueue failed\n", { status: 500 })
+  }
+}
+
+function sendLinearJob(env: Env, job: JobMessage): Promise<void> {
+  return env.OPENCLAW_JOBS.send(job).then(() => undefined)
 }
 
 export async function handleLinearWebhook(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
@@ -128,38 +221,75 @@ export async function handleLinearWebhook(request: Request, env: Env, _ctx: Exec
     return new Response("invalid json\n", { status: 400 })
   }
 
+  // Replay-window checks are part of webhook authentication, not D1 tenancy.
+  // Enforce them even in a migration/manual environment where the platform DB
+  // binding is absent.
+  const envelope = raw as { webhookTimestamp?: unknown; organizationId?: unknown; type?: unknown }
+  const timestamp = Number(envelope.webhookTimestamp)
+  const timestampMs = timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp
+  if (!Number.isFinite(timestampMs) || Math.abs(Date.now() - timestampMs) > 60_000) {
+    return new Response("stale webhook\n", { status: 401 })
+  }
+  const deliveryId = request.headers.get("linear-delivery")
+  if (!deliveryId) return new Response("missing Linear-Delivery\n", { status: 400 })
+
+  const agentSessionPayload = isAgentSessionWebhook(raw) ? raw : null
+  const payload = agentSessionPayload ? null : isLinearWebhookPayload(raw) ? raw : null
+  if (!agentSessionPayload && !payload) return new Response("invalid payload\n", { status: 400 })
+
+  let tenant: LinearTenantContext | undefined
+  if (env.SIGILIX_PLATFORM_DB) {
+    const organizationId = typeof envelope.organizationId === "string" ? envelope.organizationId : ""
+    if (!organizationId) return new Response("ok\n", { status: 200 })
+    let connection: LinearConnection | null
+    try {
+      connection = await getLinearConnectionByOrganization(env, organizationId)
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: "linear-webhook-org-resolve-failed",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      )
+      return new Response("linear tenant lookup failed\n", { status: 500 })
+    }
+    if (!connection || connection.status !== "active") return new Response("ok\n", { status: 200 })
+    const teamId = agentSessionPayload ? agentSessionPayload.agentSession?.issue?.team?.id : payload?.data.team?.id
+    if (teamId) {
+      const [binding, config] = await Promise.all([
+        resolveLinearTeamBinding(env, organizationId, teamId),
+        getLinearConfig(env, connection.installationId),
+      ])
+      if (!binding || binding.accessState !== "allowed" || !config || !teamIsSelected(config, teamId)) {
+        console.warn(
+          JSON.stringify({
+            event: "linear-webhook-team-out-of-scope",
+            organizationId,
+            installationId: connection.installationId,
+            teamId,
+            bindingPresent: !!binding,
+          }),
+        )
+        return new Response("ok\n", { status: 200 })
+      }
+    }
+    tenant = {
+      organizationId,
+      installationId: connection.installationId,
+      ...(teamId ? { teamId } : {}),
+      deliveryId,
+    }
+  }
+
   // SIG-545 (agent): AgentSessionEvent is the CANONICAL agent trigger — once Sigilix
   // is a real Linear agent, delegating/@-mentioning it fires this event (not an
   // Issue.update assignee diff). Handled BEFORE the legacy Issue/Comment dispatch
   // because it carries a different payload shape (no `data`).
-  if (isAgentSessionWebhook(raw)) {
-    return handleAgentSessionEvent(raw, env)
+  if (agentSessionPayload) {
+    return handleAgentSessionEvent(agentSessionPayload, env, tenant)
   }
-
-  const payload = raw as LinearWebhookPayload
-
-  // SIG-44: any Issue create/update refreshes the issue: multi-corpus
-  // namespace (flag-gated, fire-and-forget). Placed before the create→triage
-  // return below so BOTH actions are covered. The consumer maps the issue's
-  // Linear team → GitHub repo via OPENCLAW_TEAM_GITHUB_REPO_MAP; an unmapped
-  // team no-ops, so this is inert for non-Linear-linked repos.
-  if (
-    multiCorpusEnabled(env) &&
-    payload.type === "Issue" &&
-    (payload.action === "create" || payload.action === "update")
-  ) {
-    _ctx.waitUntil(
-      env.OPENCLAW_JOBS.send({ type: "corpus-issue-upsert", linearIssueId: payload.data.id }).catch((err) => {
-        console.warn(
-          JSON.stringify({
-            event: "corpus-issue-upsert-enqueue-failed",
-            issueId: payload.data.id,
-            err: err instanceof Error ? err.message : String(err),
-          }),
-        )
-      }),
-    )
-  }
+  // The only null case was the AgentSessionEvent branch above, which returned.
+  if (!payload) return new Response("invalid payload\n", { status: 400 })
 
   // SIG-545 B3: Issue.update assigning the issue to the Sigilix agent user →
   // dispatch the agent-runner (on the SAFE minimal engine) to implement it.
@@ -183,22 +313,17 @@ export async function handleLinearWebhook(request: Request, env: Env, _ctx: Exec
       updatedFrom !== undefined &&
       Object.prototype.hasOwnProperty.call(updatedFrom, "assigneeId")
     ) {
-      await env.OPENCLAW_JOBS.send({ type: "linear-agent-run", issueId: payload.data.id })
-      return new Response("queued\n", { status: 202 })
+      return runLinearDeliveryOnce(env, tenant, "Issue.update.agent-run", () =>
+        sendLinearJob(env, { type: "linear-agent-run", issueId: payload.data.id, ...tenant }),
+      )
     }
   }
 
   // Issue.create → enqueue full triage pipeline.
   if (payload.type === "Issue" && payload.action === "create") {
-    if (env.OPENCLAW_TEAM_KEY && payload.data.team?.key !== env.OPENCLAW_TEAM_KEY) {
-      console.warn("team scope mismatch", {
-        got: payload.data.team?.key ?? null,
-        want: env.OPENCLAW_TEAM_KEY,
-      })
-      return new Response("team scope mismatch\n", { status: 200 })
-    }
-    await env.OPENCLAW_JOBS.send({ type: "linear-triage", issueId: payload.data.id })
-    return new Response("queued\n", { status: 202 })
+    return runLinearDeliveryOnce(env, tenant, "Issue.create", () =>
+      sendLinearJob(env, { type: "linear-triage", issueId: payload.data.id, ...tenant }),
+    )
   }
 
   // Comment.create → enqueue mention-reply pipeline if EITHER:
@@ -285,7 +410,7 @@ export async function handleLinearWebhook(request: Request, env: Env, _ctx: Exec
       // existing try-blocks and falls closed to "no mention" — same
       // path as any other GraphQL error.
       try {
-        const linear = await buildLinearClient(env)
+        const linear = await buildLinearClient(env, tenant)
         const comments = await linear.getCommentParents(issueId, {
           signal: AbortSignal.timeout(2000),
         })
@@ -340,12 +465,14 @@ export async function handleLinearWebhook(request: Request, env: Env, _ctx: Exec
       userNamePresent: !!payload.data.user?.name,
       isBotHandleMatch: isBotHandle(author),
     })
-    await env.OPENCLAW_JOBS.send({
-      type: "linear-mention",
-      commentId: payload.data.id,
-      triggerReason,
-    })
-    return new Response("queued\n", { status: 202 })
+    return runLinearDeliveryOnce(env, tenant, "Comment.create", () =>
+      sendLinearJob(env, {
+        type: "linear-mention",
+        commentId: payload.data.id,
+        triggerReason,
+        ...tenant,
+      }),
+    )
   }
 
   return new Response("skipped\n", { status: 200 })
@@ -365,53 +492,56 @@ export async function handleLinearWebhook(request: Request, env: Env, _ctx: Exec
  * The ack is best-effort and awaited (a single fast GraphQL call, well within the ack
  * window); a failed ack never blocks the enqueue. Returns 202 once the run is queued.
  */
-async function handleAgentSessionEvent(payload: LinearAgentSessionWebhook, env: Env): Promise<Response> {
+async function handleAgentSessionEvent(
+  payload: LinearAgentSessionWebhook,
+  env: Env,
+  tenant: LinearTenantContext | undefined,
+): Promise<Response> {
   if (resolveLinearAgentRunMode(env) !== "on") {
-    return new Response("agent run mode off\n", { status: 200 })
+    return new Response("ok\n", { status: 200 })
   }
 
   const sessionId = payload.agentSession?.id
   if (!sessionId) {
     console.warn(JSON.stringify({ event: "linear-agent-session-no-session-id", action: payload.action }))
-    return new Response("missing agent session id\n", { status: 200 })
+    return new Response("ok\n", { status: 200 })
   }
 
   if (payload.action !== "created" && payload.action !== "prompted") {
-    return new Response("ignored\n", { status: 200 })
+    return new Response("ok\n", { status: 200 })
   }
-
-  // SIG-145 (stop): a user STOP arrives as a `prompted` event carrying
-  // `agentActivity.signal: "stop"` (NOT an `action: "stopped"`). Handle it BEFORE the
-  // ACK and BEFORE the run dedupe/enqueue — a stop is a CONTROL signal, not a new turn,
-  // so it must never be swallowed by the per-ticket run dedupe. Mark the session
-  // cancelled (so an in-flight run aborts at its next checkpoint) and post a terminal
-  // "stopped" activity so the session resolves immediately. No run is enqueued.
-  if (payload.agentActivity?.signal === "stop") {
-    await handleAgentSessionStop(env, sessionId)
-    console.log(JSON.stringify({ event: "linear-agent-session-stopped", action: payload.action }))
-    return new Response("stopped\n", { status: 200 })
+  if (!tenant) {
+    if (payload.agentActivity?.signal === "stop") {
+      await handleAgentSessionStop(env, undefined, sessionId)
+      return new Response("stopped\n", { status: 200 })
+    }
+    await ackAgentSession(env, undefined, sessionId)
+    const issueId = payload.agentSession?.issue?.id
+    if (!issueId) return new Response("no issue\n", { status: 200 })
+    await clearAgentSessionCancelled(env, sessionId)
+    await sendLinearJob(env, { type: "linear-agent-run", issueId, sessionId })
+    return new Response("queued\n", { status: 202 })
   }
+  return runLinearDeliveryOnce(env, tenant, `AgentSessionEvent.${payload.action}`, async () => {
+    // Stop is a protocol control, not a model/writeback setting. It always stays
+    // active even when optional comments/status/labels are disabled.
+    if (payload.agentActivity?.signal === "stop") {
+      await handleAgentSessionStop(env, tenant, sessionId)
+      console.log(JSON.stringify({ event: "linear-agent-session-stopped", action: payload.action }))
+      return
+    }
 
-  // ACK within ~10s — a Linear agent `thought` activity. Best-effort; never blocks
-  // the enqueue.
-  await ackAgentSession(env, sessionId)
-
-  const issueId = payload.agentSession?.issue?.id
-  if (!issueId) {
-    console.warn(JSON.stringify({ event: "linear-agent-session-no-issue", action: payload.action }))
-    return new Response("no issue\n", { status: 200 })
-  }
-
-  // SIG-145 (stop): clear any stale cancel marker BEFORE enqueuing this run. A Linear
-  // AgentSession is persistent — a follow-up prompt reuses the same sessionId — so a
-  // prior stop's marker (per-session, 1h TTL) would otherwise make THIS fresh non-stop
-  // turn abort at its first checkpoint and hang the session. Clearing here means every
-  // new turn starts un-cancelled; a mid-run stop simply re-marks it. Best-effort.
-  await clearAgentSessionCancelled(env, sessionId)
-
-  await env.OPENCLAW_JOBS.send({ type: "linear-agent-run", issueId, sessionId })
-  console.log(JSON.stringify({ event: "linear-agent-session-queued", action: payload.action }))
-  return new Response("queued\n", { status: 202 })
+    // Protocol ACK is likewise not optional writeback.
+    await ackAgentSession(env, tenant, sessionId)
+    const issueId = payload.agentSession?.issue?.id
+    if (!issueId) {
+      console.warn(JSON.stringify({ event: "linear-agent-session-no-issue", action: payload.action }))
+      return
+    }
+    await clearAgentSessionCancelled(env, sessionId)
+    await sendLinearJob(env, { type: "linear-agent-run", issueId, sessionId, ...tenant })
+    console.log(JSON.stringify({ event: "linear-agent-session-queued", action: payload.action }))
+  })
 }
 
 /**
@@ -431,9 +561,11 @@ async function handleAgentSessionEvent(payload: LinearAgentSessionWebhook, env: 
  * The ACK is best-effort: a genuine miss just skips here; the background run still
  * posts the real terminal completion into the session.
  */
-async function ackAgentSession(env: Env, sessionId: string): Promise<void> {
+async function ackAgentSession(env: Env, tenant: LinearTenantContext | undefined, sessionId: string): Promise<void> {
   try {
-    const agent = await buildLinearAgentClient(env, { allowRefresh: false })
+    const agent = tenant
+      ? await buildLinearAgentClient(env, tenant, { allowRefresh: false })
+      : await buildLinearAgentClient(env, { allowRefresh: false })
     if (!agent) {
       console.warn(JSON.stringify({ event: "linear-agent-ack-no-token", sessionId }))
       return
@@ -472,10 +604,16 @@ async function ackAgentSession(env: Env, sessionId: string): Promise<void> {
  * Both steps are best-effort (logged + swallowed) — a failure never blocks the webhook
  * response. NEVER falls back to the human key, NEVER logs token material.
  */
-async function handleAgentSessionStop(env: Env, sessionId: string): Promise<void> {
+async function handleAgentSessionStop(
+  env: Env,
+  tenant: LinearTenantContext | undefined,
+  sessionId: string,
+): Promise<void> {
   let stoppedPosted = false
   try {
-    const agent = await buildLinearAgentClient(env, { allowRefresh: false })
+    const agent = tenant
+      ? await buildLinearAgentClient(env, tenant, { allowRefresh: false })
+      : await buildLinearAgentClient(env, { allowRefresh: false })
     if (!agent) {
       console.warn(JSON.stringify({ event: "linear-agent-stop-no-token", sessionId }))
     } else {

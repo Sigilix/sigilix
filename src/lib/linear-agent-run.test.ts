@@ -39,6 +39,18 @@ vi.mock("@/src/lib/agent-runner/dispatch", () => ({
 vi.mock("@/src/lib/linear-agent-cancel", () => ({
   isAgentSessionCancelled: vi.fn(),
 }))
+const linearConfigMocks = vi.hoisted(() => ({
+  getLinearConfig: vi.fn(),
+  resolveLinearTeamBinding: vi.fn(),
+}))
+vi.mock("@/src/features/linear-integration", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/src/features/linear-integration")>()
+  return {
+    ...actual,
+    getLinearConfig: linearConfigMocks.getLinearConfig,
+    resolveLinearTeamBinding: linearConfigMocks.resolveLinearTeamBinding,
+  }
+})
 
 import { runLinearAgentRun, dispatchTicketImplementation } from "@/src/lib/linear-agent-run"
 import { isAgentSessionCancelled } from "@/src/lib/linear-agent-cancel"
@@ -149,6 +161,8 @@ describe("runLinearAgentRun", () => {
     } as unknown as LinearClient)
     mockBuildLinearAuth.mockResolvedValue({ apiKey: "linear-key" })
     mockDispatchAgentRun.mockResolvedValue({ runId: "run-1", dispatched: true })
+    linearConfigMocks.getLinearConfig.mockResolvedValue(null)
+    linearConfigMocks.resolveLinearTeamBinding.mockResolvedValue(null)
     // Default: not cancelled — the run proceeds normally. Stop tests override per-call.
     mockIsAgentSessionCancelled.mockResolvedValue(false)
   })
@@ -275,6 +289,16 @@ describe("runLinearAgentRun", () => {
     expect(terminal[0]![2]).toBe("error")
   })
 
+  it("legacy AgentSession with no repo mapping still posts a terminal error", async () => {
+    await runLinearAgentRun(ISSUE_ID, makeEnv({ OPENCLAW_TEAM_GITHUB_REPO_MAP: undefined }), "agent-session-1")
+
+    expect(mockDispatchAgentRun).not.toHaveBeenCalled()
+    expect(mockCreateComment).not.toHaveBeenCalled()
+    const terminal = terminalActivityCalls(mockCreateAgentActivity.mock.calls as ActivityCall[])
+    expect(terminal).toHaveLength(1)
+    expect(terminal[0]![2]).toBe("error")
+  })
+
   it("AgentSession path: a DEDUPE does NOT post any activity (a concurrent run owns + resolves the session)", async () => {
     const kv = makeKv({ "linear-agent-run:issue-uuid-1": "1" })
     await runLinearAgentRun(ISSUE_ID, makeEnv({ OPENCLAW_STATE: kv }), "agent-session-1")
@@ -297,6 +321,69 @@ describe("runLinearAgentRun", () => {
     await expect(runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1")).resolves.toBeUndefined()
     expect(mockCreateAgentActivity).not.toHaveBeenCalled()
     expect(spyWarn.mock.calls.flat().map(String).join("\n")).toContain("linear-agent-run-ack-no-token")
+  })
+
+  it("tenant context off never dispatches repository work but still resolves the AgentSession", async () => {
+    linearConfigMocks.getLinearConfig.mockResolvedValue({
+      revision: 1,
+      contextMode: "disabled",
+      scope: { mode: "explicit", teamIds: ["team-uuid"] },
+      prValidation: false,
+      createIssue: "manual",
+      planning: true,
+      writeback: { comments: false, status: false, labels: false },
+    })
+    linearConfigMocks.resolveLinearTeamBinding.mockResolvedValue({
+      organizationId: "org-a",
+      installationId: 11,
+      teamId: "team-uuid",
+      accessState: "allowed",
+      githubRepoId: 101,
+      githubRepoFullName: "Sigilix/sigilix",
+    })
+
+    await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1", {
+      organizationId: "org-a",
+      installationId: 11,
+      teamId: "team-uuid",
+    })
+
+    expect(mockDispatchAgentRun).not.toHaveBeenCalled()
+    expect(mockCreateComment).not.toHaveBeenCalled()
+    const activities = mockCreateAgentActivity.mock.calls as ActivityCall[]
+    expect(activities).toHaveLength(1)
+    expect(activities[0]?.[2]).toBe("error")
+  })
+
+  it("comments off suppresses optional progress while preserving the terminal AgentSession activity", async () => {
+    linearConfigMocks.getLinearConfig.mockResolvedValue({
+      revision: 1,
+      contextMode: "enabled",
+      scope: { mode: "explicit", teamIds: ["team-uuid"] },
+      prValidation: false,
+      createIssue: "manual",
+      planning: true,
+      writeback: { comments: false, status: false, labels: false },
+    })
+    linearConfigMocks.resolveLinearTeamBinding.mockResolvedValue({
+      organizationId: "org-a",
+      installationId: 11,
+      teamId: "team-uuid",
+      accessState: "allowed",
+      githubRepoId: 101,
+      githubRepoFullName: "Sigilix/sigilix",
+    })
+
+    await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1", {
+      organizationId: "org-a",
+      installationId: 11,
+      teamId: "team-uuid",
+    })
+
+    expect(mockDispatchAgentRun).toHaveBeenCalledOnce()
+    const activities = mockCreateAgentActivity.mock.calls as ActivityCall[]
+    expect(activities).toHaveLength(1)
+    expect(activities[0]?.[2]).toBe("response")
   })
 
   // ── SIG-145b: milestone thought stream (live progress instead of a silent "Working…") ──

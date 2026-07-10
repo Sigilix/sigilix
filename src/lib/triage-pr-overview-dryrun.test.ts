@@ -54,6 +54,7 @@ vi.mock("@/src/shared/adapters/model/ollama", () => ({
 }))
 
 import { handlePrOverview } from "@/src/lib/triage-pr-overview"
+import { writeDashboardReviewConfig } from "@/src/lib/review-config-store"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { Env } from "@/src/shared/types/env"
 
@@ -226,5 +227,55 @@ describe("handlePrOverview — dryRun seam (SIG-304)", () => {
     // Parity: the same diagram dryRun returns is rendered into the posted body.
     const body = mockCreateIssueComment.mock.calls[0]?.[3] as string
     expect(body).toContain("sequenceDiagram")
+  })
+
+  it("applies stored dashboard overview + quality-gate toggles to the posted comment", async () => {
+    const { kv } = makeKvStub()
+    const env = makeEnv(kv)
+    // A partial committed block must win only the leaves it sets; it must not
+    // erase unrelated dashboard flags. This mirrors a repo that explicitly
+    // keeps the overview enabled and customizes gate severity in config-as-code.
+    mockGetFileContent.mockImplementation(async (_owner, _repo, path) =>
+      path === "sigilix.json"
+        ? JSON.stringify({
+            overview: { enabled: true },
+            preMergeGates: { titleFormat: { severity: "error" } },
+          })
+        : null,
+    )
+    const write = await writeDashboardReviewConfig(
+      env,
+      args.installationId,
+      JSON.stringify({
+        overview: {
+          showSummary: false,
+          showWalkthrough: false,
+          showSequenceDiagram: false,
+          showConfidence: false,
+        },
+        preMergeGates: {
+          titleFormat: { enabled: false },
+          descriptionCompleteness: { enabled: false },
+          linkedIssue: { enabled: false },
+        },
+      }),
+    )
+    expect(write.ok).toBe(true)
+
+    await handlePrOverview({ ...args, env })
+
+    expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+    const body = mockCreateIssueComment.mock.calls[0]?.[3] as string
+    expect(body).toContain("## Sigilix Overview")
+    expect(body).not.toContain("### Quality gates")
+    expect(body).not.toContain("### Summary")
+    expect(body).not.toContain("Adds a retry guard")
+    expect(body).not.toContain("### Important files")
+    expect(body).not.toContain("src/pay.ts")
+    expect(body).not.toContain("### Sequence diagram")
+    expect(body).not.toContain("sequenceDiagram")
+    expect(body).not.toContain("### Confidence")
+    expect(body).not.toContain("Two payment paths touched")
+    expect(body).not.toContain("double-charge")
   })
 })

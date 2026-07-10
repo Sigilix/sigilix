@@ -18,6 +18,7 @@
 
 import { WARMUP_CALLOUT_MARKER } from "./warmup"
 import { renderPreMergeGatesSection, type GateResult } from "@/src/shared/domain/pre-merge-gates"
+import type { SigilixConfig } from "@/src/shared/domain/config/types"
 import { OVERVIEW_MARKER } from "./triage-pr-overview-scan"
 import type { PrOverviewReviewContext, PrOverviewVerdict } from "./triage-pr-overview"
 
@@ -63,6 +64,8 @@ interface FormatArgs {
    * the effort badge). Empty array / missing → no section.
    */
   gateResults?: readonly GateResult[]
+  /** Effective committed-wins overview presentation configuration. */
+  overviewConfig?: SigilixConfig["overview"]
 }
 
 /**
@@ -70,8 +73,18 @@ interface FormatArgs {
  * on line 1 is what `findExistingOverviewComment` greps for to decide
  * between POST-new and PATCH-in-place.
  */
-export function formatOverviewComment({ verdict, isFirstRun, warmup = "none", gateResults = [] }: FormatArgs): string {
+export function formatOverviewComment({
+  verdict,
+  isFirstRun,
+  warmup = "none",
+  gateResults = [],
+  overviewConfig,
+}: FormatArgs): string {
   const lines: string[] = [OVERVIEW_MARKER, ""]
+  const showSummary = overviewConfig?.showSummary !== false
+  const showWalkthrough = overviewConfig?.showWalkthrough !== false
+  const showSequenceDiagram = overviewConfig?.showSequenceDiagram !== false
+  const showConfidence = overviewConfig?.showConfidence !== false
   lines.push("## Sigilix Overview")
   lines.push("")
 
@@ -107,11 +120,16 @@ export function formatOverviewComment({ verdict, isFirstRun, warmup = "none", ga
     lines.push("")
   }
 
-  lines.push(`### Summary${isFirstRun ? "" : " — latest push"}`)
-  lines.push("")
-  lines.push(verdict.summary)
+  if (showSummary) {
+    lines.push(`### Summary${isFirstRun ? "" : " — latest push"}`)
+    lines.push("")
+    lines.push(verdict.summary)
+  }
 
-  if (verdict.files.length > 0) {
+  // The walkthrough consists of the per-file table plus the model's review-
+  // focus bullets. Hiding it is presentation-only: the model still analyzes
+  // every file and the review ensemble still publishes all findings.
+  if (showWalkthrough && verdict.files.length > 0) {
     lines.push("")
     lines.push("### Important files")
     lines.push("")
@@ -130,7 +148,7 @@ export function formatOverviewComment({ verdict, isFirstRun, warmup = "none", ga
   // SIG-99: Mermaid sequence diagram. Placed AFTER the file table so
   // a reviewer scans (summary → files → flow); GitHub renders fenced
   // ```mermaid blocks natively.
-  if (verdict.mermaidDiagram) {
+  if (showSequenceDiagram && verdict.mermaidDiagram) {
     lines.push("")
     lines.push("### Sequence diagram")
     lines.push("")
@@ -139,14 +157,16 @@ export function formatOverviewComment({ verdict, isFirstRun, warmup = "none", ga
     lines.push("```")
   }
 
-  lines.push("")
-  lines.push(`### Confidence: ${verdict.confidence}/5`)
-  if (verdict.confidenceReason) {
+  if (showConfidence) {
     lines.push("")
-    lines.push(verdict.confidenceReason)
+    lines.push(`### Confidence: ${verdict.confidence}/5`)
+    if (verdict.confidenceReason) {
+      lines.push("")
+      lines.push(verdict.confidenceReason)
+    }
   }
 
-  if (verdict.bullets.length > 0) {
+  if (showWalkthrough && verdict.bullets.length > 0) {
     lines.push("")
     for (const b of verdict.bullets) {
       lines.push(`- ${b}`)

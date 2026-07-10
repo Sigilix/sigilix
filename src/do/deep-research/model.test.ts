@@ -1,14 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import type { ChatArgs } from "@/src/shared/ports/model"
+import type { ChatArgs, ChatResult } from "@/src/shared/ports/model"
 import type { Env } from "@/src/shared/types/env"
 
 // Capture what buildModelFn sends to the model-adapter seam. `vi.mock` is
 // hoisted above the imports below, so buildModelFn resolves to this fake `chat`.
-const chatMock = vi.fn(async (_args: ChatArgs) => ({
-  message: { role: "assistant" as const, content: "answer" },
-  hasToolCalls: false,
-  usage: {},
-}))
+const chatMock = vi.fn(
+  async (_args: ChatArgs): Promise<ChatResult> => ({
+    message: { role: "assistant" as const, content: "answer" },
+    hasToolCalls: false,
+    usage: {},
+  }),
+)
 
 vi.mock("@/src/shared/adapters/model", () => ({
   chat: (args: ChatArgs) => chatMock(args),
@@ -27,6 +29,34 @@ function env(over: Partial<Env> = {}): Env {
 beforeEach(() => chatMock.mockClear())
 
 describe("buildModelFn — per-role tier routing", () => {
+  it("forwards native tool definitions on the bounded selector call and preserves tool calls", async () => {
+    chatMock.mockResolvedValueOnce({
+      message: {
+        role: "assistant" as const,
+        content: "",
+        tool_calls: [{ id: "call-1", function: { name: "sigilix_mcp_0", arguments: { issueId: "SIG-193" } } }],
+      },
+      hasToolCalls: true,
+      usage: { inputTokens: 5, outputTokens: 2 },
+    })
+    const cfg = resolveResearchConfig(env(), { model: "astraeus" })
+    const fn = buildModelFn(env(), cfg)
+    const tools = [
+      {
+        type: "function" as const,
+        function: { name: "sigilix_mcp_0", description: "Read comments.", parameters: { type: "object" } },
+      },
+    ]
+
+    const result = await fn("planner", [{ role: "user", content: "show comments" }], tools)
+
+    expect(chatMock.mock.calls[0]![0]).toMatchObject({ tools, timeoutMs: 20_000 })
+    expect(result.toolCalls).toEqual([
+      { id: "call-1", function: { name: "sigilix_mcp_0", arguments: { issueId: "SIG-193" } } },
+    ])
+    expect(result.tokens).toBe(7)
+  })
+
   it("astraeus: heavy roles hit the astraeus model id, classify/extract hit boreas", async () => {
     const cfg = resolveResearchConfig(env(), { model: "astraeus" })
     const fn = buildModelFn(env(), cfg)

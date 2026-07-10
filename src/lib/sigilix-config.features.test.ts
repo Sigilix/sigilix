@@ -34,6 +34,27 @@ describe("parseSigilixConfig — overview.enabled (SIG-84)", () => {
     expect(result).toEqual({ overview: { enabled: false } })
   })
 
+  it("parses the committed overview presentation flags as strict booleans", () => {
+    const result = parseSigilixConfig(
+      JSON.stringify({
+        overview: {
+          showSummary: false,
+          showWalkthrough: true,
+          showSequenceDiagram: false,
+          showConfidence: true,
+        },
+      }),
+    )
+    expect(result).toEqual({
+      overview: {
+        showSummary: false,
+        showWalkthrough: true,
+        showSequenceDiagram: false,
+        showConfidence: true,
+      },
+    })
+  })
+
   it('strips a string `"false"` (strict boolean — no JS truthy nonsense)', () => {
     const result = parseSigilixConfig(
       JSON.stringify({
@@ -58,10 +79,10 @@ describe("parseSigilixConfig — overview.enabled (SIG-84)", () => {
     expect(parseSigilixConfig(JSON.stringify({ overview: [] }))).toEqual({})
   })
 
-  it("ignores unknown subfields under overview (forward-compat)", () => {
+  it("drops wrong-typed and unknown overview subfields (committed config remains forward-compatible)", () => {
     const result = parseSigilixConfig(
       JSON.stringify({
-        overview: { enabled: false, profile: "future-field" },
+        overview: { enabled: false, showSummary: "false", profile: "future-field" },
       }),
     )
     expect(result).toEqual({ overview: { enabled: false } })

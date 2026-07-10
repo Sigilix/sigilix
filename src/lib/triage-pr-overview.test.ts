@@ -159,6 +159,56 @@ describe("formatOverviewComment", () => {
     expect(md).toContain("- two")
   })
 
+  it("omits only the overview sections disabled by the effective presentation config", () => {
+    const md = formatOverviewComment({
+      verdict: {
+        ...verdict,
+        mermaidDiagram: "sequenceDiagram\n  Client->>API: request",
+      },
+      isFirstRun: true,
+      overviewConfig: {
+        showSummary: false,
+        showWalkthrough: false,
+        showSequenceDiagram: false,
+        showConfidence: false,
+      },
+      gateResults: [
+        {
+          id: "titleFormat",
+          label: "PR title follows convention",
+          passed: true,
+          severity: "warning",
+        },
+      ],
+    })
+    expect(md).toContain("## Sigilix Overview")
+    expect(md).toContain("### Quality gates") // independent of presentation toggles
+    expect(md).not.toContain("### Summary")
+    expect(md).not.toContain(verdict.summary)
+    expect(md).not.toContain("### Important files")
+    expect(md).not.toContain("app/user.ts")
+    expect(md).not.toContain("### Sequence diagram")
+    expect(md).not.toContain("sequenceDiagram")
+    expect(md).not.toContain("### Confidence")
+    expect(md).not.toContain(verdict.confidenceReason)
+    expect(md).not.toContain("lines 42-58")
+  })
+
+  it("keeps walkthrough, diagram, and confidence when only summary is disabled", () => {
+    const md = formatOverviewComment({
+      verdict: {
+        ...verdict,
+        mermaidDiagram: "sequenceDiagram\n  Client->>API: request",
+      },
+      isFirstRun: true,
+      overviewConfig: { showSummary: false },
+    })
+    expect(md).not.toContain("### Summary")
+    expect(md).toContain("### Important files")
+    expect(md).toContain("### Sequence diagram")
+    expect(md).toContain("### Confidence: 4/5")
+  })
+
   // Founder pivot (2026-05-17): the "[!NOTE] Sigilix is warming up
   // its index..." callout that briefly shipped on PR #80 was pulled
   // — too noisy on cold-install PRs. The marker stays (so the rerun

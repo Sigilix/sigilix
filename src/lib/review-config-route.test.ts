@@ -109,21 +109,30 @@ describe("review-config route", () => {
     const { kv } = makeKV()
     await seedSession(kv, "s1", "octocat")
     stubOrgAdmin()
-    const put = await handleSetReviewConfig(
-      req("PUT", 42, "s1", JSON.stringify({ guidance: "enforce X", profile: "chill" })),
-      baseEnv(kv),
-      undefined,
-      42,
-    )
+    const config = {
+      guidance: "enforce X",
+      profile: "chill",
+      overview: {
+        showSummary: false,
+        showWalkthrough: true,
+        showSequenceDiagram: false,
+        showConfidence: true,
+      },
+      preMergeGates: {
+        titleFormat: { enabled: false },
+        descriptionCompleteness: { enabled: true },
+        linkedIssue: { enabled: false },
+      },
+    }
+    const put = await handleSetReviewConfig(req("PUT", 42, "s1", JSON.stringify(config)), baseEnv(kv), undefined, 42)
     expect(put.status).toBe(200)
-    const putBody = (await put.json()) as { config: { guidance?: string } }
-    expect(putBody.config.guidance).toBe("enforce X")
+    const putBody = (await put.json()) as { config: unknown }
+    expect(putBody.config).toEqual(config)
 
     const get = await handleGetReviewConfig(req("GET", 42, "s1"), baseEnv(kv), undefined, 42)
     expect(get.status).toBe(200)
-    const getBody = (await get.json()) as { config: { guidance?: string; profile?: string } }
-    expect(getBody.config.guidance).toBe("enforce X")
-    expect(getBody.config.profile).toBe("chill")
+    const getBody = (await get.json()) as { config: unknown }
+    expect(getBody.config).toEqual(config)
   })
 
   it("ADMIN-GATE: a member (non-admin) is 403'd on both PUT and GET", async () => {
@@ -170,6 +179,37 @@ describe("review-config route", () => {
     expect(body.error).toBe("invalid config")
     expect(body.reason).toBeTruthy()
     // Nothing persisted under the config key (the session record is the only other entry).
+    expect(store.has(orgConfigKey(42))).toBe(false)
+  })
+
+  it("validation: unknown top-level and nested fields are rejected, never silently ignored", async () => {
+    const { kv, store } = makeKV()
+    await seedSession(kv, "s1", "octocat")
+    stubOrgAdmin()
+
+    const unsupported = await handleSetReviewConfig(
+      req("PUT", 42, "s1", JSON.stringify({ pathFilters: ["src/auth/**"] })),
+      baseEnv(kv),
+      undefined,
+      42,
+    )
+    expect(unsupported.status).toBe(400)
+    expect(await unsupported.json()).toMatchObject({
+      error: "invalid config",
+      reason: "unknown dashboard config field `pathFilters`",
+    })
+
+    const nestedNoOp = await handleSetReviewConfig(
+      req("PUT", 42, "s1", JSON.stringify({ overview: { enabled: false } })),
+      baseEnv(kv),
+      undefined,
+      42,
+    )
+    expect(nestedNoOp.status).toBe(400)
+    expect(await nestedNoOp.json()).toMatchObject({
+      error: "invalid config",
+      reason: "unknown dashboard config field `overview.enabled`",
+    })
     expect(store.has(orgConfigKey(42))).toBe(false)
   })
 

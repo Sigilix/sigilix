@@ -15,6 +15,12 @@ import { readReviewManifest } from "./review-manifest"
 import { buildLinearClient } from "./linear"
 import { listTeamRepoMappings } from "@/src/shared/adapters/github/github-installation"
 import { upsertPrDoc, upsertIssueDoc, deriveVerdictLabel, type PrCorpusDoc } from "./multi-corpus"
+import {
+  resolveLinearTeamBinding,
+  teamIsSelected,
+  getLinearConfig,
+  type LinearTenantContext,
+} from "@/src/features/linear-integration"
 
 /** Default backfill window: 90 days of merged PRs (per SIG-44). */
 const BACKFILL_DAYS = 90
@@ -130,6 +136,7 @@ function isoDate(ms: number): string {
 
 export interface CorpusIssueUpsertJob {
   linearIssueId: string
+  tenant?: LinearTenantContext
 }
 
 /**
@@ -139,13 +146,34 @@ export interface CorpusIssueUpsertJob {
  * repo — multi-corpus issue indexing only applies to Linear-linked repos.
  */
 export async function handleCorpusIssueUpsert(env: Env, job: CorpusIssueUpsertJob): Promise<void> {
-  const linear = await buildLinearClient(env)
+  const linear = await buildLinearClient(env, job.tenant)
   const issue = await linear.getIssue(job.linearIssueId)
   if (!issue) {
     console.warn(JSON.stringify({ event: "multicorpus-issue-not-found", id: job.linearIssueId }))
     return
   }
-  const mapping = listTeamRepoMappings(env.OPENCLAW_TEAM_GITHUB_REPO_MAP).find((m) => m.teamKey === issue.team.key)
+  let mapping: { owner: string; repo: string } | undefined
+  if (job.tenant) {
+    const [binding, config] = await Promise.all([
+      resolveLinearTeamBinding(env, job.tenant.organizationId, issue.team.id),
+      getLinearConfig(env, job.tenant.installationId),
+    ])
+    const parts = binding?.githubRepoFullName.split("/") ?? []
+    if (
+      binding &&
+      config &&
+      binding.installationId === job.tenant.installationId &&
+      binding.accessState === "allowed" &&
+      parts.length === 2 &&
+      parts[0] &&
+      parts[1] &&
+      teamIsSelected(config, issue.team.id)
+    ) {
+      mapping = { owner: parts[0], repo: parts[1] }
+    }
+  } else {
+    mapping = listTeamRepoMappings(env.OPENCLAW_TEAM_GITHUB_REPO_MAP).find((m) => m.teamKey === issue.team.key)
+  }
   if (!mapping) {
     console.log(
       JSON.stringify({

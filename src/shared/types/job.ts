@@ -12,9 +12,18 @@
  * its own `env` argument from Cloudflare and re-injects it before
  * calling the per-job handler.
  */
+interface LinearJobTenantContext {
+  /** Optional only for pre-SIG-242 in-flight/legacy manual messages. Every new
+   * Linear webhook producer includes the immutable tenant tuple. */
+  organizationId?: string
+  installationId?: number
+  teamId?: string
+  deliveryId?: string
+}
+
 export type JobMessage =
-  | { type: "linear-triage"; issueId: string }
-  | {
+  | ({ type: "linear-triage"; issueId: string } & LinearJobTenantContext)
+  | ({
       type: "linear-mention"
       commentId: string
       /** SIG-225 follow-up: the consumer (`handleMention`) has its own
@@ -27,7 +36,7 @@ export type JobMessage =
        *  treats absent as `"mention"` to preserve the legacy behavior
        *  on those messages. */
       triggerReason?: "mention" | "thread-followup"
-    }
+    } & LinearJobTenantContext)
   | {
       type: "pr-overview"
       owner: string
@@ -475,7 +484,7 @@ export type JobMessage =
       repo: string
       installationId: number
     }
-  | { type: "corpus-issue-upsert"; linearIssueId: string }
+  | ({ type: "corpus-issue-upsert"; linearIssueId: string } & LinearJobTenantContext)
   // SIG-545 B3: a Linear issue was assigned to the Sigilix agent user (interim
   // assignee path) OR an AgentSessionEvent delegated/mentioned the agent. The
   // consumer (`runLinearAgentRun`) resolves the repo + installation and dispatches
@@ -483,7 +492,7 @@ export type JobMessage =
   // AgentSession id when the trigger was an AgentSessionEvent — present → the run
   // posts a Linear agent `response` activity into that session instead of a plain
   // comment ack; absent (the assignee path) → the legacy comment ack.
-  | { type: "linear-agent-run"; issueId: string; sessionId?: string }
+  | ({ type: "linear-agent-run"; issueId: string; sessionId?: string } & LinearJobTenantContext)
   // sig-gitlab-adapter (GitLab support PR 2): a GitLab Merge Request Hook passed
   // the review-trigger decision and was enqueued for review. This is a DISTINCT
   // job type from `pr-review` (which is GitHub-App-specific — installation

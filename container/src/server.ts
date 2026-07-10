@@ -70,6 +70,15 @@ export interface TaskPacket {
     apiKey?: string;
     repoSlug?: string;
   };
+  /**
+   * Live-events sink for the portal diff pane. When present, the minimal loop
+   * POSTs each file-edit diff to `url` with `secret` (x-sigilix-run-secret).
+   * Absent → no streaming. `secret` NEVER logged.
+   */
+  events?: {
+    url: string;
+    secret: string;
+  };
 }
 
 export interface RunResult {
@@ -141,6 +150,8 @@ export async function runTask(packet: TaskPacket): Promise<RunResult> {
       },
       // exactOptionalPropertyTypes: only include grounding when it has a value.
       ...(grounding !== undefined ? { grounding } : {}),
+      // Live-events sink (portal diff pane); only the minimal loop reads it.
+      ...(packet.events !== undefined ? { events: packet.events } : {}),
       model,
       caps,
     };

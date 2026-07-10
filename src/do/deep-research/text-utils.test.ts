@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest"
-import { stripThinking, isLowQuality, htmlToText, extractTitle, truncate, isTrivialMessage } from "./text-utils"
+import {
+  stripThinking,
+  isLowQuality,
+  htmlToText,
+  extractTitle,
+  truncate,
+  isTrivialMessage,
+  isCodebaseQuestion,
+} from "./text-utils"
 
 describe("stripThinking", () => {
   it("removes paired <think> blocks and trims", () => {
@@ -127,5 +135,26 @@ describe("isTrivialMessage", () => {
 
   it("does NOT flag a real non-latin-script question as empty/trivial", () => {
     expect(isTrivialMessage("\u8BA4\u8BC1\u5728\u54EA\u91CC\u5B9A\u4E49\uFF1F")).toBe(false)
+  })
+})
+
+describe("isCodebaseQuestion", () => {
+  it("grounds an explicit owner/repo slug reference (the broken-moat repro)", () => {
+    // Regressed live: this went un-grounded → generic 'no sigilix org exists' answer.
+    expect(isCodebaseQuestion("in sigilix/sigilix, what other repos within the sigilix org does it use")).toBe(true)
+    expect(isCodebaseQuestion("in acme/api how is auth handled")).toBe(true)
+  })
+
+  it("grounds possessive + 'does it use' phrasings", () => {
+    expect(isCodebaseQuestion("does our app use redis?")).toBe(true)
+    expect(isCodebaseQuestion("where does the rate limit cap get computed in our repo")).toBe(true)
+    expect(isCodebaseQuestion("does this repo depend on lodash")).toBe(true)
+  })
+
+  it("does NOT ground a general design question (no ownership/existing-thing cue)", () => {
+    expect(isCodebaseQuestion("which service should we use for queues?")).toBe(false)
+    expect(isCodebaseQuestion("should we use postgres or mysql")).toBe(false)
+    expect(isCodebaseQuestion("what is the capital of france")).toBe(false)
+    expect(isCodebaseQuestion("how do I center a div in css")).toBe(false)
   })
 })

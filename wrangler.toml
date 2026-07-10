@@ -1376,6 +1376,13 @@ SIGILIX_AGENT_RUNNER_MODE = "on"
 # dispatch REAL runs (clone → edit → PR) instead of the honest "preview" state.
 SIGILIX_PORTAL_AGENT_RUNNER_MODE = "on"
 
+# Live diff-pane streaming: the Worker's OWN public base. When set, dispatch mints
+# a per-run secret + tells the runner container to POST each file-edit diff to
+# {this}/internal/agent-runs/:runId/events (machine-authed). Unset → no streaming
+# (the portal diff pane falls back to the finished PR diff). Revertible: remove
+# this line to instantly turn streaming off.
+SIGILIX_AGENT_EVENTS_ENDPOINT = "https://api.sigilix.ai"
+
 # Consumer binding — DEFERRED out of wrangler.toml because Cloudflare's
 # Queue API rejects re-registering a consumer that's already bound to
 # this same script (HTTP 11004 — "Queue already has a consumer"), and

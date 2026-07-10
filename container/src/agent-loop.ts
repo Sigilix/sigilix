@@ -13,6 +13,7 @@
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { emitFileEdit, type EventsConfig } from "./events.js";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -25,6 +26,9 @@ export interface EditLoopArgs {
   /** model.id e.g. "z-ai/glm-5.2"; model.key is NEVER logged. */
   model: { id: string; key: string; baseUrl?: string };
   caps: { maxModelCalls: number; maxTokens: number; timeoutMs: number };
+  /** Live-events sink: when set, each write streams a file-edit diff to the
+   *  Worker for the portal's diff pane. Best-effort; absent → no streaming. */
+  events?: EventsConfig;
 }
 
 export type StoppedReason =
@@ -498,6 +502,8 @@ export async function runEditLoop(args: EditLoopArgs): Promise<EditLoopResult> {
           if (outcome.ok) {
             changed = true;
             result = "ok";
+            // Stream this edit's diff to the portal (best-effort; never throws).
+            await emitFileEdit(args.events, dir, fp);
           } else {
             result = `error: ${outcome.error ?? "unknown"}`;
           }

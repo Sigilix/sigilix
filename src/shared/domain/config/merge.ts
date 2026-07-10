@@ -8,25 +8,19 @@
 // one recall-safety boundary.
 //
 // PRECEDENCE (highest wins): committed file > repo dashboard > org dashboard >
-// built-in defaults (`{}`). Realized by `mergeSigilixConfigLayers` as a shallow
-// TOP-LEVEL field merge — each defined top-level field from a higher-precedence
-// layer replaces the same field on a lower layer. A field the committed file
-// omits still picks up the dashboard value; a field the committed file sets
-// wins outright. This never regresses the committed path: with no dashboard
-// layers the committed config passes through unchanged.
+// built-in defaults (`{}`). Most fields merge as atomic top-level values.
+// `overview` and `preMergeGates` are the two exceptions: their independently
+// configurable leaves merge recursively so a committed value wins the exact
+// leaf it sets without erasing unrelated dashboard presentation/gate choices.
+// This never regresses the committed path: with no dashboard layers the
+// committed config passes through unchanged.
 //
 // RECALL-SAFETY (the whole point — this feeds the review pipeline):
-// `dashboardRecallSafeSubset` reduces a dashboard layer to a STRICT ALLOWLIST of
-// fields that can only SHAPE or ADD review attention — never drop a file, a PR, a
-// scanner, or a finding before severity is known. An allowlist (not a
-// suppression blacklist) is deliberate: the config schema has many fields that
-// can suppress evidence pre-model — `pathFilters` / `costControls` (drop a
-// file/PR), `depVulnScan` / `astRules` / `sarifEvidence` / `linters` (disable a
-// deterministic scanner), and top-level `disabledRules` (turn a rule off by id,
-// which after merge could even disable a committed `customRules` entry). Any of
-// those from a dashboard toggle could silence a genuine P0/P1, so NONE are
-// applied server-side; that power stays with the committed `sigilix.json`
-// (explicit, code-reviewed config-as-code).
+// dashboard persistence uses the statically closed `DashboardReviewConfig`
+// contract, not `SigilixConfig`. The conversion below can therefore only emit
+// prompt shaping, presentation, and non-blocking quality-gate enablement. It has
+// no representation for a path/file/PR/scanner/rule/category suppression field.
+// That power stays with committed, code-reviewed `sigilix.json`.
 //
 // The allowed fields:
 //   - `guidance` — freeform prose prepended to specialist/synth prompts. UNLIKE a
@@ -37,32 +31,16 @@
 //     (`frameDashboardGuidance`) that instructs the model the org preference may
 //     ADD emphasis but must NEVER downgrade/omit/silence a security, logic, or
 //     P0/P1 finding — mirroring the existing path-instruction prompt framing.
-//   - `customRules` — structurally additive: rendered as "check for X" with a
-//     `[repo-rule:<id>]` attribution marker, gated behind OPENCLAW_CONFIG_AS_CODE_MODE,
-//     and schema-guaranteed to never be a suppress instruction.
 //   - `profile` — only shifts the advisory-NIT floor; it never touches P0/P1 (see
 //     aggregateAdvisoryNits).
-// Free-text `rules` (per-role prose) and `pathInstructions` are NOT allowed from
-// the dashboard: they inject raw prose like `guidance` but have no additive-only
-// framing here, so they stay config-as-code-only. All applied fields still flow
-// through the same hard carve-outs that protect P0/P1/security/logic findings
-// (features/learnings/domain/suppress.ts).
+//   - `overview` — controls only customer-visible markdown sections after model
+//     analysis has completed; it never changes what the model/scanners inspect.
+//   - `preMergeGates` — controls the existing non-blocking overview checklist.
+//     The dashboard can only toggle gates; regex/severity/templates remain
+//     config-as-code.
 
 import { EMPTY_CONFIG, type SigilixConfig } from "./types"
-
-/**
- * The ONLY fields a dashboard-origin config layer may contribute at review time.
- * Each is additive/shaping (with `guidance` additionally framed additive-only —
- * see `frameDashboardGuidance`) and provably cannot drop a file, PR, scanner, or
- * finding pre-severity. Everything else on `SigilixConfig` (pathFilters,
- * costControls, depVulnScan, astRules, sarifEvidence, linters, disabledRules,
- * rules, pathInstructions, commands, dispatcher, preMergeGates, …) is
- * suppression-capable or unframed free-text and is reserved for the committed
- * file. Extend this list ONLY for a new field proven incapable of lowering recall.
- */
-const DASHBOARD_ALLOWED_FIELDS = ["guidance", "customRules", "profile"] as const satisfies ReadonlyArray<
-  keyof SigilixConfig
->
+import type { DashboardReviewConfig } from "./dashboard"
 
 /**
  * Additive-only frame wrapped around dashboard-origin `guidance` so the injected
@@ -82,44 +60,76 @@ export function frameDashboardGuidance(guidance: string): string {
 }
 
 /**
- * Reduce a dashboard-persisted config to the recall-safe allowlist. The result
- * can only shape or ADD review attention, never drop a file/PR/scanner/finding.
- * `guidance` is additive-only-framed. See the module header for the rationale.
+ * Convert the closed dashboard contract into the shared runtime config shape.
+ * This function is intentionally typed to `DashboardReviewConfig`, not
+ * `SigilixConfig`, so suppression-capable fields cannot reach the merge by
+ * construction. `guidance` is additionally framed as additive-only.
  */
-export function dashboardRecallSafeSubset(config: SigilixConfig): SigilixConfig {
+export function dashboardReviewConfigToSigilixConfig(config: DashboardReviewConfig): SigilixConfig {
   const out: SigilixConfig = {}
-  for (const field of DASHBOARD_ALLOWED_FIELDS) {
-    const value = config[field]
-    if (value === undefined) continue
-    if (field === "guidance" && typeof value === "string") {
-      out.guidance = frameDashboardGuidance(value)
-    } else {
-      ;(out as Record<string, unknown>)[field] = value
+  if (config.guidance !== undefined) out.guidance = frameDashboardGuidance(config.guidance)
+  if (config.profile !== undefined) out.profile = config.profile
+  if (config.overview !== undefined) out.overview = { ...config.overview }
+  if (config.preMergeGates !== undefined) {
+    out.preMergeGates = {
+      ...(config.preMergeGates.titleFormat ? { titleFormat: { ...config.preMergeGates.titleFormat } } : {}),
+      ...(config.preMergeGates.descriptionCompleteness
+        ? { descriptionCompleteness: { ...config.preMergeGates.descriptionCompleteness } }
+        : {}),
+      ...(config.preMergeGates.linkedIssue ? { linkedIssue: { ...config.preMergeGates.linkedIssue } } : {}),
     }
   }
   return out
 }
 
+function mergeDefinedRecord<T extends object>(lower: T | undefined, higher: T): T {
+  const merged = { ...(lower ?? {}) } as T
+  for (const [key, value] of Object.entries(higher)) {
+    if (value !== undefined) (merged as Record<string, unknown>)[key] = value
+  }
+  return merged
+}
+
+function mergePreMergeGates(
+  lower: SigilixConfig["preMergeGates"] | undefined,
+  higher: NonNullable<SigilixConfig["preMergeGates"]>,
+): NonNullable<SigilixConfig["preMergeGates"]> {
+  // Preserve every lower-layer gate up front. The loop overlays only gates the
+  // higher layer actually mentions, merging each gate's properties per leaf.
+  const merged: NonNullable<SigilixConfig["preMergeGates"]> = { ...(lower ?? {}) }
+  for (const gate of Object.keys(higher) as Array<keyof NonNullable<SigilixConfig["preMergeGates"]>>) {
+    const higherGate = higher[gate]
+    if (higherGate !== undefined) merged[gate] = mergeDefinedRecord(lower?.[gate], higherGate)
+  }
+  return merged
+}
+
 /**
- * Shallow top-level merge of config layers in ASCENDING precedence (later
- * arguments win). Only own, non-`undefined` top-level fields are copied up, so a
- * layer that simply omits a field never clobbers a lower layer's value.
+ * Merge config layers in ASCENDING precedence (later arguments win). Only own,
+ * non-`undefined` fields are copied up, so a layer that simply omits a field
+ * never clobbers a lower layer's value. `overview` merges per presentation flag;
+ * `preMergeGates` merges per gate and per gate property. Every other top-level
+ * field remains atomic.
  *
  * Returns a fresh object; with a single non-empty layer it is a shallow copy of
  * that layer, and with no defined fields it returns `EMPTY_CONFIG` so downstream
  * "was any config present?" checks stay meaningful.
  */
 export function mergeSigilixConfigLayers(...layers: Array<SigilixConfig | null | undefined>): SigilixConfig {
-  // Top-level field replace (highest layer wins). Deep-merging sub-objects (e.g.
-  // preMergeGates) is intentionally NOT done: config-as-code should win a field
-  // OUTRIGHT so a committed file's intent is never half-overridden by a stale
-  // dashboard sub-field. A top-level field is the atomic unit of precedence.
   const out: SigilixConfig = {}
   for (const layer of layers) {
     if (!layer) continue
     for (const key of Object.keys(layer) as Array<keyof SigilixConfig>) {
       const value = layer[key]
       if (value === undefined) continue
+      if (key === "overview") {
+        out.overview = mergeDefinedRecord(out.overview, value as NonNullable<SigilixConfig["overview"]>)
+        continue
+      }
+      if (key === "preMergeGates") {
+        out.preMergeGates = mergePreMergeGates(out.preMergeGates, value as NonNullable<SigilixConfig["preMergeGates"]>)
+        continue
+      }
       ;(out as Record<string, unknown>)[key] = value
     }
   }

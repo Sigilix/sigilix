@@ -136,7 +136,13 @@ describe("handleResearchCreate — session org repo grounding", () => {
     )
 
     expect(response.status).toBe(200)
-    expect(startBody).toMatchObject({ owner: "Sigilix", repo: "sigilix", hasIndexedRepo: true })
+    expect(startBody).toMatchObject({
+      mode: "chat",
+      creator: "session:42",
+      owner: "Sigilix",
+      repo: "sigilix",
+      hasIndexedRepo: true,
+    })
   })
 
   it("logs and fails closed when the exact GitHub repo scope cannot be listed", async () => {

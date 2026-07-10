@@ -163,6 +163,14 @@ export interface SigilixConfig {
    */
   overview?: {
     enabled?: boolean
+    /** Render the PR-level summary heading + prose. Default true. */
+    showSummary?: boolean
+    /** Render the per-file walkthrough and review-focus bullets. Default true. */
+    showWalkthrough?: boolean
+    /** Render the model-supplied Mermaid sequence diagram. Default true. */
+    showSequenceDiagram?: boolean
+    /** Render the confidence score and reason. Default true. */
+    showConfidence?: boolean
   }
   /**
    * SIG-507: per-repo opt-OUT of contributing anonymized patterns to the cross-repo

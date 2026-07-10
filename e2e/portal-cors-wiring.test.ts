@@ -222,4 +222,83 @@ describe("portal CORS wiring (real worker.fetch)", () => {
     expect(res.status).toBe(503)
     expect(res.headers.get("access-control-allow-origin")).toBe(PORTAL_ORIGIN)
   })
+
+  it.each(["/v1/agent/branches", "/v1/agent/runs", "/v1/agent/runs/run-regression", "/v1/review"])(
+    "OPTIONS %s from an allowlisted origin: 204 + full CORS grant",
+    async (pathname) => {
+      const kv = makeKV()
+      const env = { OPENCLAW_STATE: kv } as unknown as Env
+      const res = await worker.fetch(
+        new Request(`https://worker.example${pathname}`, {
+          method: "OPTIONS",
+          headers: { origin: PORTAL_ORIGIN },
+        }),
+        env,
+        ctx(),
+      )
+      expect(res.status).toBe(204)
+      expect(res.headers.get("access-control-allow-origin")).toBe(PORTAL_ORIGIN)
+      expect(res.headers.get("access-control-allow-credentials")).toBe("true")
+    },
+  )
+
+  it.each([
+    {
+      label: "GET /v1/agent/branches",
+      reviewEndpointConfigured: false,
+      request: () =>
+        new Request("https://worker.example/v1/agent/branches?installationId=1&repo=octocat/hello-world", {
+          headers: { origin: PORTAL_ORIGIN },
+        }),
+    },
+    {
+      label: "POST /v1/agent/runs",
+      reviewEndpointConfigured: false,
+      request: () =>
+        new Request("https://worker.example/v1/agent/runs", {
+          method: "POST",
+          headers: { origin: PORTAL_ORIGIN, "content-type": "application/json" },
+          body: JSON.stringify({
+            installationId: 1,
+            repo: "octocat/hello-world",
+            baseBranch: "main",
+            prompt: "Fix the bug",
+          }),
+        }),
+    },
+    {
+      label: "GET /v1/agent/runs/:id",
+      reviewEndpointConfigured: false,
+      request: () =>
+        new Request("https://worker.example/v1/agent/runs/run-regression", {
+          headers: { origin: PORTAL_ORIGIN },
+        }),
+    },
+    {
+      label: "POST /v1/review",
+      reviewEndpointConfigured: true,
+      request: () =>
+        new Request("https://worker.example/v1/review", {
+          method: "POST",
+          headers: { origin: PORTAL_ORIGIN, "content-type": "application/json" },
+          body: JSON.stringify({
+            owner: "octocat",
+            repo: "hello-world",
+            prNumber: 1,
+            headSha: "abc123",
+            diff: "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
+          }),
+        }),
+    },
+  ])("$label without auth: handler 401 + portal CORS (never 404)", async ({ request, reviewEndpointConfigured }) => {
+    const kv = makeKV()
+    const env = {
+      OPENCLAW_STATE: kv,
+      ...(reviewEndpointConfigured ? { OPENCLAW_SIGILIX_API_KEY: "configured-review-secret" } : {}),
+    } as unknown as Env
+    const res = await worker.fetch(request(), env, ctx())
+    expect(res.status).toBe(401)
+    expect(res.headers.get("access-control-allow-origin")).toBe(PORTAL_ORIGIN)
+    expect(res.headers.get("access-control-allow-credentials")).toBe("true")
+  })
 })

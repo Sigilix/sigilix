@@ -31,6 +31,7 @@ import {
 } from "@/src/lib/recall-alarm"
 import { handleValidationMetricsRoute } from "@/src/lib/metrics-validation-route"
 import { handleReviewApiRoute } from "@/src/lib/api-review-route"
+import { isAgentPortalPath, tryHandleAgentPortalRoute } from "@/src/lib/agent-portal-route"
 import { handleCliGatewayRoutes } from "@/src/lib/boreas-gateway/gateway-routes"
 import { handleJwksRoute, handleOpenidConfigurationRoute } from "@/src/lib/boreas-gateway/well-known-routes"
 import { handleAgentContextRoute } from "@/src/lib/api-context-route"
@@ -299,13 +300,6 @@ export default {
       return handleRunnerIngestRoute(request, env, ctx)
     }
 
-    // SIG-304 Phase 2: hosted thin-client review. Static-bearer auth; runs the
-    // engine server-side (dryRun → nothing posted) + returns the DryRunReview.
-    // Inert (503) until OPENCLAW_SIGILIX_API_KEY is set.
-    if (request.method === "POST" && url.pathname === "/v1/review") {
-      return handleReviewApiRoute(request, env, ctx)
-    }
-
     // SIG-545 / sig-cli-cost-report: the CLI-gateway route group — the three per-model
     // Vertex chat proxies (Boreas/Pyroeis/Astraeus; keyless-WIF, model forced server-side,
     // inert 503 until keyed) plus /v1/usage/report (late-binds the CLI turn's token cost
@@ -482,6 +476,8 @@ export default {
       url.pathname.startsWith("/v1/keys/") ||
       url.pathname === "/v1/onboarding" ||
       url.pathname === "/v1/onboarding/context" ||
+      url.pathname === "/v1/review" ||
+      isAgentPortalPath(url.pathname) ||
       url.pathname === "/v1/research" ||
       url.pathname.startsWith("/v1/research/") ||
       url.pathname === "/v1/workspace/prs" ||
@@ -499,6 +495,12 @@ export default {
     if (request.method === "OPTIONS" && isPortalCorsPath) {
       return handlePortalPreflight(request, env)
     }
+
+    if (request.method === "POST" && url.pathname === "/v1/review") {
+      return withPortalCors(request, await handleReviewApiRoute(request, env, ctx), env)
+    }
+    const agentPortalResponse = await tryHandleAgentPortalRoute(request, env, ctx, url)
+    if (agentPortalResponse) return withPortalCors(request, agentPortalResponse, env)
 
     // sig-gitlab-connector: the GitLab connect surface — OAuth round-trip
     // (top-level 302s) + the portal project endpoints (CORS-wrapped internally).

@@ -1423,6 +1423,11 @@ export interface Env {
   //                                    exact string "on" enables dispatch; any
   //                                    other value keeps the container configured
   //                                    but never invoked (fail-closed).
+  //   OPENCLAW_PORTAL_AGENT_RUNNER_MODE — second, portal-only gate. Both this
+  //                                    and the global runner mode must be "on"
+  //                                    before a session-authenticated portal run
+  //                                    can dispatch. Unset in production for the
+  //                                    initial preview-only rollout.
   //   OPENCLAW_AGENT_RUNNER_ENGINE   — "minimal" (default/unset) | "full" (SIG-545
   //                                    B2). Selects the in-container engine: the
   //                                    bounded 5-tool loop vs the full CLI agent.
@@ -1446,6 +1451,7 @@ export interface Env {
   //                                    the trigger; unset → trigger inert.
   AGENT_RUNNER: DurableObjectNamespace
   OPENCLAW_AGENT_RUNNER_MODE?: string
+  OPENCLAW_PORTAL_AGENT_RUNNER_MODE?: string
   OPENCLAW_AGENT_RUNNER_ENGINE?: string
   OPENCLAW_AGENT_GROUNDING_ENDPOINT?: string
   OPENCLAW_LINEAR_AGENT_RUN_MODE?: string

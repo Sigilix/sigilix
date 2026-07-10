@@ -26,22 +26,20 @@
  * runtime-rejection test belongs in a key-gated e2e (cf. the logic-recall
  * evals), tracked as a follow-up.
  *
- * ⚠️ STILL OPEN before ANY untrusted use (keep engine flag-gated OFF):
- *   (b) container network EGRESS isolation — block the cloud metadata endpoint
- *       (169.254.169.254) + every non-allowlisted host. A config deny does not
- *       stop a compromised runtime reaching the network. Genuinely hard on an
- *       unprivileged CF Container (no NET_ADMIN/iptables) → likely a broker
- *       re-arch. This is the primary remaining gate.
- *   (c) secret-scoping — read/write are unrestricted within the run, and the
- *       model.key sits in the 0600 OPENCODE_CONFIG the same-user agent can read.
- *       So an attacker-controlled ticket can read a secret and WRITE it into a
- *       repo file that surfaces in the PR diff — a network-free exfil path that
- *       egress isolation does NOT close. Mitigations (broker the model call so
- *       the agent never holds the key; scrub secrets from the diff pre-PR) land
- *       with (b). Bounded today only by the engine being flag-gated off.
+ * ✅ (b) EGRESS isolation — DONE (deployed): the DO sets enableInternet=false +
+ *       a deny-by-default allowedHosts allowlist + deniedHosts (169.254.169.254),
+ *       enforced at the CF platform layer (see agent-runner-container.ts).
+ * ✅ (c) MODEL-KEY exfil — CLOSED (this file): the real key is NEVER written into
+ *       the rendered config. The provider apiKey is `{env:SIGILIX_MODEL_KEY}` (a
+ *       reference); runCliAgent sets the real key in the child env only, and
+ *       opencode substitutes it at load. The untrusted agent can't read it — the
+ *       config shows only the reference, and an out-of-repo read of the env
+ *       (/proc/self/environ) is REJECTED by external_directory:"deny" (verified;
+ *       there is no bash/eval tool). No MITM / no broker / no live-runner impact.
  *
- * TOKEN SAFETY: model.key and the grounding apiKey are written only to a
- * 0600 temp config (outside the repo) and the child env — NEVER logged.
+ * TOKEN SAFETY: the grounding apiKey (when provisioned) is written only to a 0600
+ * temp config + the child env — NEVER logged. The model key is only in the child
+ * env, referenced by {env:…} in the config, and unreadable by the agent (above).
  *
  * NOTE: ships dark (server.ts selects this only when packet.engine === "full",
  * which is gated to trusted callers). The CLI binary is now provisioned into the
@@ -86,6 +84,20 @@ const PROVIDER_ID = "runner";
 /** OpenAI-compatible default (OpenRouter), mirroring agent-loop.ts. */
 const DEFAULT_BASE_URL = "https://openrouter.ai/api/v1";
 
+/**
+ * Gate (c): the real model key is NEVER written into the rendered config file.
+ * Instead the config references it as `{env:SIGILIX_MODEL_KEY}` (opencode
+ * substitutes `{env:VAR}` from the child process.env at load), and runCliAgent
+ * sets the real key in the child env only. The untrusted agent can't read it:
+ * the config file shows only the reference, and reading the env value would
+ * require an out-of-repo read (e.g. /proc/self/environ) which `external_directory:
+ * "deny"` rejects at runtime (there's no bash/eval tool). Both facts are verified
+ * against the real binary (a /proc/self/environ read is denied; the substituted
+ * key authenticates the model call).
+ */
+const MODEL_KEY_ENV = "SIGILIX_MODEL_KEY";
+const MODEL_KEY_REF = `{env:${MODEL_KEY_ENV}}`;
+
 /** Cap on captured stdout (bytes) so a verbose run can't balloon memory. */
 const STDOUT_CAP = 5_000_000;
 
@@ -108,7 +120,8 @@ const STDOUT_CAP = 5_000_000;
  * allow-list runs headless without `--dangerously-skip-permissions` and without
  * hanging (allowed edits auto-approve), `"*":"deny"` blocks the same edit, and a
  * forced bash task never runs. Note opencode collapses edit/write/apply_patch
- * into the "edit" key. model.key is embedded — write to a 0600 file only.
+ * into the "edit" key. The apiKey is an {env:…} reference (gate c) — the real key
+ * is set in the child env by runCliAgent, never embedded in this config.
  */
 export function buildOpencodeConfig(
   model: CliAgentArgs["model"],
@@ -124,7 +137,9 @@ export function buildOpencodeConfig(
         // (OpenAI-compatible chat-completions).
         npm: "@ai-sdk/openai-compatible",
         name: "Sigilix agent-runner",
-        options: { baseURL, apiKey: model.key },
+        // Gate (c): reference the key by env, NEVER embed it. runCliAgent sets
+        // MODEL_KEY_ENV in the child env; opencode substitutes it at load.
+        options: { baseURL, apiKey: MODEL_KEY_REF },
         models: { [model.id]: { name: model.id } },
       },
     },
@@ -311,6 +326,11 @@ export async function runCliAgent(args: CliAgentArgs): Promise<EditLoopResult> {
     // consumes it is actually provisioned (see header (c) + buildCliEnv).
     const env = buildCliEnv(args, process.env, GROUNDING_PLUGIN_PATH !== "");
     env.OPENCODE_CONFIG = configPath;
+    // Gate (c): the real model key lives ONLY in the child env (referenced as
+    // {env:…} in the config, never embedded). The untrusted agent can't read it —
+    // the config shows only the reference, and an out-of-repo read of the env
+    // (/proc/self/environ) is denied by external_directory:"deny".
+    env[MODEL_KEY_ENV] = model.key;
 
     const cliArgs = buildCliArgs(model, dir, buildPrompt(ticket, grounding));
 

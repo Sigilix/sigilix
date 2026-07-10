@@ -2,11 +2,12 @@
 // validation, recall-safe status mapping, and the unified-diff parser. The engine
 // is mocked (the real engine path is covered by the live CLI + e2e suites).
 
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { insertApiKey } from "@/src/lib/api-key-store"
 import { sha256Hex } from "@/src/lib/auth-bearer"
+import { base64urlEncode, createSession } from "@/src/lib/auth-session"
 
 vi.mock("@/src/lib/ensemble/app/orchestrator", () => ({ handlePrReviewEnsemble: vi.fn() }))
 // Mode B builds the real GitHub client in-route (to resolve headSha) — mock it so the
@@ -25,6 +26,8 @@ import type { Env } from "@/src/shared/types/env"
 const mockEngine = vi.mocked(handlePrReviewEnsemble)
 const mockBuildClient = vi.mocked(buildClient)
 const TOKEN = "test-secret-key"
+const SESSION_COOKIE = "__Host-sigilix_session"
+const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(12))
 const env = (key?: string, extra: Partial<Env> = {}): Env =>
   ({ OPENCLAW_SIGILIX_API_KEY: key, ...extra }) as unknown as Env
 const MIGRATION_SQL_API_KEY = readFileSync(
@@ -54,6 +57,99 @@ function kvMock(getVal: string | null = null): Env["OPENCLAW_STATE"] {
     put: vi.fn(async () => undefined),
   } as unknown as Env["OPENCLAW_STATE"]
 }
+
+function sessionKv(): KVNamespace {
+  const store = new Map<string, string>()
+  return {
+    get: vi.fn(async (key: string, type?: "json") => {
+      const raw = store.get(key)
+      if (raw === undefined) return null
+      return type === "json" ? JSON.parse(raw) : raw
+    }),
+    put: vi.fn(async (key: string, value: string) => {
+      store.set(key, value)
+    }),
+    delete: vi.fn(async (key: string) => {
+      store.delete(key)
+    }),
+  } as unknown as KVNamespace
+}
+
+async function portalReviewEnv(
+  options: {
+    provider?: "github" | "google"
+    accessToken?: string
+    map?: string
+  } = {},
+): Promise<{ env: Env; sessionId: string }> {
+  const kv = sessionKv()
+  const sessionId = "portal-review-session"
+  const provider = options.provider ?? "github"
+  await createSession({
+    kv,
+    sessionId,
+    login: "octocat",
+    ...(provider === "github" ? { githubUserId: 123 } : {}),
+    provider,
+    accessToken: options.accessToken ?? (provider === "github" ? "ghu_portal" : ""),
+    encryptionKeyB64url: ENC_KEY,
+  })
+  return {
+    sessionId,
+    env: env(undefined, {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      GITHUB_APP_ID: "1",
+      GITHUB_PRIVATE_KEY: "pk",
+      OPENCLAW_GITHUB_INSTALLATION_MAP: options.map ?? '{"o/r":"42"}',
+    }),
+  }
+}
+
+function portalReq(
+  body: unknown,
+  sessionId: string,
+  options: { contentType?: string; authorization?: string } = {},
+): Request {
+  const headers = new Headers({
+    cookie: `${SESSION_COOKIE}=${sessionId}`,
+    "content-type": options.contentType ?? "application/json",
+  })
+  if (options.authorization !== undefined) headers.set("authorization", options.authorization)
+  return new Request("https://api.sigilix.ai/v1/review", {
+    method: "POST",
+    headers,
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  })
+}
+
+function stubGithubRepoScope(
+  repos: Array<{ installationId: number; fullName: string }> = [{ installationId: 42, fullName: "o/r" }],
+): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString()
+      if (url.startsWith("https://api.github.com/user/installations?")) {
+        const ids = [...new Set(repos.map((repo) => repo.installationId))]
+        return new Response(JSON.stringify({ installations: ids.map((id) => ({ id })) }), { status: 200 })
+      }
+      const match = url.match(/\/user\/installations\/(\d+)\/repositories\?/)
+      if (match) {
+        const installationId = Number(match[1])
+        return new Response(
+          JSON.stringify({
+            repositories: repos
+              .filter((repo) => repo.installationId === installationId)
+              .map((repo) => ({ full_name: repo.fullName })),
+          }),
+          { status: 200 },
+        )
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    }),
+  )
+}
 const DIFF = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-const x=1\n+const x=2\n"
 const okReview = { verdict: { summary: "s", confidence: 4, findings: [] }, unanchoredFindings: [] }
 const okResult = { status: "skipped", dryRunReview: okReview, telemetry: {} } as never
@@ -78,6 +174,10 @@ beforeEach(() => {
   mockBuildClient.mockResolvedValue({
     getPullRequest: vi.fn(async () => ({ head: { sha: "server-resolved-sha" }, base: { sha: "base" } })),
   } as never)
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 describe("handleReviewApiRoute — auth + validation", () => {
@@ -146,6 +246,190 @@ describe("handleReviewApiRoute — auth + validation", () => {
     )
     expect(res.status).toBe(401)
     expect(mockEngine).not.toHaveBeenCalled()
+  })
+})
+
+describe("handleReviewApiRoute — portal session auth", () => {
+  const groundedBody = {
+    mode: "grounded",
+    installationId: 42,
+    owner: "o",
+    repo: "r",
+    prNumber: 1,
+    headSha: "abc123",
+  }
+
+  it("runs a grounded review for the exact repo in the signed-in GitHub user's live scope", async () => {
+    mockEngine.mockResolvedValue(okResult)
+    const portal = await portalReviewEnv()
+    stubGithubRepoScope()
+
+    const res = await handleReviewApiRoute(portalReq(groundedBody, portal.sessionId), portal.env, noopCtx)
+
+    expect(res.status).toBe(200)
+    expect(mockEngine).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: "o", repo: "r", installationId: 42, dryRun: true }),
+    )
+  })
+
+  it("requires application/json before reading a cookie-authenticated body", async () => {
+    const portal = await portalReviewEnv()
+    const res = await handleReviewApiRoute(
+      portalReq(groundedBody, portal.sessionId, { contentType: "text/plain" }),
+      portal.env,
+      noopCtx,
+    )
+
+    expect(res.status).toBe(415)
+    expect(mockBuildClient).not.toHaveBeenCalled()
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+
+  it("rejects diff mode for cookie auth", async () => {
+    const portal = await portalReviewEnv()
+    const res = await handleReviewApiRoute(
+      portalReq({ ...validBody, installationId: 42 }, portal.sessionId),
+      portal.env,
+      noopCtx,
+    )
+
+    expect(res.status).toBe(400)
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects a missing or invalid installationId (%s)",
+    async (installationId) => {
+      const portal = await portalReviewEnv()
+      const body = { ...groundedBody, installationId }
+      const res = await handleReviewApiRoute(portalReq(body, portal.sessionId), portal.env, noopCtx)
+
+      expect(res.status).toBe(400)
+      expect(mockBuildClient).not.toHaveBeenCalled()
+      expect(mockEngine).not.toHaveBeenCalled()
+    },
+  )
+
+  it("fails closed when the trusted repo map resolves to a different installation", async () => {
+    const portal = await portalReviewEnv({ map: '{"o/r":"99"}' })
+    stubGithubRepoScope()
+    const res = await handleReviewApiRoute(portalReq(groundedBody, portal.sessionId), portal.env, noopCtx)
+
+    expect(res.status).toBe(403)
+    expect(mockBuildClient).not.toHaveBeenCalled()
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+
+  it("denies another selected repo inside an otherwise visible installation", async () => {
+    const portal = await portalReviewEnv({ map: '{"o/r":"42","o/secret":"42"}' })
+    stubGithubRepoScope([{ installationId: 42, fullName: "o/r" }])
+    const res = await handleReviewApiRoute(
+      portalReq({ ...groundedBody, repo: "secret" }, portal.sessionId),
+      portal.env,
+      noopCtx,
+    )
+
+    expect(res.status).toBe(403)
+    expect(mockBuildClient).not.toHaveBeenCalled()
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+
+  it("denies an exact repo tuple under a different installation", async () => {
+    const portal = await portalReviewEnv({ map: '{"o/r":"43"}' })
+    stubGithubRepoScope([{ installationId: 42, fullName: "o/r" }])
+    const res = await handleReviewApiRoute(
+      portalReq({ ...groundedBody, installationId: 43 }, portal.sessionId),
+      portal.env,
+      noopCtx,
+    )
+
+    expect(res.status).toBe(403)
+    expect(mockBuildClient).not.toHaveBeenCalled()
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+
+  it("returns 502 when the live GitHub repo-scope lookup fails", async () => {
+    const portal = await portalReviewEnv()
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Promise.reject(new Error("github down"))),
+    )
+    const res = await handleReviewApiRoute(portalReq(groundedBody, portal.sessionId), portal.env, noopCtx)
+
+    expect(res.status).toBe(502)
+    expect(mockBuildClient).not.toHaveBeenCalled()
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+
+  it("matches the live GitHub repo tuple case-insensitively", async () => {
+    mockEngine.mockResolvedValue(okResult)
+    const portal = await portalReviewEnv({ map: '{"O/R":"42"}' })
+    stubGithubRepoScope([{ installationId: 42, fullName: "o/r" }])
+    const res = await handleReviewApiRoute(
+      portalReq({ ...groundedBody, owner: "O", repo: "R" }, portal.sessionId),
+      portal.env,
+      noopCtx,
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockEngine).toHaveBeenCalled()
+  })
+
+  it("rejects a non-GitHub session before any repo lookup", async () => {
+    const portal = await portalReviewEnv({ provider: "google" })
+    const fetchSpy = vi.fn()
+    vi.stubGlobal("fetch", fetchSpy)
+    const res = await handleReviewApiRoute(portalReq(groundedBody, portal.sessionId), portal.env, noopCtx)
+
+    expect(res.status).toBe(403)
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(mockBuildClient).not.toHaveBeenCalled()
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+
+  it("returns 503 when cookie auth cannot decrypt a GitHub token", async () => {
+    const portal = await portalReviewEnv()
+    delete portal.env.OPENCLAW_SESSION_ENCRYPTION_KEY
+    const res = await handleReviewApiRoute(portalReq(groundedBody, portal.sessionId), portal.env, noopCtx)
+
+    expect(res.status).toBe(503)
+    expect(mockBuildClient).not.toHaveBeenCalled()
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+
+  it.each(["", "Basic abc", "Bearer", "Bearer wrong"])(
+    "a present Authorization header (%j) never falls through to the valid cookie",
+    async (authorization) => {
+      const portal = await portalReviewEnv()
+      portal.env.OPENCLAW_SIGILIX_API_KEY = TOKEN
+      stubGithubRepoScope()
+      const res = await handleReviewApiRoute(
+        portalReq(groundedBody, portal.sessionId, { authorization }),
+        portal.env,
+        noopCtx,
+      )
+
+      expect(res.status).toBe(401)
+      expect(mockBuildClient).not.toHaveBeenCalled()
+      expect(mockEngine).not.toHaveBeenCalled()
+    },
+  )
+
+  it("preserves Mode A bearer behavior when a valid cookie is also present", async () => {
+    mockEngine.mockResolvedValue(okResult)
+    const portal = await portalReviewEnv()
+    portal.env.OPENCLAW_SIGILIX_API_KEY = TOKEN
+    const fetchSpy = vi.fn()
+    vi.stubGlobal("fetch", fetchSpy)
+    const res = await handleReviewApiRoute(
+      portalReq(validBody, portal.sessionId, { authorization: `Bearer ${TOKEN}` }),
+      portal.env,
+      noopCtx,
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockEngine).toHaveBeenCalled()
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
 

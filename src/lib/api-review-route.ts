@@ -1,5 +1,6 @@
-// SIG-304 Phase 2 — POST /v1/review (hosted thin-client endpoint). Authenticates a
-// static bearer ($OPENCLAW_SIGILIX_API_KEY), runs the review engine SERVER-SIDE
+// SIG-304 Phase 2 — POST /v1/review (hosted thin-client endpoint). Authenticates
+// either an API bearer (CLI) or an exact-repo-scoped portal session, then runs
+// the review engine SERVER-SIDE
 // (dryRun → nothing posted; OpenRouter key stays on the Worker), and returns the
 // DryRunReview JSON verbatim — the same shape the CLI renderers already consume, so
 // the hosted client is render-identical to local. Two request modes:
@@ -40,6 +41,10 @@ import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { EnsembleHandlerArgs } from "@/src/lib/ensemble/app/orchestrator-types"
 import { requireApiTenant, callerOwnsInstallation } from "@/src/lib/api-key-resolver"
+import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
+import { listGithubUserInstallationRepos } from "@/src/lib/github-user-repo-scope"
+import { hasJsonContentType } from "@/src/lib/portal-cors"
 import {
   admitTenant,
   releaseTenant,
@@ -132,6 +137,7 @@ interface ReviewApiCommon {
   repo: string
   prNumber: number
   baseSha?: string
+  installationId?: number
 }
 /** Mode A: the client posts the diff; the server reviews it ungrounded. headSha required. */
 type DiffModeBody = ReviewApiCommon & { mode: "diff"; headSha: string; diff: string }
@@ -142,19 +148,26 @@ type ReviewApiBody = DiffModeBody | GroundedModeBody
 
 /** Validate the request body shape; return the typed body or an error string. */
 function parseBody(raw: unknown): ReviewApiBody | string {
-  if (typeof raw !== "object" || raw === null) return "body must be a JSON object"
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return "body must be a JSON object"
   const b = raw as Record<string, unknown>
   if (typeof b.owner !== "string" || b.owner === "") return "owner (string) is required"
   if (typeof b.repo !== "string" || b.repo === "") return "repo (string) is required"
   if (typeof b.prNumber !== "number" || !Number.isInteger(b.prNumber)) return "prNumber (integer) is required"
   if (b.baseSha !== undefined && typeof b.baseSha !== "string") return "baseSha must be a string"
   if (b.headSha !== undefined && typeof b.headSha !== "string") return "headSha must be a string"
+  if (
+    b.installationId !== undefined &&
+    (typeof b.installationId !== "number" || !Number.isSafeInteger(b.installationId) || b.installationId <= 0)
+  ) {
+    return "installationId must be a positive integer"
+  }
   if (b.mode !== undefined && b.mode !== "diff" && b.mode !== "grounded") return 'mode must be "diff" or "grounded"'
   const common: ReviewApiCommon = {
     owner: b.owner,
     repo: b.repo,
     prNumber: b.prNumber,
     ...(typeof b.baseSha === "string" ? { baseSha: b.baseSha } : {}),
+    ...(typeof b.installationId === "number" ? { installationId: b.installationId } : {}),
   }
   if (b.mode === "grounded") {
     // headSha optional: the server resolves it from the PR when absent.
@@ -170,11 +183,40 @@ function parseBody(raw: unknown): ReviewApiBody | string {
   return { ...common, mode: "diff", headSha: b.headSha, diff: b.diff }
 }
 
+type ReviewAuth = { kind: "api"; installationId: number } | { kind: "session"; session: AuthedSession }
+
+function isGithubSession(session: AuthedSession): boolean {
+  const provider = session.record.provider
+  return (
+    (provider === undefined || provider === "github") &&
+    typeof session.record.githubUserId === "number" &&
+    Number.isSafeInteger(session.record.githubUserId) &&
+    session.record.githubUserId > 0
+  )
+}
+
+function scopeContainsRepo(
+  repos: Array<{ installationId: number; owner: string; repo: string }>,
+  installationId: number,
+  owner: string,
+  repo: string,
+): boolean {
+  const wantedOwner = owner.toLowerCase()
+  const wantedRepo = repo.toLowerCase()
+  return repos.some(
+    (candidate) =>
+      candidate.installationId === installationId &&
+      candidate.owner.toLowerCase() === wantedOwner &&
+      candidate.repo.toLowerCase() === wantedRepo,
+  )
+}
+
 /**
  * POST /v1/review (Mode A diff-only, or Mode B grounded — see file header). Auth is
- * checked from the header BEFORE the body is read so an unauthenticated caller can't
- * force a large body buffer. 403 (Mode B only) when a per-tenant key's repo doesn't
- * match its own installation (SIG-494).
+ * checked BEFORE the body is read so an unauthenticated caller cannot force a large
+ * body buffer. Any present Authorization header selects the existing bearer lane;
+ * only its absence permits the cookie lane. 403 (Mode B only) when the authenticated
+ * principal does not own the exact repository.
  */
 export async function handleReviewApiRoute(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   // #155 slice 2: resolve the bearer through the per-tenant API-key resolver (a D1
@@ -194,12 +236,25 @@ export async function handleReviewApiRoute(request: Request, env: Env, ctx: Exec
   // left as-is — it is genuinely ungrounded (ungroundedEnv stubs retrieval to
   // empty), so there is no tenant's indexed code to leak. The legacy global key is
   // exempt by design (see callerOwnsInstallation's header) — it stays broad.
-  if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
-    return json({ error: "review_endpoint_not_configured" }, 503)
+  let auth: ReviewAuth
+  if (request.headers.has("authorization")) {
+    if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
+      return json({ error: "review_endpoint_not_configured" }, 503)
+    }
+    const apiAuth = await requireApiTenant(request, env, ctx)
+    if ("response" in apiAuth) return apiAuth.response
+    auth = { kind: "api", installationId: apiAuth.caller.installationId }
+  } else {
+    const session = await requireSession(request, env, ctx)
+    if (!session) return json({ error: "unauthenticated" }, 401)
+    if (!hasJsonContentType(request)) return json({ error: "content_type_must_be_application_json" }, 415)
+    if (!isGithubSession(session)) return json({ error: "forbidden", detail: "GitHub session required" }, 403)
+    if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) {
+      console.error(JSON.stringify({ event: "review-portal-encryption-key-missing" }))
+      return json({ error: "review_endpoint_not_configured" }, 503)
+    }
+    auth = { kind: "session", session }
   }
-  const auth = await requireApiTenant(request, env, ctx)
-  if ("response" in auth) return auth.response
-  const caller = auth.caller
 
   // Body read is CAPPED as the stream is consumed (post-auth) so an oversized
   // payload is aborted, never fully buffered; `null` = over the cap → 413.
@@ -214,6 +269,14 @@ export async function handleReviewApiRoute(request: Request, env: Env, ctx: Exec
   }
   const parsed = parseBody(raw)
   if (typeof parsed === "string") return json({ error: "invalid_request", detail: parsed }, 400)
+  if (auth.kind === "session") {
+    if (parsed.mode !== "grounded") {
+      return json({ error: "invalid_request", detail: "portal sessions require grounded mode" }, 400)
+    }
+    if (parsed.installationId === undefined) {
+      return json({ error: "invalid_request", detail: "installationId is required for portal reviews" }, 400)
+    }
+  }
 
   // SIG-455: per-tenant fairness gate — Mode B ONLY. Mode A uses a shared API key and the
   // caller asserts owner/repo, so keying the semaphore on owner/repo is spoofable; the
@@ -275,8 +338,37 @@ export async function handleReviewApiRoute(request: Request, env: Env, ctx: Exec
     // SIG-494: fail-closed tenant-scope gate — a real per-tenant key may only run a
     // GROUNDED review against repo(s) its OWN installation owns. Runs before any
     // ceiling/fairness/GitHub-touching work so a mismatched repo never spends budget.
-    if (!callerOwnsInstallation(caller.installationId, lookup)) {
-      return json({ error: "forbidden", detail: "api key is not scoped to this repo" }, 403)
+    if (auth.kind === "api") {
+      if (!callerOwnsInstallation(auth.installationId, lookup)) {
+        return json({ error: "forbidden", detail: "api key is not scoped to this repo" }, 403)
+      }
+    } else {
+      if (parsed.installationId !== lookup.installationId) {
+        return json({ error: "forbidden", detail: "session is not scoped to this installation" }, 403)
+      }
+      let accessToken: string
+      try {
+        accessToken = await getValidGithubToken({
+          env,
+          sessionId: auth.session.sessionId,
+          record: auth.session.record,
+          encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY!,
+        })
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            event: "review-portal-token-read-failed",
+            err: error instanceof Error ? error.message : String(error),
+          }),
+        )
+        return json({ error: "session_token_unavailable" }, 500)
+      }
+      if (!accessToken) return json({ error: "forbidden", detail: "GitHub session required" }, 403)
+      const scope = await listGithubUserInstallationRepos(accessToken)
+      if (!scope.ok) return json({ error: "github_scope_unavailable" }, 502)
+      if (!scopeContainsRepo(scope.repos, lookup.installationId, parsed.owner, parsed.repo)) {
+        return json({ error: "forbidden", detail: "session is not scoped to this repo" }, 403)
+      }
     }
     // Ceiling BEFORE buildClient/getPullRequest — a probe that mints a token + hits
     // GitHub counts against the budget (no free installation enumeration).

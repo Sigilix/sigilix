@@ -21,6 +21,15 @@ import {
   resolveUsageMeterMode,
 } from "@/src/features/tenancy"
 import { listTeamRepoMappings, resolveInstallation } from "@/src/shared/adapters/github/github-installation"
+import {
+  codebaseContextEnabled,
+  getLinearConfig,
+  resolveLinearTeamBinding,
+  teamIsSelected,
+  type LinearConfig,
+  type LinearTeamBinding,
+  type LinearTenantContext,
+} from "@/src/features/linear-integration"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const MAX_LABELS = 3
@@ -47,14 +56,14 @@ interface Verdict {
   improvedDescription: string | undefined
 }
 
-export async function triageIssue(issueId: string, env: Env): Promise<void> {
+export async function triageIssue(issueId: string, env: Env, tenant?: LinearTenantContext): Promise<void> {
   const t0 = Date.now()
   const since = (label: string): void => {
     console.log(`[triage] ${label} +${Date.now() - t0}ms`, { issueId })
   }
 
   since("start")
-  const linear = await buildLinearClient(env)
+  const linear = await buildLinearClient(env, tenant)
   since("auth-ready")
 
   const issue = await linear.getIssue(issueId)
@@ -62,6 +71,46 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
   if (!issue) {
     console.warn("issue not found", { issueId })
     return
+  }
+
+  let tenantConfig: LinearConfig | null = null
+  let tenantBinding: LinearTeamBinding | null = null
+  if (tenant) {
+    const [config, binding] = await Promise.all([
+      getLinearConfig(env, tenant.installationId),
+      resolveLinearTeamBinding(env, tenant.organizationId, issue.team.id),
+    ])
+    tenantConfig = config
+    tenantBinding = binding
+    const scopeInvalid =
+      !tenantConfig ||
+      !tenantBinding ||
+      tenantBinding.installationId !== tenant.installationId ||
+      tenantBinding.accessState !== "allowed" ||
+      tenantBinding.githubRepoId <= 0 ||
+      !tenantBinding.githubRepoFullName ||
+      (tenant.teamId !== undefined && tenant.teamId !== issue.team.id) ||
+      !teamIsSelected(tenantConfig, issue.team.id)
+    if (scopeInvalid) {
+      try {
+        await linear.createComment(
+          issue.id,
+          "**Sigilix configuration warning** — this Linear team is not bound to an accessible repository in the connected GitHub installation, so no triage or code retrieval ran.",
+        )
+      } catch {
+        // Best-effort visibility; the tenant guard still fails closed.
+      }
+      console.warn(
+        JSON.stringify({
+          event: "linear-triage-missing-tenant-binding",
+          issueId,
+          organizationId: tenant.organizationId,
+          installationId: tenant.installationId,
+          teamId: issue.team.id,
+        }),
+      )
+      return
+    }
   }
 
   // SIG-38 free-launch caps: per-team rolling-window Linear-triage cap.
@@ -111,11 +160,15 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
   // mapped repo — the model is instructed in the prompt to abstain
   // from inventing file references when no chunks are present.
   const retrievalText = `${issue.title}\n\n${issue.description ?? ""}`
-  const chunks = await retrieveChunks({
-    text: retrievalText,
-    teamKey: issue.team?.key ?? null,
-    env,
-  })
+  const chunks =
+    tenantConfig && !codebaseContextEnabled(tenantConfig)
+      ? []
+      : await retrieveChunks({
+          text: retrievalText,
+          teamKey: issue.team?.key ?? null,
+          env,
+          ...(tenantBinding ? { namespace: tenantBinding.githubRepoFullName } : {}),
+        })
   since("retrieval-done")
 
   const prompt = buildPrompt({
@@ -147,19 +200,21 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
 
   const body = formatIssueTriageComment(verdict)
 
-  let commentId: string
-  if (existingComment) {
-    await linear.updateComment(existingComment.id, body)
-    commentId = existingComment.id
-  } else {
-    commentId = await linear.createComment(issue.id, body)
+  if (!tenantConfig || tenantConfig.writeback.comments) {
+    let commentId: string
+    if (existingComment) {
+      await linear.updateComment(existingComment.id, body)
+      commentId = existingComment.id
+    } else {
+      commentId = await linear.createComment(issue.id, body)
+    }
+    // SIG-225: stamp every bot-authored commentId so Linear's
+    // Comment.create webhook for THIS comment is filtered as self.
+    // Best-effort — KV failure is logged and swallowed inside the helper.
+    await markBotAuthoredComment(env.OPENCLAW_STATE, commentId)
+    await setMarker(env.OPENCLAW_STATE, issue.id, commentId)
+    since("comment-posted")
   }
-  // SIG-225: stamp every bot-authored commentId so Linear's
-  // Comment.create webhook for THIS comment is filtered as self.
-  // Best-effort — KV failure is logged and swallowed inside the helper.
-  await markBotAuthoredComment(env.OPENCLAW_STATE, commentId)
-  await setMarker(env.OPENCLAW_STATE, issue.id, commentId)
-  since("comment-posted")
 
   // SIG-38 free-launch caps: meter one triage row per distinct issue
   // (best-effort, fail-open — appendTriageUsage never throws and no-ops
@@ -184,15 +239,19 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
     // to the per-author org drill-down (that column is meaningful only for
     // pr_reviews, whose author_login IS a GitHub login).
     // mode="off" is a true kill switch — shed the D1 write entirely.
-    const mapping = issue.team.key
-      ? listTeamRepoMappings(env.OPENCLAW_TEAM_GITHUB_REPO_MAP).find((m) => m.teamKey === issue.team!.key)
-      : undefined
-    if (mapping && resolveUsageMeterMode(env) !== "off") {
-      const inst = resolveInstallation(mapping.owner, mapping.repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
-      if (inst.ok) {
+    if (resolveUsageMeterMode(env) !== "off") {
+      const tenantInstallationId = tenant?.installationId
+      const mapping = issue.team.key
+        ? listTeamRepoMappings(env.OPENCLAW_TEAM_GITHUB_REPO_MAP).find((m) => m.teamKey === issue.team!.key)
+        : undefined
+      const legacyInstallation = mapping
+        ? resolveInstallation(mapping.owner, mapping.repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
+        : null
+      const installationId = tenantInstallationId ?? (legacyInstallation?.ok ? legacyInstallation.installationId : null)
+      if (installationId) {
         await appendUsageEvent(env, {
           meter: "linear_triage",
-          installationId: inst.installationId,
+          installationId,
           userKey: null,
           surface: "linear",
           eventId: issue.id,
@@ -210,7 +269,8 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
   try {
     const priority = severityToPriority(verdict.severity)
     const estimate = estimateToPoints(verdict.estimate)
-    const labelIds = await linear.resolveLabels(issue.team.id, verdict.labels)
+    const labelIds =
+      !tenantConfig || tenantConfig.writeback.labels ? await linear.resolveLabels(issue.team.id, verdict.labels) : []
     const updates: {
       priority?: number
       estimate?: number

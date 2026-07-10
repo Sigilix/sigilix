@@ -21,6 +21,13 @@ import { dispatchAgentRun, type AgentRunOutcome } from "@/src/lib/agent-runner/d
 import { listTeamRepoMappings, resolveInstallation } from "@/src/shared/adapters/github/github-installation"
 import { isAgentSessionCancelled } from "@/src/lib/linear-agent-cancel"
 import { resolveEntitlement, upsellFor as linearUpsellFor } from "@/src/features/entitlements"
+import {
+  getLinearConfig,
+  resolveLinearTeamBinding,
+  teamIsSelected,
+  type LinearConfig,
+  type LinearTenantContext,
+} from "@/src/features/linear-integration"
 
 /** Ollama Turbo base — the free minimal-engine provider for the B3 trigger. */
 const OLLAMA_TURBO_BASE = "https://ollama.com/v1"
@@ -215,7 +222,12 @@ export async function dispatchTicketImplementation(
  * NOT widened here because posting on every dedupe would reintroduce the redelivery
  * double-resolve race this fix is careful to avoid.
  */
-export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: string): Promise<void> {
+export async function runLinearAgentRun(
+  issueId: string,
+  env: Env,
+  sessionId?: string,
+  tenant?: LinearTenantContext,
+): Promise<void> {
   try {
     // Checkpoint 0 (stop): cancelled before we start any work → abort, post nothing. The
     // webhook's stop handler already posted the terminal "stopped" activity. Best-effort:
@@ -226,15 +238,41 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
       return
     }
 
-    const linear = await buildLinearClient(env)
+    const linear = await buildLinearClient(env, tenant)
     const issue = await linear.getIssue(issueId)
     if (!issue) {
       console.warn(JSON.stringify({ event: "linear-agent-run-issue-not-found", issueId }))
       return
     }
 
-    // Resolve the target GitHub repo from the issue's Linear team.
-    const mapping = listTeamRepoMappings(env.OPENCLAW_TEAM_GITHUB_REPO_MAP).find((m) => m.teamKey === issue.team.key)
+    let tenantConfig: LinearConfig | null = null
+    let mapping: { owner: string; repo: string } | undefined
+    let installationId: number | undefined
+    if (tenant) {
+      const [config, binding] = await Promise.all([
+        getLinearConfig(env, tenant.installationId),
+        resolveLinearTeamBinding(env, tenant.organizationId, issue.team.id),
+      ])
+      tenantConfig = config
+      const repoParts = binding?.githubRepoFullName.split("/") ?? []
+      if (
+        config &&
+        binding &&
+        binding.installationId === tenant.installationId &&
+        binding.accessState === "allowed" &&
+        binding.githubRepoId > 0 &&
+        repoParts.length === 2 &&
+        repoParts[0] &&
+        repoParts[1] &&
+        (tenant.teamId === undefined || tenant.teamId === issue.team.id) &&
+        teamIsSelected(config, issue.team.id)
+      ) {
+        mapping = { owner: repoParts[0], repo: repoParts[1] }
+        installationId = tenant.installationId
+      }
+    } else {
+      mapping = listTeamRepoMappings(env.OPENCLAW_TEAM_GITHUB_REPO_MAP).find((m) => m.teamKey === issue.team.key)
+    }
     if (!mapping) {
       console.warn(
         JSON.stringify({
@@ -243,11 +281,25 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
           team: issue.team.key,
         }),
       )
+      if (sessionId && tenant) {
+        await postAgentSessionCompletion(env, tenant, { issueId, sessionId, dispatched: false })
+      } else {
+        try {
+          await linear.createComment(
+            issue.id,
+            "**Sigilix configuration warning** — this Linear team is not bound to an accessible repository in the connected GitHub installation.",
+          )
+        } catch {
+          // best-effort visibility
+        }
+      }
       return
     }
 
     // Resolve the GitHub App installation for that repo.
-    const inst = resolveInstallation(mapping.owner, mapping.repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
+    const inst = installationId
+      ? { ok: true as const, installationId }
+      : resolveInstallation(mapping.owner, mapping.repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
     if (!inst.ok) {
       console.warn(
         JSON.stringify({
@@ -275,7 +327,7 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
       const upsell = linearUpsellFor("linear")
       if (upsell) {
         if (sessionId) {
-          const agent = await buildLinearAgentClient(env)
+          const agent = tenant ? await buildLinearAgentClient(env, tenant) : await buildLinearAgentClient(env)
           if (agent) await agent.createAgentActivity(sessionId, upsell, "response")
         } else {
           try {
@@ -308,8 +360,8 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
 
     // Milestone (SIG-145b): the repo + installation are resolved, so the run is about to
     // start real work — surface that as live progress instead of a silent "Working…".
-    if (sessionId && !skipMilestones) {
-      await postMilestoneThought(env, {
+    if (sessionId && !skipMilestones && (!tenantConfig || tenantConfig.planning)) {
+      await postMilestoneThought(env, tenant, {
         issueId,
         sessionId,
         checkpoint: "planning",
@@ -330,8 +382,8 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
     // Milestone (SIG-145b): about to hand off to the container implementation. This is
     // the last milestone before the (single, opaque) await that runs the container to
     // completion — everything after this point is either the terminal post or a return.
-    if (sessionId && !skipMilestones) {
-      await postMilestoneThought(env, {
+    if (sessionId && !skipMilestones && (!tenantConfig || tenantConfig.planning)) {
+      await postMilestoneThought(env, tenant, {
         issueId,
         sessionId,
         checkpoint: "implementing",
@@ -370,14 +422,14 @@ export async function runLinearAgentRun(issueId: string, env: Env, sessionId?: s
           JSON.stringify({ event: "linear-agent-run-cancelled", issueId, sessionId, checkpoint: "post-dispatch" }),
         )
       } else {
-        await postAgentSessionCompletion(env, {
+        await postAgentSessionCompletion(env, tenant, {
           issueId,
           sessionId,
           dispatched,
           ...(outcome !== undefined ? { outcome } : {}),
         })
       }
-    } else if (dispatched) {
+    } else if (dispatched && (!tenantConfig || tenantConfig.writeback.comments)) {
       // Interim assignee path (no AgentSession): the legacy issue comment ack. A plain
       // comment never "hangs", so this stays a single best-effort dispatch ack.
       try {
@@ -466,6 +518,7 @@ async function peekTicketDeduped(env: Env, dedupeId: string): Promise<boolean> {
  */
 async function postMilestoneThought(
   env: Env,
+  tenant: LinearTenantContext | undefined,
   args: { issueId: string; sessionId: string; checkpoint: string; type: AgentActivityType; text: string },
 ): Promise<void> {
   try {
@@ -480,7 +533,7 @@ async function postMilestoneThought(
       )
       return
     }
-    const agent = await buildLinearAgentClient(env)
+    const agent = tenant ? await buildLinearAgentClient(env, tenant) : await buildLinearAgentClient(env)
     if (!agent) {
       console.warn(
         JSON.stringify({
@@ -520,11 +573,12 @@ async function postMilestoneThought(
  */
 async function postAgentSessionCompletion(
   env: Env,
+  tenant: LinearTenantContext | undefined,
   args: { issueId: string; sessionId: string; dispatched: boolean; outcome?: AgentRunOutcome },
 ): Promise<void> {
   const { type, text } = buildCompletionActivity(args.dispatched, args.outcome)
   try {
-    const agent = await buildLinearAgentClient(env)
+    const agent = tenant ? await buildLinearAgentClient(env, tenant) : await buildLinearAgentClient(env)
     if (!agent) {
       console.warn(
         JSON.stringify({ event: "linear-agent-run-ack-no-token", issueId: args.issueId, sessionId: args.sessionId }),

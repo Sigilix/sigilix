@@ -45,10 +45,12 @@ function makeCtx(): ExecutionContext {
   return { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext
 }
 
-function assignmentRequest(body: Record<string, unknown>): Request {
+function assignmentRequest(body: Record<string, unknown>, deliveryId: string | null = "delivery-test"): Request {
+  const headers = new Headers({ "content-type": "application/json", "linear-signature": "sig" })
+  if (deliveryId) headers.set("linear-delivery", deliveryId)
   return new Request("https://worker.example.com/linear/webhook", {
     method: "POST",
-    headers: { "content-type": "application/json", "linear-signature": "sig" },
+    headers,
     body: JSON.stringify(body),
   })
 }
@@ -61,7 +63,7 @@ const ASSIGN_TO_AGENT = {
     assigneeId: AGENT_USER_ID,
     updatedFrom: { assigneeId: null },
   },
-  webhookTimestamp: 1,
+  webhookTimestamp: Date.now(),
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -126,6 +128,24 @@ describe("handleLinearWebhook — SIG-545 B3 assignment trigger", () => {
     const { env, send } = makeEnv()
     const res = await handleLinearWebhook(assignmentRequest(ASSIGN_TO_AGENT), env, makeCtx())
 
+    expect(res.status).toBe(401)
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it("rejects a missing Linear-Delivery header even without a platform DB binding", async () => {
+    const { env, send } = makeEnv()
+    const res = await handleLinearWebhook(assignmentRequest(ASSIGN_TO_AGENT, null), env, makeCtx())
+    expect(res.status).toBe(400)
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it("rejects a stale signed timestamp even without a platform DB binding", async () => {
+    const { env, send } = makeEnv()
+    const res = await handleLinearWebhook(
+      assignmentRequest({ ...ASSIGN_TO_AGENT, webhookTimestamp: Date.now() - 61_000 }),
+      env,
+      makeCtx(),
+    )
     expect(res.status).toBe(401)
     expect(send).not.toHaveBeenCalled()
   })

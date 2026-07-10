@@ -12,6 +12,7 @@ import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { triageIssue } from "@/src/lib/triage"
 import { runLinearAgentRun } from "@/src/lib/linear-agent-run"
+import { linearTenantContextFromJob } from "@/src/features/linear-integration"
 import { handleMention } from "@/src/lib/mention-reply"
 import { renderSlashCommandAck, type SlashCommand } from "@/src/lib/slash-commands"
 import { handlePrOverview } from "@/src/lib/triage-pr-overview"
@@ -126,13 +127,12 @@ export async function dispatchJob(
 ): Promise<void> {
   switch (job.type) {
     case "linear-triage":
-      return triageIssue(job.issueId, env)
+      return triageIssue(job.issueId, env, linearTenantContextFromJob(job))
     case "linear-mention":
       return handleMention(job.commentId, env, {
-        // Defaults to "mention" when triggerReason is absent — covers
-        // any pre-SIG-225 in-flight job that gets redelivered after a
-        // deploy and never carried the field.
+        // Missing on pre-SIG-225 in-flight jobs; preserve the legacy mention gate.
         triggerReason: job.triggerReason ?? "mention",
+        ...(linearTenantContextFromJob(job) ? { tenant: linearTenantContextFromJob(job)! } : {}),
       })
     case "pr-overview":
       // handlePrOverview returns the verdict only under the SIG-304 CLI dryRun
@@ -975,13 +975,13 @@ export async function dispatchJob(
       )
     case "corpus-issue-upsert":
       // SIG-44: embed a Linear issue into the issue: multi-corpus namespace.
-      return handleCorpusIssueUpsert(env, { linearIssueId: job.linearIssueId })
+      return handleCorpusIssueUpsert(env, {
+        linearIssueId: job.linearIssueId,
+        ...(linearTenantContextFromJob(job) ? { tenant: linearTenantContextFromJob(job)! } : {}),
+      })
     case "linear-agent-run":
-      // SIG-545 B3: a Linear issue assigned to the Sigilix agent OR an
-      // AgentSessionEvent (delegate/@-mention) → dispatch the agent-runner on the
-      // SAFE minimal engine to implement it + open a PR. `sessionId` (when the
-      // trigger was an AgentSessionEvent) routes the ack to a Linear agent activity.
-      return runLinearAgentRun(job.issueId, env, job.sessionId)
+      // Assignee/AgentSession trigger; tenant context routes auth and the session ack.
+      return runLinearAgentRun(job.issueId, env, job.sessionId, linearTenantContextFromJob(job))
     case "gitlab-mr-review":
       // sig-gitlab-adapter (GitLab PR 3): resolve the per-project token + run the
       // allowlist gate, build the GitLab review client via GitLabScmProvider, and

@@ -17,12 +17,14 @@ import type { LinearAgentTokenRecord } from "@/src/lib/linear-agent-oauth"
 
 // Must match TOKEN_KEY in linear-token-broker.ts (the storage key the DO writes).
 const TOKEN_KEY = "linear-agent-token"
+const PENDING_TOKEN_KEY = "linear-agent-token-pending"
 
 interface AlarmState {
   at: number | null
 }
 interface PutCtl {
   failPut: boolean
+  failSetAlarm: boolean
 }
 
 function makeDoState(): {
@@ -33,7 +35,7 @@ function makeDoState(): {
 } {
   const store = new Map<string, unknown>()
   const alarms: AlarmState = { at: null }
-  const ctl: PutCtl = { failPut: false }
+  const ctl: PutCtl = { failPut: false, failSetAlarm: false }
   const ctx = {
     storage: {
       async get<T>(k: string): Promise<T | undefined> {
@@ -47,6 +49,7 @@ function makeDoState(): {
         return store.delete(k)
       },
       async setAlarm(t: number): Promise<void> {
+        if (ctl.failSetAlarm) throw new Error("storage setAlarm failed (test)")
         alarms.at = t
       },
       async getAlarm(): Promise<number | null> {
@@ -54,6 +57,37 @@ function makeDoState(): {
       },
       async deleteAlarm(): Promise<void> {
         alarms.at = null
+      },
+      async transaction<T>(callback: (txn: DurableObjectTransaction) => Promise<T>): Promise<T> {
+        const draft = new Map(store)
+        let draftAlarm = alarms.at
+        const txn = {
+          async get<TValue>(key: string): Promise<TValue | undefined> {
+            return draft.get(key) as TValue | undefined
+          },
+          async put<TValue>(key: string, value: TValue): Promise<void> {
+            if (ctl.failPut) throw new Error("storage put failed (test)")
+            draft.set(key, value)
+          },
+          async delete(key: string): Promise<boolean> {
+            return draft.delete(key)
+          },
+          async getAlarm(): Promise<number | null> {
+            return draftAlarm
+          },
+          async setAlarm(t: number | Date): Promise<void> {
+            if (ctl.failSetAlarm) throw new Error("storage setAlarm failed (test)")
+            draftAlarm = t instanceof Date ? t.getTime() : t
+          },
+          async deleteAlarm(): Promise<void> {
+            draftAlarm = null
+          },
+        } as unknown as DurableObjectTransaction
+        const result = await callback(txn)
+        store.clear()
+        for (const [key, value] of draft) store.set(key, value)
+        alarms.at = draftAlarm
+        return result
       },
     },
     id: { toString: () => "linear-agent", name: "linear-agent" },
@@ -152,6 +186,153 @@ describe("LinearTokenBroker.install + getValidToken (no refresh)", () => {
 
     expect(result).toEqual({ ok: true, accessToken: "tok-1" })
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe("LinearTokenBroker.uninstallTenant", () => {
+  it("deletes only an exact tenant record and clears its alarm", async () => {
+    const { ctx, store, alarms } = makeDoState()
+    const broker = new LinearTokenBroker(ctx, makeEnv())
+    const scope = { organizationId: "org-a", installationId: 11 }
+    await broker.installTenant(freshRecord({ ...scope, actorType: "app", appUserId: "app-a" }), scope)
+
+    await expect(broker.uninstallTenant({ organizationId: "org-b", installationId: 11 })).resolves.toEqual({
+      ok: false,
+      reason: "tenant-mismatch",
+    })
+    expect(storedRecord(store)?.accessToken).toBe("tok-1")
+
+    await expect(broker.uninstallTenant(scope)).resolves.toEqual({ ok: true, removed: true })
+    expect(storedRecord(store)).toBeUndefined()
+    expect(alarms.at).toBeNull()
+  })
+})
+
+describe("LinearTokenBroker tenant install staging", () => {
+  const scope = { organizationId: "org-a", installationId: 11 }
+  const tenantRecord = (accessToken: string): LinearAgentTokenRecord =>
+    freshRecord({ accessToken, ...scope, actorType: "app", appUserId: "app-a" })
+
+  it("atomically rejects an alarm failure without replacing the active token or leaving a pending credential", async () => {
+    const { ctx, store, ctl } = makeDoState()
+    const broker = new LinearTokenBroker(ctx, makeEnv())
+    await broker.installTenant(tenantRecord("tok-old"), scope)
+    ctl.failSetAlarm = true
+
+    await expect(broker.stageTenantInstall(tenantRecord("tok-new"), scope, "generation-a")).rejects.toThrow(/setAlarm/)
+
+    expect(storedRecord(store)?.accessToken).toBe("tok-old")
+    expect(store.has(PENDING_TOKEN_KEY)).toBe(false)
+  })
+
+  it("rolls back only the matching generation and preserves the prior active token and alarm", async () => {
+    const { ctx, store, alarms } = makeDoState()
+    const broker = new LinearTokenBroker(ctx, makeEnv())
+    await broker.installTenant(tenantRecord("tok-old"), scope)
+    const priorAlarm = alarms.at
+    await expect(broker.stageTenantInstall(tenantRecord("tok-new"), scope, "generation-a")).resolves.toEqual({
+      ok: true,
+    })
+
+    await expect(broker.rollbackTenantInstall(scope, "generation-b")).resolves.toEqual({
+      ok: false,
+      reason: "generation-mismatch",
+    })
+    expect(storedRecord(store)?.accessToken).toBe("tok-old")
+    expect(store.has(PENDING_TOKEN_KEY)).toBe(true)
+
+    await expect(broker.rollbackTenantInstall(scope, "generation-a")).resolves.toEqual({
+      ok: true,
+      removed: true,
+    })
+    expect(storedRecord(store)?.accessToken).toBe("tok-old")
+    expect(store.has(PENDING_TOKEN_KEY)).toBe(false)
+    expect(alarms.at).toBe(priorAlarm)
+  })
+
+  it("commits exactly one generation and makes a lost-response retry idempotent", async () => {
+    const { ctx, store } = makeDoState()
+    const broker = new LinearTokenBroker(ctx, makeEnv())
+    await broker.installTenant(tenantRecord("tok-old"), scope)
+    await broker.stageTenantInstall(tenantRecord("tok-new"), scope, "generation-a")
+
+    await expect(broker.commitTenantInstall(scope, "generation-a")).resolves.toEqual({
+      ok: true,
+      committed: true,
+    })
+    expect(storedRecord(store)).toMatchObject({ accessToken: "tok-new", installGeneration: "generation-a" })
+    expect(store.has(PENDING_TOKEN_KEY)).toBe(false)
+    await expect(broker.commitTenantInstall(scope, "generation-a")).resolves.toEqual({
+      ok: true,
+      committed: false,
+    })
+  })
+
+  it("does not let an old in-flight refresh overwrite a newly committed generation", async () => {
+    const { ctx, store } = makeDoState()
+    const broker = new LinearTokenBroker(ctx, makeEnv())
+    await broker.installTenant(nearExpiryRecord({ accessToken: "tok-old", ...scope, actorType: "app" }), scope)
+    let resolveFetch!: (response: Response) => void
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve
+        }),
+    )
+
+    const refresh = broker.forceRefreshTenant(scope)
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledOnce())
+    await broker.stageTenantInstall(tenantRecord("tok-new"), scope, "generation-a")
+    await broker.commitTenantInstall(scope, "generation-a")
+    resolveFetch(
+      new Response(JSON.stringify({ access_token: "tok-old-rotated", refresh_token: "ref-old-rotated" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    )
+
+    await expect(refresh).resolves.toEqual({ ok: true, accessToken: "tok-new" })
+    expect(storedRecord(store)).toMatchObject({ accessToken: "tok-new", installGeneration: "generation-a" })
+  })
+
+  it("retries an unknown D1 outcome but deletes the inaccessible pending credential at its hard ceiling", async () => {
+    const { ctx, store, alarms } = makeDoState()
+    const db = {
+      prepare: () => ({
+        bind: () => ({
+          first: async () => {
+            throw new Error("D1 unavailable")
+          },
+        }),
+      }),
+    } as unknown as D1Database
+    const broker = new LinearTokenBroker(ctx, makeEnv({ SIGILIX_PLATFORM_DB: db }))
+    await broker.installTenant(tenantRecord("tok-old"), scope)
+    await broker.stageTenantInstall(tenantRecord("tok-new"), scope, "generation-a")
+    const pending = store.get(PENDING_TOKEN_KEY) as {
+      generation: string
+      record: LinearAgentTokenRecord
+      reconcileAt: number
+      expiresAt: number
+    }
+    store.set(PENDING_TOKEN_KEY, { ...pending, reconcileAt: Date.now() - 1 })
+
+    await broker.alarm()
+    const deferred = store.get(PENDING_TOKEN_KEY) as { reconcileAt: number; expiresAt: number }
+    expect(deferred.reconcileAt).toBeGreaterThan(Date.now())
+    expect(alarms.at).toBe(deferred.reconcileAt)
+    expect(storedRecord(store)?.accessToken).toBe("tok-old")
+
+    store.set(PENDING_TOKEN_KEY, {
+      ...deferred,
+      record: pending.record,
+      generation: pending.generation,
+      reconcileAt: 0,
+      expiresAt: 0,
+    })
+    await broker.alarm()
+    expect(store.has(PENDING_TOKEN_KEY)).toBe(false)
+    expect(storedRecord(store)?.accessToken).toBe("tok-old")
   })
 })
 

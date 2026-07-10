@@ -148,18 +148,24 @@ describe("buildLinearAgentClient", () => {
   // slice 3 401-retry tests, forceRefresh) are the test's mocks. `forceRefresh`
   // defaults to a not-installed failure so existing one-arg callers are unaffected.
   function makeEnv(
-    getValidToken: (args: { readOnly: boolean }) => Promise<BrokerTokenResult>,
+    getValidToken: (args: {
+      organizationId?: string
+      installationId?: number
+      readOnly: boolean
+    }) => Promise<BrokerTokenResult>,
     forceRefresh?: () => Promise<BrokerTokenResult>,
   ): Env {
     return {
       LINEAR_TOKEN_BROKER: {
         idFromName: (n: string) => ({ toString: () => n }),
         get: () => ({
-          getValidToken,
-          forceRefresh:
+          getValidTenantToken: getValidToken,
+          forceRefreshTenant:
             forceRefresh ?? (async (): Promise<BrokerTokenResult> => ({ ok: false, reason: "not-installed" })),
         }),
       },
+      OPENCLAW_LINEAR_ALLOWED_ORG_ID: "org-test",
+      OPENCLAW_LINEAR_LEGACY_INSTALLATION_ID: "42",
     } as unknown as Env
   }
 
@@ -195,14 +201,14 @@ describe("buildLinearAgentClient", () => {
     await expect(buildLinearAgentClient(env)).resolves.toBeNull()
   })
 
-  it("calls getValidToken with readOnly: true — this hot path must never trigger a refresh", async () => {
-    let captured: { readOnly: boolean } | undefined
+  it("calls the explicitly configured dogfood tenant shard with readOnly: true", async () => {
+    let captured: { organizationId?: string; installationId?: number; readOnly: boolean } | undefined
     const env = makeEnv(async (args) => {
       captured = args
       return { ok: true, accessToken: "tok" }
     })
     await buildLinearAgentClient(env)
-    expect(captured).toEqual({ readOnly: true })
+    expect(captured).toEqual({ organizationId: "org-test", installationId: 42, readOnly: true })
   })
 
   // ── SIG-144 slice 3: the broker-agent client's 401-retry wiring ──
@@ -249,7 +255,11 @@ describe("buildLinearAgentClient", () => {
     // forced token — a subsequent readOnly broker read must be served from cache,
     // not re-hit the DO, and must reflect the NEW token, not the stale one.
     const callsBefore = getValidTokenCalls
-    const again = await getValidAgentTokenViaBroker(env, { readOnly: true })
+    const again = await getValidAgentTokenViaBroker(
+      env,
+      { organizationId: "org-test", installationId: 42 },
+      { readOnly: true },
+    )
     expect(again).toBe("fresh-token")
     expect(getValidTokenCalls).toBe(callsBefore)
   })
@@ -257,7 +267,7 @@ describe("buildLinearAgentClient", () => {
   // ── SIG-145: allowRefresh:false (the webhook ACK hot path) ──
   it("allowRefresh:false → still reads readOnly, but a 401 does NOT force a broker refresh or retry (the ACK must stay bounded)", async () => {
     let forceRefreshCalls = 0
-    let captured: { readOnly: boolean } | undefined
+    let captured: { organizationId?: string; installationId?: number; readOnly: boolean } | undefined
     const env = makeEnv(
       async (args) => {
         captured = args
@@ -272,7 +282,7 @@ describe("buildLinearAgentClient", () => {
     const client = await buildLinearAgentClient(env, { allowRefresh: false })
     expect(client).not.toBeNull()
     // The token READ is still the cached readOnly path (one DO read, never a refresh POST).
-    expect(captured).toEqual({ readOnly: true })
+    expect(captured).toEqual({ organizationId: "org-test", installationId: 42, readOnly: true })
 
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response(JSON.stringify({ errors: [{ message: "Unauthorized" }] }), {
@@ -415,13 +425,18 @@ function makeUnifiedAuthEnv(
       idFromName: (n: string) => ({ toString: () => n }),
       get: () => ({
         getValidToken,
+        getValidTenantToken: getValidToken,
         forceRefresh:
+          opts?.forceRefresh ?? (async (): Promise<BrokerTokenResult> => ({ ok: false, reason: "not-installed" })),
+        forceRefreshTenant:
           opts?.forceRefresh ?? (async (): Promise<BrokerTokenResult> => ({ ok: false, reason: "not-installed" })),
       }),
     },
     ...opts?.extra,
   } as unknown as LinearAuthEnv
 }
+
+const LINEAR_TENANT = { organizationId: "org-test", installationId: 42 }
 
 describe("buildLinearAuth — SIG-144 slice 4 flag gate", () => {
   beforeEach(() => {
@@ -438,7 +453,7 @@ describe("buildLinearAuth — SIG-144 slice 4 flag gate", () => {
     expect(auth).toEqual({ apiKey: "human-key" })
   })
 
-  it('flag off explicitly ("off"): same human-key fallback, unaffected by an unrelated LINEAR_TOKEN_BROKER binding', async () => {
+  it('flag off explicitly ("off") with no tenant: same human-key fallback, unaffected by an unrelated broker binding', async () => {
     const brokerTouched = vi.fn()
     const env = {
       LINEAR_API_KEY: "human-key",
@@ -448,6 +463,26 @@ describe("buildLinearAuth — SIG-144 slice 4 flag gate", () => {
     const auth = await buildLinearAuth(env)
     expect(auth).toEqual({ apiKey: "human-key" })
     expect(brokerTouched).not.toHaveBeenCalled()
+  })
+
+  it('a tenant tuple ignores OPENCLAW_LINEAR_UNIFIED="off" and uses only its exact broker shard', async () => {
+    let captured: { organizationId?: string; installationId?: number; readOnly: boolean } | undefined
+    const env = makeUnifiedAuthEnv(
+      async (args) => {
+        captured = args
+        return { ok: true, accessToken: "tenant-agent-token" }
+      },
+      {
+        extra: {
+          OPENCLAW_LINEAR_UNIFIED: "off",
+          LINEAR_OAUTH_CLIENT_ID: "must-not-be-used",
+          LINEAR_OAUTH_CLIENT_SECRET: "must-not-be-used",
+        },
+      },
+    )
+
+    await expect(buildLinearAuth(env, LINEAR_TENANT)).resolves.toEqual({ oauthToken: "tenant-agent-token" })
+    expect(captured).toEqual({ ...LINEAR_TENANT, readOnly: false })
   })
 
   it("flag off: OAuth client_credentials still wins over the API key when configured (unchanged precedence)", async () => {
@@ -474,21 +509,21 @@ describe("buildLinearAuth — SIG-144 slice 4 flag gate", () => {
       captured = args
       return { ok: true, accessToken: "agent-token-1" }
     })
-    const auth = await buildLinearAuth(env)
+    const auth = await buildLinearAuth(env, LINEAR_TENANT)
     expect(auth).toEqual({ oauthToken: "agent-token-1" })
-    expect(captured).toEqual({ readOnly: false })
+    expect(captured).toEqual({ ...LINEAR_TENANT, readOnly: false })
   })
 
   it("flag on + broker reports not-installed: THROWS — never falls back to the human LINEAR_API_KEY", async () => {
     const env = makeUnifiedAuthEnv(async () => ({ ok: false, reason: "not-installed" }))
-    await expect(buildLinearAuth(env)).rejects.toThrow(/no agent token is available/)
+    await expect(buildLinearAuth(env, LINEAR_TENANT)).rejects.toThrow(/no agent token is available/)
   })
 
   it("flag on + broker DO RPC throws (e.g. DO fault): THROWS — never falls back to the human LINEAR_API_KEY", async () => {
     const env = makeUnifiedAuthEnv(async () => {
       throw new Error("DO unreachable")
     })
-    await expect(buildLinearAuth(env)).rejects.toThrow(/no agent token is available/)
+    await expect(buildLinearAuth(env, LINEAR_TENANT)).rejects.toThrow(/no agent token is available/)
   })
 
   it("flag on + LINEAR_TOKEN_BROKER unbound: THROWS exactly like a broker miss — never guesses, never falls back", async () => {
@@ -496,14 +531,45 @@ describe("buildLinearAuth — SIG-144 slice 4 flag gate", () => {
       LINEAR_API_KEY: "human-key-must-never-be-used",
       OPENCLAW_LINEAR_UNIFIED: "on",
     } as unknown as LinearAuthEnv
+    await expect(buildLinearAuth(env, LINEAR_TENANT)).rejects.toThrow(/no agent token is available/)
+  })
+
+  it("legacy unified auth requires both dogfood ids and never reads the old singleton directly", async () => {
+    const idFromName = vi.fn()
+    const env = {
+      LINEAR_API_KEY: "human-key-must-never-be-used",
+      OPENCLAW_LINEAR_UNIFIED: "on",
+      LINEAR_TOKEN_BROKER: { idFromName },
+    } as unknown as LinearAuthEnv
+
     await expect(buildLinearAuth(env)).rejects.toThrow(/no agent token is available/)
+    expect(idFromName).not.toHaveBeenCalled()
+  })
+
+  it("legacy unified auth uses the explicitly configured dogfood tenant shard", async () => {
+    const idFromName = vi.fn((name: string) => ({ toString: () => name }))
+    const env = {
+      LINEAR_API_KEY: "human-key-must-never-be-used",
+      OPENCLAW_LINEAR_UNIFIED: "on",
+      OPENCLAW_LINEAR_ALLOWED_ORG_ID: "org-dogfood",
+      OPENCLAW_LINEAR_LEGACY_INSTALLATION_ID: "77",
+      LINEAR_TOKEN_BROKER: {
+        idFromName,
+        get: () => ({
+          getValidTenantToken: async () => ({ ok: true as const, accessToken: "dogfood-token" }),
+        }),
+      },
+    } as unknown as LinearAuthEnv
+
+    await expect(buildLinearAuth(env)).resolves.toEqual({ oauthToken: "dogfood-token" })
+    expect(idFromName).toHaveBeenCalledWith("linear-org:v1:org-dogfood")
   })
 
   it("flag on: the thrown error never carries token material", async () => {
     const env = makeUnifiedAuthEnv(async () => ({ ok: false, reason: "not-installed" }), {
       extra: { LINEAR_API_KEY: "super-secret-human-key" },
     })
-    await expect(buildLinearAuth(env)).rejects.not.toThrow(/super-secret-human-key/)
+    await expect(buildLinearAuth(env, LINEAR_TENANT)).rejects.not.toThrow(/super-secret-human-key/)
   })
 
   it("flag on: NEVER reads LINEAR_API_KEY even when a valid agent token is returned — proven via a throwing getter", async () => {
@@ -515,7 +581,7 @@ describe("buildLinearAuth — SIG-144 slice 4 flag gate", () => {
         return "human-key"
       },
     })
-    await buildLinearAuth(env)
+    await buildLinearAuth(env, LINEAR_TENANT)
     expect(touched).toBe(false)
   })
 
@@ -528,7 +594,7 @@ describe("buildLinearAuth — SIG-144 slice 4 flag gate", () => {
         return "human-key"
       },
     })
-    await expect(buildLinearAuth(env)).rejects.toThrow()
+    await expect(buildLinearAuth(env, LINEAR_TENANT)).rejects.toThrow()
     expect(touched).toBe(false)
   })
 })
@@ -560,16 +626,17 @@ describe("buildLinearClient — SIG-144 slice 4 single helper", () => {
     expect((init.headers as Record<string, string>).authorization).toBe("human-key")
   })
 
-  it("flag on: builds a client carrying the onUnauthorized broker-refresh hook — a 401 force-refreshes via the broker and retries once", async () => {
+  it("a tenant client carries the exact-shard refresh hook even with the legacy unified flag off", async () => {
     let forceRefreshCalls = 0
     const env = makeUnifiedAuthEnv(async () => ({ ok: true, accessToken: "stale-agent-token" }), {
       forceRefresh: async () => {
         forceRefreshCalls++
         return { ok: true, accessToken: "fresh-agent-token" }
       },
+      extra: { OPENCLAW_LINEAR_UNIFIED: "off" },
     })
 
-    const client = await buildLinearClient(env)
+    const client = await buildLinearClient(env, LINEAR_TENANT)
 
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
@@ -598,6 +665,6 @@ describe("buildLinearClient — SIG-144 slice 4 single helper", () => {
 
   it("flag on + broker miss: rejects (buildLinearAuth's throw) rather than returning a client — no client is ever built on the human key", async () => {
     const env = makeUnifiedAuthEnv(async () => ({ ok: false, reason: "not-installed" }))
-    await expect(buildLinearClient(env)).rejects.toThrow(/no agent token is available/)
+    await expect(buildLinearClient(env, LINEAR_TENANT)).rejects.toThrow(/no agent token is available/)
   })
 })

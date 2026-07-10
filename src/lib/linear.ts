@@ -8,9 +8,12 @@
 import { getAppActorToken } from "./linear-oauth"
 import {
   getValidAgentTokenViaBroker,
+  getLegacyDogfoodAgentTokenViaBroker,
   forceRefreshViaBroker,
   type LinearTokenBrokerEnv,
+  type LinearTokenScope,
 } from "@/src/lib/linear-token-broker-client"
+import type { LinearTenantContext } from "@/src/features/linear-integration"
 
 const LINEAR_GRAPHQL = "https://api.linear.app/graphql"
 
@@ -83,17 +86,49 @@ export interface LinearAuthEnv {
    *  above). A missing binding while unified is "on" is treated exactly like
    *  a broker miss — `buildLinearAuth` throws rather than guessing. */
   LINEAR_TOKEN_BROKER?: DurableObjectNamespace
+  OPENCLAW_LINEAR_ALLOWED_ORG_ID?: string
+  OPENCLAW_LINEAR_LEGACY_INSTALLATION_ID?: string
 }
 
-export async function buildLinearAuth(env: LinearAuthEnv): Promise<LinearAuth> {
-  if (resolveLinearUnifiedMode(env) === "on") {
-    const token = env.LINEAR_TOKEN_BROKER
-      ? await getValidAgentTokenViaBroker({ LINEAR_TOKEN_BROKER: env.LINEAR_TOKEN_BROKER }, { readOnly: false })
+function brokerEnvFrom(env: LinearAuthEnv): LinearTokenBrokerEnv | null {
+  if (!env.LINEAR_TOKEN_BROKER) return null
+  return {
+    LINEAR_TOKEN_BROKER: env.LINEAR_TOKEN_BROKER,
+    ...(env.OPENCLAW_LINEAR_ALLOWED_ORG_ID
+      ? { OPENCLAW_LINEAR_ALLOWED_ORG_ID: env.OPENCLAW_LINEAR_ALLOWED_ORG_ID }
+      : {}),
+    ...(env.OPENCLAW_LINEAR_LEGACY_INSTALLATION_ID
+      ? { OPENCLAW_LINEAR_LEGACY_INSTALLATION_ID: env.OPENCLAW_LINEAR_LEGACY_INSTALLATION_ID }
+      : {}),
+  }
+}
+
+function tenantScope(tenant: LinearTenantContext): LinearTokenScope {
+  return { organizationId: tenant.organizationId, installationId: tenant.installationId }
+}
+
+function legacyDogfoodScope(env: LinearTokenBrokerEnv): LinearTokenScope | null {
+  const organizationId = env.OPENCLAW_LINEAR_ALLOWED_ORG_ID
+  const installationId = Number(env.OPENCLAW_LINEAR_LEGACY_INSTALLATION_ID)
+  if (!organizationId || !Number.isSafeInteger(installationId) || installationId <= 0) return null
+  return { organizationId, installationId }
+}
+
+export async function buildLinearAuth(env: LinearAuthEnv, tenant?: LinearTenantContext): Promise<LinearAuth> {
+  // A webhook/job carrying a tenant tuple is authoritative. It always uses the
+  // exact organization shard, independent of the legacy rollout flag, and can
+  // never fall through to client_credentials or a human API key.
+  if (tenant || resolveLinearUnifiedMode(env) === "on") {
+    const brokerEnv = brokerEnvFrom(env)
+    const token = brokerEnv
+      ? tenant
+        ? await getValidAgentTokenViaBroker(brokerEnv, tenantScope(tenant), { readOnly: false })
+        : await getLegacyDogfoodAgentTokenViaBroker(brokerEnv, { readOnly: false })
       : null
     if (!token) {
       throw new Error(
-        "buildLinearAuth: OPENCLAW_LINEAR_UNIFIED is on but no agent token is available " +
-          "(broker not installed, a hard refresh failure, or LINEAR_TOKEN_BROKER unbound) — " +
+        "buildLinearAuth: no agent token is available for this tenant " +
+          "(broker not installed, hard refresh failure, or explicit legacy dogfood scope absent) — " +
           "refusing to fall back to the human LINEAR_API_KEY",
       )
     }
@@ -128,11 +163,16 @@ export async function buildLinearAuth(env: LinearAuthEnv): Promise<LinearAuth> {
  * seam as `buildLinearAgentClient`: the generic `LinearClient` never imports
  * the broker.
  */
-export async function buildLinearClient(env: LinearAuthEnv): Promise<LinearClient> {
-  const auth = await buildLinearAuth(env)
-  if (resolveLinearUnifiedMode(env) === "on" && env.LINEAR_TOKEN_BROKER) {
-    const brokerEnv = { LINEAR_TOKEN_BROKER: env.LINEAR_TOKEN_BROKER }
-    return new LinearClient(auth, { onUnauthorized: () => forceRefreshViaBroker(brokerEnv) })
+export async function buildLinearClient(env: LinearAuthEnv, tenant?: LinearTenantContext): Promise<LinearClient> {
+  const auth = await buildLinearAuth(env, tenant)
+  const brokerEnv = brokerEnvFrom(env)
+  if (brokerEnv && tenant) {
+    const scope = tenantScope(tenant)
+    return new LinearClient(auth, { onUnauthorized: () => forceRefreshViaBroker(brokerEnv, scope) })
+  }
+  if (brokerEnv && resolveLinearUnifiedMode(env) === "on") {
+    const scope = legacyDogfoodScope(brokerEnv)
+    if (scope) return new LinearClient(auth, { onUnauthorized: () => forceRefreshViaBroker(brokerEnv, scope) })
   }
   return new LinearClient(auth)
 }
@@ -173,16 +213,39 @@ export async function buildLinearClient(env: LinearAuthEnv): Promise<LinearClien
  * token READ stays `readOnly: true` (one DO read, never a refresh POST), and a null
  * return keeps the fail-safe: skip the post, never throw, never use a human key.
  */
-export async function buildLinearAgentClient(
+export function buildLinearAgentClient(
+  env: LinearTokenBrokerEnv,
+  tenant: LinearTenantContext,
+  opts?: { allowRefresh?: boolean },
+): Promise<LinearClient | null>
+/** @deprecated Pre-SIG-242 singleton seam, retained for in-flight jobs/tests. */
+export function buildLinearAgentClient(
   env: LinearTokenBrokerEnv,
   opts?: { allowRefresh?: boolean },
+): Promise<LinearClient | null>
+export async function buildLinearAgentClient(
+  env: LinearTokenBrokerEnv,
+  tenantOrOpts?: LinearTenantContext | { allowRefresh?: boolean },
+  maybeOpts?: { allowRefresh?: boolean },
 ): Promise<LinearClient | null> {
-  const token = await getValidAgentTokenViaBroker(env, { readOnly: true })
+  if (!tenantOrOpts || !("organizationId" in tenantOrOpts)) {
+    const opts = tenantOrOpts as { allowRefresh?: boolean } | undefined
+    const scope = legacyDogfoodScope(env)
+    if (!scope) return null
+    const token = await getLegacyDogfoodAgentTokenViaBroker(env, { readOnly: true })
+    if (!token) return null
+    if (opts?.allowRefresh === false) return new LinearClient({ oauthToken: token })
+    return new LinearClient({ oauthToken: token }, { onUnauthorized: () => forceRefreshViaBroker(env, scope) })
+  }
+  const tenant = tenantOrOpts
+  const opts = maybeOpts
+  const scope = tenantScope(tenant)
+  const token = await getValidAgentTokenViaBroker(env, scope, { readOnly: true })
   if (!token) return null
   if (opts?.allowRefresh === false) {
     return new LinearClient({ oauthToken: token })
   }
-  return new LinearClient({ oauthToken: token }, { onUnauthorized: () => forceRefreshViaBroker(env) })
+  return new LinearClient({ oauthToken: token }, { onUnauthorized: () => forceRefreshViaBroker(env, scope) })
 }
 
 export interface LinearIssue {

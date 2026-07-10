@@ -56,7 +56,11 @@ function makeCtx(): ExecutionContext {
 function sessionRequest(body: Record<string, unknown>): Request {
   return new Request("https://worker.example.com/linear/webhook", {
     method: "POST",
-    headers: { "content-type": "application/json", "linear-signature": "sig" },
+    headers: {
+      "content-type": "application/json",
+      "linear-signature": "sig",
+      "linear-delivery": "agent-session-delivery",
+    },
     body: JSON.stringify(body),
   })
 }
@@ -66,6 +70,7 @@ function eventBody(action: string, overrides?: Record<string, unknown>): Record<
     type: "AgentSessionEvent",
     action,
     agentSession: { id: SESSION_ID, issue: { id: ISSUE_ID } },
+    webhookTimestamp: Date.now(),
     ...overrides,
   }
 }

@@ -25,7 +25,11 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 // failure never breaks the response), not the broker client's own mapping
 // logic (covered in linear-token-broker-client.test.ts).
 vi.mock("@/src/lib/linear-token-broker-client", () => ({
+  commitAgentTokenToBroker: vi.fn(),
   installAgentTokenToBroker: vi.fn(),
+  rollbackAgentTokenFromBroker: vi.fn(),
+  stageAgentTokenToBroker: vi.fn(),
+  uninstallAgentTokenFromBroker: vi.fn(),
 }))
 
 import {
@@ -152,41 +156,28 @@ describe("handleLinearInstall", () => {
     vi.restoreAllMocks()
   })
 
-  it("returns 503 when LINEAR_OAUTH_CLIENT_ID is unset", async () => {
+  it("returns 410 when LINEAR_OAUTH_CLIENT_ID is unset", async () => {
     const kv = makeFakeKV()
     const env = makeEnv(kv, { LINEAR_OAUTH_CLIENT_ID: undefined })
     const res = await handleLinearInstall(new Request(`${CALLBACK_ORIGIN}/linear/install`), env)
-    expect(res.status).toBe(503)
+    expect(res.status).toBe(410)
   })
 
-  it("mints a nonce + 302-redirects with actor=app, state, scopes, and a pinned redirect_uri", async () => {
+  it("returns 410 and never mints a new bare-nonce OAuth state", async () => {
     const kv = makeFakeKV()
     const env = makeEnv(kv, { OPENCLAW_GATEWAY_ISSUER: CALLBACK_ORIGIN })
 
     const res = await handleLinearInstall(new Request(`${CALLBACK_ORIGIN}/linear/install`), env)
 
-    expect(res.status).toBe(302)
-    const loc = new URL(res.headers.get("location") ?? "")
-    expect(loc.origin + loc.pathname).toBe("https://linear.app/oauth/authorize")
-    expect(loc.searchParams.get("response_type")).toBe("code")
-    expect(loc.searchParams.get("client_id")).toBe("client-id-123")
-    expect(loc.searchParams.get("actor")).toBe("app")
-    expect(loc.searchParams.get("scope")).toBe(
-      "read,write,comments:create,issues:create,app:assignable,app:mentionable",
-    )
-    expect(loc.searchParams.get("redirect_uri")).toBe(`${CALLBACK_ORIGIN}/linear/oauth/callback`)
-    const state = loc.searchParams.get("state")
-    expect(state).toBeTruthy()
-    // The exact nonce was stored in KV (callback can verify it).
-    expect(kv._store.has(`linear-oauth-state:${state}`)).toBe(true)
+    expect(res.status).toBe(410)
+    expect(kv.put).not.toHaveBeenCalled()
   })
 
-  it("falls back to the request origin for redirect_uri when OPENCLAW_GATEWAY_ISSUER is unset", async () => {
+  it("stays disabled when OPENCLAW_GATEWAY_ISSUER is unset", async () => {
     const kv = makeFakeKV()
     const env = makeEnv(kv) // no OPENCLAW_GATEWAY_ISSUER
     const res = await handleLinearInstall(new Request(`${CALLBACK_ORIGIN}/linear/install`), env)
-    const loc = new URL(res.headers.get("location") ?? "")
-    expect(loc.searchParams.get("redirect_uri")).toBe(`${CALLBACK_ORIGIN}/linear/oauth/callback`)
+    expect(res.status).toBe(410)
   })
 })
 
@@ -552,29 +543,25 @@ describe("agent-specific OAuth credentials (OPENCLAW_LINEAR_AGENT_CLIENT_*)", ()
     vi.restoreAllMocks()
   })
 
-  it("handleLinearInstall: authorize URL uses OPENCLAW_LINEAR_AGENT_CLIENT_ID when set", async () => {
+  it("handleLinearInstall: stays disabled when dedicated agent credentials are set", async () => {
     const kv = makeFakeKV()
     const env = makeEnv(kv, {
       OPENCLAW_LINEAR_AGENT_CLIENT_ID: "agent-app-id",
       OPENCLAW_GATEWAY_ISSUER: CALLBACK_ORIGIN,
     })
     const res = await handleLinearInstall(new Request(`${CALLBACK_ORIGIN}/linear/install`), env)
-    expect(res.status).toBe(302)
-    const loc = new URL(res.headers.get("location") ?? "")
-    expect(loc.searchParams.get("client_id")).toBe("agent-app-id")
+    expect(res.status).toBe(410)
   })
 
-  it("handleLinearInstall: falls back to LINEAR_OAUTH_CLIENT_ID when agent cred unset", async () => {
+  it("handleLinearInstall: stays disabled when only shared credentials are set", async () => {
     const kv = makeFakeKV()
     // makeEnv defaults: LINEAR_OAUTH_CLIENT_ID = "client-id-123", no agent cred
     const env = makeEnv(kv, { OPENCLAW_GATEWAY_ISSUER: CALLBACK_ORIGIN })
     const res = await handleLinearInstall(new Request(`${CALLBACK_ORIGIN}/linear/install`), env)
-    expect(res.status).toBe(302)
-    const loc = new URL(res.headers.get("location") ?? "")
-    expect(loc.searchParams.get("client_id")).toBe("client-id-123")
+    expect(res.status).toBe(410)
   })
 
-  it("handleLinearInstall: returns 503 when neither agent nor shared client_id is set", async () => {
+  it("handleLinearInstall: returns 410 when neither agent nor shared client_id is set", async () => {
     const kv = makeFakeKV()
     const env = makeEnv(kv, {
       LINEAR_OAUTH_CLIENT_ID: undefined,
@@ -582,7 +569,7 @@ describe("agent-specific OAuth credentials (OPENCLAW_LINEAR_AGENT_CLIENT_*)", ()
     })
     const fetchSpy = vi.spyOn(globalThis, "fetch")
     const res = await handleLinearInstall(new Request(`${CALLBACK_ORIGIN}/linear/install`), env)
-    expect(res.status).toBe(503)
+    expect(res.status).toBe(410)
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 

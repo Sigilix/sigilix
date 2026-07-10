@@ -11,6 +11,10 @@ import {
   getValidAgentTokenViaBroker,
   forceRefreshViaBroker,
   installAgentTokenToBroker,
+  stageAgentTokenToBroker,
+  commitAgentTokenToBroker,
+  rollbackAgentTokenFromBroker,
+  uninstallAgentTokenFromBroker,
   __resetBrokerClientCacheForTests,
   type LinearTokenBrokerEnv,
 } from "@/src/lib/linear-token-broker-client"
@@ -25,6 +29,23 @@ function makeEnv(stubMethods: {
   getValidToken?: (args: { readOnly: boolean }) => Promise<BrokerTokenResult>
   forceRefresh?: () => Promise<BrokerTokenResult>
   install?: (record: LinearAgentTokenRecord) => Promise<{ ok: true }>
+  stageTenantInstall?: (
+    record: LinearAgentTokenRecord,
+    scope: { organizationId: string; installationId: number },
+    generation: string,
+  ) => Promise<{ ok: true } | { ok: false; reason: "tenant-conflict" }>
+  commitTenantInstall?: (
+    scope: { organizationId: string; installationId: number },
+    generation: string,
+  ) => Promise<{ ok: true; committed: boolean } | { ok: false; reason: "not-staged" }>
+  rollbackTenantInstall?: (
+    scope: { organizationId: string; installationId: number },
+    generation: string,
+  ) => Promise<{ ok: true; removed: boolean } | { ok: false; reason: "generation-mismatch" }>
+  uninstallTenant?: (scope: {
+    organizationId: string
+    installationId: number
+  }) => Promise<{ ok: true; removed: boolean } | { ok: false; reason: "tenant-mismatch" }>
 }): { env: LinearTokenBrokerEnv; calls: Call[] } {
   const calls: Call[] = []
   const stub = {
@@ -39,6 +60,32 @@ function makeEnv(stubMethods: {
     install: (record: LinearAgentTokenRecord) => {
       calls.push({ method: "install", args: [record] })
       return (stubMethods.install ?? (async () => ({ ok: true as const })))(record)
+    },
+    stageTenantInstall: (
+      record: LinearAgentTokenRecord,
+      scope: { organizationId: string; installationId: number },
+      generation: string,
+    ) => {
+      calls.push({ method: "stageTenantInstall", args: [record, scope, generation] })
+      return (stubMethods.stageTenantInstall ?? (async () => ({ ok: true as const })))(record, scope, generation)
+    },
+    commitTenantInstall: (scope: { organizationId: string; installationId: number }, generation: string) => {
+      calls.push({ method: "commitTenantInstall", args: [scope, generation] })
+      return (stubMethods.commitTenantInstall ?? (async () => ({ ok: true as const, committed: true })))(
+        scope,
+        generation,
+      )
+    },
+    rollbackTenantInstall: (scope: { organizationId: string; installationId: number }, generation: string) => {
+      calls.push({ method: "rollbackTenantInstall", args: [scope, generation] })
+      return (stubMethods.rollbackTenantInstall ?? (async () => ({ ok: true as const, removed: true })))(
+        scope,
+        generation,
+      )
+    },
+    uninstallTenant: (scope: { organizationId: string; installationId: number }) => {
+      calls.push({ method: "uninstallTenant", args: [scope] })
+      return (stubMethods.uninstallTenant ?? (async () => ({ ok: true as const, removed: false })))(scope)
     },
   }
   const ns = {
@@ -284,5 +331,65 @@ describe("installAgentTokenToBroker", () => {
     const read = await getValidAgentTokenViaBroker(env2, { readOnly: true })
     expect(read).toBe("tok-new")
     expect(calls2.filter((c) => c.method === "getValidToken")).toHaveLength(1)
+  })
+})
+
+describe("uninstallAgentTokenFromBroker", () => {
+  it("uses the exact organization shard and passes the immutable scope again", async () => {
+    const scope = { organizationId: "org-a", installationId: 11 }
+    const { env, calls } = makeEnv({
+      uninstallTenant: async () => ({ ok: true, removed: true }),
+    })
+
+    await expect(uninstallAgentTokenFromBroker(env, scope)).resolves.toBe(true)
+
+    expect(calls.find((call) => call.method === "idFromName")?.args).toEqual(["linear-org:v1:org-a"])
+    expect(calls.find((call) => call.method === "uninstallTenant")?.args).toEqual([scope])
+  })
+
+  it("fails closed when the shard reports a tenant mismatch", async () => {
+    const { env } = makeEnv({
+      uninstallTenant: async () => ({ ok: false, reason: "tenant-mismatch" }),
+    })
+    await expect(uninstallAgentTokenFromBroker(env, { organizationId: "org-a", installationId: 11 })).resolves.toBe(
+      false,
+    )
+  })
+})
+
+describe("tenant install receipt wrappers", () => {
+  const scope = { organizationId: "org-a", installationId: 11 }
+  const receipt = { generation: "generation-a" }
+  const record: LinearAgentTokenRecord = {
+    accessToken: "tok-new",
+    installedAt: 1,
+    ...scope,
+    actorType: "app",
+  }
+
+  it("passes the same client-generated generation through stage, commit, and rollback", async () => {
+    const { env, calls } = makeEnv({})
+
+    await expect(stageAgentTokenToBroker(env, scope, record, receipt)).resolves.toBe(true)
+    await expect(commitAgentTokenToBroker(env, scope, receipt)).resolves.toBe(true)
+    await expect(rollbackAgentTokenFromBroker(env, scope, receipt)).resolves.toBe(true)
+
+    expect(calls.find((call) => call.method === "stageTenantInstall")?.args).toEqual([
+      record,
+      scope,
+      receipt.generation,
+    ])
+    expect(calls.find((call) => call.method === "commitTenantInstall")?.args).toEqual([scope, receipt.generation])
+    expect(calls.find((call) => call.method === "rollbackTenantInstall")?.args).toEqual([scope, receipt.generation])
+  })
+
+  it("returns false on an ambiguous stage RPC throw so the caller can issue the receipt rollback", async () => {
+    const { env } = makeEnv({
+      stageTenantInstall: async () => {
+        throw new Error("response lost")
+      },
+    })
+    await expect(stageAgentTokenToBroker(env, scope, record, receipt)).resolves.toBe(false)
+    await expect(rollbackAgentTokenFromBroker(env, scope, receipt)).resolves.toBe(true)
   })
 })

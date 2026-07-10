@@ -22,7 +22,24 @@
 //     logged. Only neutral status strings reach console on error.
 
 import type { Env } from "@/src/shared/types/env"
-import { installAgentTokenToBroker } from "@/src/lib/linear-token-broker-client"
+import {
+  commitAgentTokenToBroker,
+  installAgentTokenToBroker,
+  rollbackAgentTokenFromBroker,
+  stageAgentTokenToBroker,
+  type LinearTenantInstallReceipt,
+  type LinearTokenScope,
+} from "@/src/lib/linear-token-broker-client"
+import { requireSession } from "@/src/lib/auth-middleware"
+import { decryptAccessToken } from "@/src/lib/auth-session"
+import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
+import {
+  connectLinearOrganization,
+  fetchLinearWorkspaceIdentity,
+  getLinearConnectionByInstallation,
+  getLinearConnectionByOrganization,
+  listLinearInstallationRepos,
+} from "@/src/features/linear-integration"
 
 const TOKEN_ENDPOINT = "https://api.linear.app/oauth/token"
 const AUTHORIZE_ENDPOINT = "https://linear.app/oauth/authorize"
@@ -44,6 +61,15 @@ const DEFAULT_INSTALL_SCOPES = "read,write,comments:create,issues:create,app:ass
  *  visibility; only `accessToken` is required to post agent activities. */
 export interface LinearAgentTokenRecord {
   accessToken: string
+  /** Immutable tenant metadata. Required for every organization-sharded broker
+   * record; absent only on the pre-SIG-242 dogfood singleton record. */
+  organizationId?: string
+  installationId?: number
+  actorType?: "app"
+  appUserId?: string
+  /** Internal broker generation used only to make a lost commit response
+   * idempotent. It is never logged or sent to Linear. */
+  installGeneration?: string
   /** The rotating refresh token (actor=app authorization_code tokens return one).
    *  Used by `refreshAgentToken` to mint a fresh 24h access token; rotated (and
    *  re-persisted) on every successful refresh. NEVER logged. */
@@ -121,10 +147,49 @@ interface TokenResponse {
   access_token?: string
   token_type?: string
   expires_in?: number
-  scope?: string
+  scope?: string | string[]
   /** Rotating refresh token returned with actor=app authorization_code (and
    *  refresh_token) grants. Linear issues a NEW one on every refresh. */
   refresh_token?: string
+}
+
+interface LinearTenantOAuthState {
+  version: 1
+  installationId: number
+  userId: string
+  login: string
+  createdAt: number
+}
+
+function parseTenantOAuthState(raw: string): LinearTenantOAuthState | null {
+  try {
+    const value = JSON.parse(raw) as Partial<LinearTenantOAuthState>
+    if (
+      value.version !== 1 ||
+      !Number.isSafeInteger(value.installationId) ||
+      Number(value.installationId) <= 0 ||
+      typeof value.userId !== "string" ||
+      !value.userId ||
+      typeof value.login !== "string" ||
+      !value.login ||
+      typeof value.createdAt !== "number" ||
+      !Number.isFinite(value.createdAt)
+    ) {
+      return null
+    }
+    return value as LinearTenantOAuthState
+  } catch {
+    return null
+  }
+}
+
+function tenantOAuthStateIsFresh(state: LinearTenantOAuthState, nowMs = Date.now()): boolean {
+  return state.createdAt <= nowMs && nowMs - state.createdAt <= STATE_TTL_SECONDS * 1000
+}
+
+function normalizeScopes(scope: TokenResponse["scope"]): string[] {
+  const values = Array.isArray(scope) ? scope : typeof scope === "string" ? scope.split(/[\s,]+/) : []
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
 }
 
 /** Compute the OAuth redirect URI. PINNED to OPENCLAW_GATEWAY_ISSUER (the worker
@@ -156,17 +221,22 @@ export function resolveAgentOAuthCreds(
   }
 }
 
-/** Build the actor=app authorize URL + persist a CSRF nonce in KV (10-min TTL).
- *  The callback verifies and deletes the nonce before exchanging the code. */
-export async function buildLinearAuthorizeUrl(
+/** Build the only new-install authorize URL. The state is not a bare nonce: its
+ * KV value binds the approval to one GitHub installation and one authenticated
+ * portal user, and the callback requires the same session before consuming it. */
+export async function buildLinearTenantAuthorizeUrl(
   env: Pick<
     Env,
     "OPENCLAW_STATE" | "LINEAR_OAUTH_CLIENT_ID" | "OPENCLAW_LINEAR_AGENT_CLIENT_ID" | "OPENCLAW_GATEWAY_ISSUER"
   >,
   requestUrl: URL,
+  stateValue: Omit<LinearTenantOAuthState, "version" | "createdAt">,
 ): Promise<string> {
   const state = crypto.randomUUID()
-  await env.OPENCLAW_STATE.put(`${STATE_KV_PREFIX}${state}`, "1", { expirationTtl: STATE_TTL_SECONDS })
+  const record: LinearTenantOAuthState = { version: 1, ...stateValue, createdAt: Date.now() }
+  await env.OPENCLAW_STATE.put(`${STATE_KV_PREFIX}${state}`, JSON.stringify(record), {
+    expirationTtl: STATE_TTL_SECONDS,
+  })
   const params = new URLSearchParams({
     response_type: "code",
     client_id: env.OPENCLAW_LINEAR_AGENT_CLIENT_ID ?? env.LINEAR_OAUTH_CLIENT_ID ?? "",
@@ -178,18 +248,48 @@ export async function buildLinearAuthorizeUrl(
   return `${AUTHORIZE_ENDPOINT}?${params.toString()}`
 }
 
-/**
- * GET /linear/install — the founder's one-click agent-install entry. Mints a CSRF
- * nonce, stores it in KV, and 302-redirects to Linear's actor=app consent screen.
- * Returns 503 when no agent-install client_id is configured.
- */
-export async function handleLinearInstall(request: Request, env: Env): Promise<Response> {
-  const { clientId } = resolveAgentOAuthCreds(env)
-  if (!clientId) {
-    return text("Linear OAuth is not configured.", 503)
+/** POST /v1/org/:installationId/linear/install — session + exact-install admin gated. */
+export async function handleLinearTenantInstall(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext | undefined,
+  installationId: number,
+): Promise<Response> {
+  if (!Number.isSafeInteger(installationId) || installationId <= 0) {
+    return json({ error: "invalid installation id" }, 400)
   }
-  const authorizeUrl = await buildLinearAuthorizeUrl(env, new URL(request.url))
-  return new Response(null, { status: 302, headers: { location: authorizeUrl } })
+  const { clientId } = resolveAgentOAuthCreds(env)
+  if (!clientId) return json({ error: "linear_oauth_not_configured" }, 503)
+  const session = await requireSession(request, env, ctx)
+  if (!session) return json({ error: "unauthorized" }, 401)
+  if (session.record.githubUserId == null) return json({ error: "github_session_required" }, 403)
+  if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) return json({ error: "misconfigured" }, 503)
+  let accessToken: string
+  try {
+    accessToken = await decryptAccessToken(
+      { encryptedAccessToken: session.record.encryptedAccessToken, iv: session.record.iv },
+      session.sessionId,
+      env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+    )
+  } catch {
+    return json({ error: "linear_install_failed" }, 500)
+  }
+  if (!(await isAdminOfInstallation(accessToken, session.record.login, installationId))) {
+    return json({ error: "forbidden" }, 403)
+  }
+  const userId = session.record.userId ?? String(session.record.githubUserId)
+  const authorizeUrl = await buildLinearTenantAuthorizeUrl(env, new URL(request.url), {
+    installationId,
+    userId,
+    login: session.record.login,
+  })
+  return json({ authorizeUrl }, 200)
+}
+
+/** Closed compatibility symbol for callers compiled against the legacy public
+ * install helper. It never mints a new bare-nonce OAuth authorization. */
+export async function handleLinearInstall(_request: Request, _env: Env): Promise<Response> {
+  return text("Use the installation-scoped portal Linear install flow.", 410)
 }
 
 /**
@@ -256,6 +356,30 @@ export async function handleLinearOAuthCallback(request: Request, env: Env): Pro
   const stateKey = `${STATE_KV_PREFIX}${state}`
   const stateValue = await env.OPENCLAW_STATE.get(stateKey)
   if (stateValue === null) {
+    return text("Invalid or expired state.", 400)
+  }
+  const tenantState = parseTenantOAuthState(stateValue)
+  // Structured states are bound to the SAME signed-in portal user who began
+  // the installation. The literal legacy value "1" is accepted only as the
+  // already-minted pre-SIG-242 dogfood callback seam; the new POST route never
+  // writes it, so no new global install can be created through this branch.
+  if (tenantState && !tenantOAuthStateIsFresh(tenantState)) {
+    try {
+      await env.OPENCLAW_STATE.delete(stateKey)
+    } catch {
+      // The explicit age check is repeated on every callback, so a failed
+      // best-effort cleanup cannot make this state usable again.
+    }
+    return text("Invalid or expired state.", 400)
+  }
+  if (tenantState) {
+    const session = await requireSession(request, env)
+    const sessionUserId =
+      session?.record.userId ?? (session?.record.githubUserId != null ? String(session.record.githubUserId) : null)
+    if (!session || sessionUserId !== tenantState.userId || session.record.login !== tenantState.login) {
+      return text("The Linear install must be completed by the user who started it.", 403)
+    }
+  } else if (stateValue !== "1") {
     return text("Invalid or expired state.", 400)
   }
 
@@ -328,6 +452,10 @@ export async function handleLinearOAuthCallback(request: Request, env: Env): Pro
   if (!json.access_token) {
     console.error("linear oauth callback: token response missing access_token")
     return text("Sigilix install failed during token exchange. Please try again.", 502)
+  }
+
+  if (tenantState) {
+    return finalizeTenantLinearInstall(env, tenantState, json as TokenResponse & { access_token: string })
   }
 
   // Workspace allowlist. When OPENCLAW_LINEAR_ALLOWED_ORG_ID is set, the install must
@@ -403,6 +531,183 @@ export async function handleLinearOAuthCallback(request: Request, env: Env): Pro
   )
 
   return htmlPage("Sigilix agent installed — you can close this tab.")
+}
+
+async function finalizeTenantLinearInstall(
+  env: Env,
+  state: LinearTenantOAuthState,
+  token: TokenResponse & { access_token: string },
+): Promise<Response> {
+  const identity = await fetchLinearWorkspaceIdentity(token.access_token)
+  if (!identity) return text("Sigilix could not verify this Linear workspace.", 502)
+  if (!identity.viewer.app) return text("Sigilix requires a Linear actor=app installation.", 403)
+
+  let byInstallation: Awaited<ReturnType<typeof getLinearConnectionByInstallation>>
+  let byOrganization: Awaited<ReturnType<typeof getLinearConnectionByOrganization>>
+  let repos: Awaited<ReturnType<typeof listLinearInstallationRepos>>
+  try {
+    ;[byInstallation, byOrganization, repos] = await Promise.all([
+      getLinearConnectionByInstallation(env, state.installationId),
+      getLinearConnectionByOrganization(env, identity.organization.id),
+      listLinearInstallationRepos(env, state.installationId),
+    ])
+  } catch {
+    // All D1 reads happen before the broker write, so an unavailable tenant
+    // store cannot leave behind an orphaned access token.
+    return text("Sigilix could not verify the tenant connection boundary.", 502)
+  }
+  if (
+    (byInstallation &&
+      byInstallation.status === "active" &&
+      byInstallation.organizationId !== identity.organization.id) ||
+    (byOrganization && byOrganization.status === "active" && byOrganization.installationId !== state.installationId)
+  ) {
+    return text("This GitHub installation or Linear workspace is already connected elsewhere.", 409)
+  }
+
+  const scopes = normalizeScopes(token.scope)
+  const record: LinearAgentTokenRecord = {
+    accessToken: token.access_token,
+    organizationId: identity.organization.id,
+    installationId: state.installationId,
+    actorType: "app",
+    appUserId: identity.viewer.id,
+    installedAt: Date.now(),
+  }
+  if (typeof token.refresh_token === "string" && token.refresh_token) record.refreshToken = token.refresh_token
+  if (scopes.length > 0) record.scope = scopes.join(" ")
+  if (typeof token.expires_in === "number") record.expiresAt = Date.now() + token.expires_in * 1000
+
+  const scope = { organizationId: identity.organization.id, installationId: state.installationId }
+  const receipt: LinearTenantInstallReceipt = { generation: crypto.randomUUID() }
+  if (!(await stageAgentTokenToBroker(env, scope, record, receipt))) {
+    // The generation was created before the RPC. A transport error can mean the
+    // stage committed but its response was lost, so always issue the guarded
+    // rollback; it cannot touch a prior active token.
+    await rollbackAgentTokenFromBroker(env, scope, receipt)
+    return text("Sigilix could not safely store this tenant-scoped Linear install.", 502)
+  }
+
+  // A single-repo installation has an unambiguous default. Multi-repo installs
+  // remain visibly unbound (repo id 0/name empty) until an admin explicitly maps
+  // teams through the config API; consumers warn and refuse retrieval/writeback.
+  const defaultRepo = repos.length === 1 ? repos[0] : undefined
+  let connected: Awaited<ReturnType<typeof connectLinearOrganization>>
+  try {
+    connected = await connectLinearOrganization(env, {
+      installationId: state.installationId,
+      organizationId: identity.organization.id,
+      organizationName: identity.organization.name,
+      appUserId: identity.viewer.id,
+      source: "oauth",
+      grantedScopes: scopes,
+      canAccessAllPublicTeams: false,
+      installedByUserId: state.userId,
+      installedByLogin: state.login,
+      teams: identity.teams.map((team) => ({
+        ...team,
+        githubRepoId: defaultRepo?.id ?? 0,
+        githubRepoFullName: defaultRepo?.fullName ?? "",
+      })),
+      nowIso: new Date().toISOString(),
+    })
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "linear-tenant-connection-write-failed",
+        installationId: state.installationId,
+        organizationId: identity.organization.id,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    await compensateTenantBrokerInstall(env, scope, receipt)
+    return text("This GitHub installation or Linear workspace is already connected elsewhere.", 409)
+  }
+  if (!connected.ok) {
+    await rollbackAgentTokenFromBroker(env, scope, receipt)
+    return text("This GitHub installation or Linear workspace is already connected elsewhere.", 409)
+  }
+
+  if (!(await commitAgentTokenToBroker(env, scope, receipt))) {
+    // D1 is already authoritative. The staged record's broker alarm will
+    // reconcile and promote it from that exact active link, but do not claim the
+    // install completed synchronously when the commit RPC did not confirm.
+    console.error(
+      JSON.stringify({
+        event: "linear-tenant-token-commit-deferred",
+        organizationId: identity.organization.id,
+        installationId: state.installationId,
+      }),
+    )
+    return text(
+      "Sigilix saved the tenant link but is still finalizing the Linear credential. Please retry shortly.",
+      502,
+    )
+  }
+
+  console.log(
+    JSON.stringify({
+      event: "linear-tenant-installed",
+      organizationId: identity.organization.id,
+      installationId: state.installationId,
+      teamCount: identity.teams.length,
+      teamsNeedRepoBinding: defaultRepo === undefined,
+      hasRefresh: !!record.refreshToken,
+      hasExpiry: typeof record.expiresAt === "number",
+    }),
+  )
+  return htmlPage("Sigilix Linear integration connected — you can close this tab.")
+}
+
+/** Compensate a broker write only when D1 does not already contain the exact
+ * active tenant link. The re-read handles an ambiguous D1 batch outcome: if
+ * the batch committed before the transport threw, retaining the token avoids
+ * creating the inverse active-connection/no-token inconsistency. */
+async function compensateTenantBrokerInstall(
+  env: Env,
+  scope: LinearTokenScope,
+  receipt: LinearTenantInstallReceipt,
+): Promise<void> {
+  let connection: Awaited<ReturnType<typeof getLinearConnectionByInstallation>>
+  try {
+    connection = await getLinearConnectionByInstallation(env, scope.installationId)
+  } catch {
+    console.error(
+      JSON.stringify({
+        event: "linear-tenant-token-compensation-deferred",
+        organizationId: scope.organizationId,
+        installationId: scope.installationId,
+        reason: "d1-state-unknown-broker-alarm-will-reconcile",
+      }),
+    )
+    return
+  }
+  if (
+    connection?.status === "active" &&
+    connection.organizationId === scope.organizationId &&
+    connection.installationId === scope.installationId
+  ) {
+    const committed = await commitAgentTokenToBroker(env, scope, receipt)
+    console.warn(
+      JSON.stringify({
+        event: "linear-tenant-token-compensation-retained",
+        organizationId: scope.organizationId,
+        installationId: scope.installationId,
+        reason: committed ? "active-d1-link" : "active-d1-link-commit-deferred",
+      }),
+    )
+    return
+  }
+  const removed = await rollbackAgentTokenFromBroker(env, scope, receipt)
+  if (!removed) {
+    console.error(
+      JSON.stringify({
+        event: "linear-tenant-token-compensation-failed",
+        organizationId: scope.organizationId,
+        installationId: scope.installationId,
+      }),
+    )
+  }
 }
 
 /** Discriminated result of the refresh_token grant POST to Linear's token
@@ -578,6 +883,10 @@ function text(message: string, status: number): Response {
     status,
     headers: { "content-type": "text/plain; charset=utf-8" },
   })
+}
+
+function json(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 }
 
 function htmlPage(message: string): Response {

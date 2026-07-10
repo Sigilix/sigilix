@@ -18,6 +18,15 @@ import { triageIssue } from "@/src/lib/triage"
 import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
 import { recallSlackMemory, captureSlackMemory } from "@/src/lib/slack/slack-memory"
 import { captureInstructiveLearning } from "@/src/features/learnings"
+import {
+  codebaseContextEnabled,
+  getLinearConfig,
+  getLinearConnectionByInstallation,
+  resolveLinearTeamBinding,
+  teamIsSelected,
+  type LinearConfig,
+  type LinearTenantContext,
+} from "@/src/features/linear-integration"
 import type { SlackMemoryScope } from "@/src/lib/slack/slack-memory"
 import type { SlackScope } from "@/src/lib/slack/slack-scope"
 import { detectSlackIntent, formatSigilixReply } from "@/src/lib/slack/slack-reply"
@@ -102,6 +111,56 @@ export interface SlackAgentResult {
     | { kind: "implement-confirm"; issueUrl: string; identifier: string; dispatched: boolean }
     | { kind: "implement-revise" }
     | { kind: "implement-decline" }
+}
+
+type SlackLinearPolicy =
+  | { ok: true; config: LinearConfig | null; tenant?: LinearTenantContext }
+  | { ok: false; reason: "disabled" | "unavailable" }
+
+/** Resolve Slack's repo + Linear team through the same installation-scoped
+ * policy as webhook jobs. D1 presence is the cutover boundary: with D1 every
+ * proof is required; only a DB-absent legacy deployment may use global maps. */
+async function resolveSlackLinearPolicy(
+  env: Env,
+  primary: SlackScope["repos"][number],
+  teamId: string,
+): Promise<SlackLinearPolicy> {
+  if (!env.SIGILIX_PLATFORM_DB) return { ok: true, config: null }
+  try {
+    const connection = await getLinearConnectionByInstallation(env, primary.installationId)
+    if (!connection || connection.status !== "active") return { ok: false, reason: "unavailable" }
+    const [config, binding] = await Promise.all([
+      getLinearConfig(env, primary.installationId),
+      resolveLinearTeamBinding(env, connection.organizationId, teamId),
+    ])
+    if (
+      !config ||
+      !binding ||
+      binding.installationId !== primary.installationId ||
+      binding.accessState !== "allowed" ||
+      binding.githubRepoId <= 0 ||
+      binding.githubRepoFullName.toLowerCase() !== `${primary.owner}/${primary.repo}`.toLowerCase() ||
+      !teamIsSelected(config, teamId)
+    ) {
+      return { ok: false, reason: "unavailable" }
+    }
+    if (config.createIssue === "disabled") return { ok: false, reason: "disabled" }
+    return {
+      ok: true,
+      config,
+      tenant: { organizationId: connection.organizationId, installationId: primary.installationId, teamId },
+    }
+  } catch {
+    return { ok: false, reason: "unavailable" }
+  }
+}
+
+function slackLinearPolicyFailure(reason: "disabled" | "unavailable"): SlackAgentResult {
+  const message =
+    reason === "disabled"
+      ? "_Linear issue creation is disabled in this workspace's Sigilix settings._"
+      : "_Linear is not connected to this channel's exact repository and team, so I didn't create an issue._"
+  return { reply: formatSigilixReply(message), action: { kind: "qa" } }
 }
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
@@ -291,7 +350,7 @@ async function runLinearTriage(
   env: Env,
   ctx: SlackMentionContext,
   memScope: SlackMemoryScope,
-  _primary: SlackScope["repos"][number],
+  primary: SlackScope["repos"][number],
 ): Promise<SlackAgentResult> {
   const { scope } = ctx
 
@@ -302,10 +361,13 @@ async function runLinearTriage(
     return { reply, action: { kind: "qa" } }
   }
 
+  const policy = await resolveSlackLinearPolicy(env, primary, scope.linearTeam)
+  if (!policy.ok) return slackLinearPolicyFailure(policy.reason)
+
   const { title, description } = await summarizeThreadToIssue(env, ctx)
 
   // Create the Linear issue.
-  const linear = await buildLinearClient(env)
+  const linear = policy.tenant ? await buildLinearClient(env, policy.tenant) : await buildLinearClient(env)
   const issue = await linear.createIssue({
     teamId: scope.linearTeam,
     title,
@@ -314,7 +376,8 @@ async function runLinearTriage(
 
   // Run the triage pipeline on the new issue (non-blocking failure is fine —
   // the issue is already created; triage enriches it).
-  await triageIssue(issue.id, env).catch((e: unknown) => {
+  const triage = policy.tenant ? triageIssue(issue.id, env, policy.tenant) : triageIssue(issue.id, env)
+  await triage.catch((e: unknown) => {
     console.warn("[slack-agent] triageIssue failed (issue already created)", {
       issueId: issue.id,
       error: String(e),
@@ -360,12 +423,15 @@ async function runImplement(
     return { reply, action: { kind: "qa" } }
   }
 
+  const policy = await resolveSlackLinearPolicy(env, primary, scope.linearTeam)
+  if (!policy.ok) return slackLinearPolicyFailure(policy.reason)
+
   // Summarize the thread into a Linear issue title + description (same step as triage).
   const { title, description } = await summarizeThreadToIssue(env, ctx)
 
   // Create the Linear issue, self-assigned to the Sigilix agent user so the free-tier
   // user never has to assign it by hand. assigneeId is omitted when the env is unset.
-  const linear = await buildLinearClient(env)
+  const linear = policy.tenant ? await buildLinearClient(env, policy.tenant) : await buildLinearClient(env)
   const issue = await linear.createIssue({
     teamId: scope.linearTeam,
     title,
@@ -375,13 +441,16 @@ async function runImplement(
 
   // Dispatch the agent-runner on the minimal engine (shares idempotency + model +
   // dispatch with the B3 webhook path). Dark unless the runner mode is "on".
-  const { dispatched } = await dispatchTicketImplementation(env, {
-    owner: primary.owner,
-    repo: primary.repo,
-    installationId: primary.installationId,
-    ticket: { identifier: issue.identifier, title, body: description ?? "", url: issue.url },
-    dedupeId: issue.id,
-  })
+  const { dispatched } =
+    !policy.config || codebaseContextEnabled(policy.config)
+      ? await dispatchTicketImplementation(env, {
+          owner: primary.owner,
+          repo: primary.repo,
+          installationId: primary.installationId,
+          ticket: { identifier: issue.identifier, title, body: description ?? "", url: issue.url },
+          dedupeId: issue.id,
+        })
+      : { dispatched: false }
 
   const reply = dispatched
     ? formatSigilixReply(
@@ -453,9 +522,15 @@ async function runOfferConfirm(
     return { reply, action: { kind: "qa" } }
   }
 
+  const policy = await resolveSlackLinearPolicy(env, primary, scope.linearTeam)
+  if (!policy.ok) {
+    await clearImplementOffer(env, ctx.channelId, ctx.threadTs)
+    return slackLinearPolicyFailure(policy.reason)
+  }
+
   // Create the ticket self-assigned to the Sigilix agent user (assigneeId omitted
   // when the env is unset), body = the agreed plan.
-  const linear = await buildLinearClient(env)
+  const linear = policy.tenant ? await buildLinearClient(env, policy.tenant) : await buildLinearClient(env)
   const issue = await linear.createIssue({
     teamId: scope.linearTeam,
     title: offer.title,
@@ -465,13 +540,16 @@ async function runOfferConfirm(
 
   // Dispatch the agent-runner (minimal engine, shared B3b core). Dark unless the
   // runner mode is "on" — then dispatched=false and the reply degrades to "queued".
-  const { dispatched } = await dispatchTicketImplementation(env, {
-    owner: primary.owner,
-    repo: primary.repo,
-    installationId: primary.installationId,
-    ticket: { identifier: issue.identifier, title: offer.title, body: offer.plan, url: issue.url },
-    dedupeId: issue.id,
-  })
+  const { dispatched } =
+    !policy.config || codebaseContextEnabled(policy.config)
+      ? await dispatchTicketImplementation(env, {
+          owner: primary.owner,
+          repo: primary.repo,
+          installationId: primary.installationId,
+          ticket: { identifier: issue.identifier, title: offer.title, body: offer.plan, url: issue.url },
+          dedupeId: issue.id,
+        })
+      : { dispatched: false }
 
   const reply = dispatched
     ? formatSigilixReply(`On it 🛠️ — implementing this; PR incoming, tracked in <${issue.url}|${issue.identifier}>.`)

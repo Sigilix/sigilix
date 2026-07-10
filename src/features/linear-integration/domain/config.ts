@@ -124,3 +124,9 @@ export function teamIsSelected(config: LinearConfig, teamId: string): boolean {
 export function codebaseContextEnabled(config: LinearConfig): boolean {
   return config.contextMode !== "disabled"
 }
+
+/** `auto` uses the bounded, preselected semantic/linked-PR context. Only the
+ * explicit `enabled` mode lets the model autonomously request more repo data. */
+export function codebaseToolsEnabled(config: LinearConfig): boolean {
+  return config.contextMode === "enabled"
+}

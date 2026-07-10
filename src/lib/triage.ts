@@ -92,13 +92,15 @@ export async function triageIssue(issueId: string, env: Env, tenant?: LinearTena
       (tenant.teamId !== undefined && tenant.teamId !== issue.team.id) ||
       !teamIsSelected(tenantConfig, issue.team.id)
     if (scopeInvalid) {
-      try {
-        await linear.createComment(
-          issue.id,
-          "**Sigilix configuration warning** — this Linear team is not bound to an accessible repository in the connected GitHub installation, so no triage or code retrieval ran.",
-        )
-      } catch {
-        // Best-effort visibility; the tenant guard still fails closed.
+      if (!tenantConfig || tenantConfig.writeback.comments) {
+        try {
+          await linear.createComment(
+            issue.id,
+            "**Sigilix configuration warning** — this Linear team is not bound to an accessible repository in the connected GitHub installation, so no triage or code retrieval ran.",
+          )
+        } catch {
+          // Best-effort visibility; the tenant guard still fails closed.
+        }
       }
       console.warn(
         JSON.stringify({
@@ -122,6 +124,17 @@ export async function triageIssue(issueId: string, env: Env, tenant?: LinearTena
   // runRateLimitGate's "never a silent drop" contract.
   const rateLimit = await checkTriageRateLimit(env, { teamId: issue.team?.id, nowMs: Date.now() })
   if (!rateLimit.allowed) {
+    if (tenantConfig && !tenantConfig.writeback.comments) {
+      console.log(
+        JSON.stringify({
+          event: "triage-rate-limit-skip-comments-disabled",
+          issueId,
+          used: rateLimit.used,
+          cap: rateLimit.cap,
+        }),
+      )
+      return
+    }
     const mins = Math.max(1, Math.ceil(rateLimit.resetMs / 60000))
     try {
       const commentId = await linear.createComment(

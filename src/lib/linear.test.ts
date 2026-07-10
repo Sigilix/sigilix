@@ -626,6 +626,78 @@ describe("buildLinearClient — SIG-144 slice 4 single helper", () => {
     expect((init.headers as Record<string, string>).authorization).toBe("human-key")
   })
 
+  it("broker-bound with no tenant fails closed before reading global credentials when dogfood scope is absent", async () => {
+    let humanKeyRead = false
+    let oauthClientIdRead = false
+    const idFromName = vi.fn()
+    const env = {
+      OPENCLAW_LINEAR_UNIFIED: "off",
+      LINEAR_TOKEN_BROKER: { idFromName },
+      get LINEAR_API_KEY() {
+        humanKeyRead = true
+        return "human-key-must-never-be-used"
+      },
+      get LINEAR_OAUTH_CLIENT_ID() {
+        oauthClientIdRead = true
+        return "client-id-must-never-be-used"
+      },
+      LINEAR_OAUTH_CLIENT_SECRET: "client-secret-must-never-be-used",
+    } as unknown as LinearAuthEnv
+
+    await expect(buildLinearClient(env)).rejects.toThrow(/explicit dogfood tenant token/)
+    expect(humanKeyRead).toBe(false)
+    expect(oauthClientIdRead).toBe(false)
+    expect(idFromName).not.toHaveBeenCalled()
+  })
+
+  it("broker-bound with no tenant uses only the exact dogfood shard even when unified mode is off", async () => {
+    const tokenArgs: Array<{ organizationId: string; installationId: number; readOnly: boolean }> = []
+    const refreshArgs: Array<{ organizationId: string; installationId: number }> = []
+    const idFromName = vi.fn((name: string) => ({ toString: () => name }))
+    const env = {
+      LINEAR_API_KEY: "human-key-must-never-be-used",
+      LINEAR_OAUTH_CLIENT_ID: "client-id-must-never-be-used",
+      LINEAR_OAUTH_CLIENT_SECRET: "client-secret-must-never-be-used",
+      OPENCLAW_LINEAR_UNIFIED: "off",
+      OPENCLAW_LINEAR_ALLOWED_ORG_ID: "org-dogfood",
+      OPENCLAW_LINEAR_LEGACY_INSTALLATION_ID: "77",
+      LINEAR_TOKEN_BROKER: {
+        idFromName,
+        get: () => ({
+          getValidTenantToken: async (args: { organizationId: string; installationId: number; readOnly: boolean }) => {
+            tokenArgs.push(args)
+            return { ok: true as const, accessToken: "dogfood-token" }
+          },
+          forceRefreshTenant: async (args: { organizationId: string; installationId: number }) => {
+            refreshArgs.push(args)
+            return { ok: true as const, accessToken: "dogfood-token-refreshed" }
+          },
+        }),
+      },
+    } as unknown as LinearAuthEnv
+    const client = await buildLinearClient(env)
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("unauthorized", { status: 401 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { agentActivityCreate: { success: true } } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+
+    await client.createAgentActivity("session-dogfood", "x", "thought")
+
+    expect(idFromName).toHaveBeenCalledWith("linear-org:v1:org-dogfood")
+    expect(tokenArgs).toEqual([{ organizationId: "org-dogfood", installationId: 77, readOnly: false }])
+    expect(refreshArgs).toEqual([{ organizationId: "org-dogfood", installationId: 77 }])
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    const [, firstInit] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const [, secondInit] = fetchSpy.mock.calls[1] as [string, RequestInit]
+    expect((firstInit.headers as Record<string, string>).authorization).toBe("Bearer dogfood-token")
+    expect((secondInit.headers as Record<string, string>).authorization).toBe("Bearer dogfood-token-refreshed")
+  })
+
   it("a tenant client carries the exact-shard refresh hook even with the legacy unified flag off", async () => {
     let forceRefreshCalls = 0
     const env = makeUnifiedAuthEnv(async () => ({ ok: true, accessToken: "stale-agent-token" }), {

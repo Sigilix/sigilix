@@ -36,6 +36,7 @@ import { extractCodeCitations, verifyAndSanitizeCitations } from "./citation-ver
 import { captureInstructiveLearning } from "@/src/features/learnings"
 import {
   codebaseContextEnabled,
+  codebaseToolsEnabled,
   getLinearConfig,
   resolveLinearTeamBinding,
   teamIsSelected,
@@ -322,19 +323,25 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
       (tenant.teamId === undefined || tenant.teamId === data.issue.team.id) &&
       teamIsSelected(config, data.issue.team.id)
     if (!valid) {
-      try {
-        await linear.createComment(
-          data.issue.id,
-          "**Sigilix configuration warning** — this Linear team is not bound to an accessible repository in the connected GitHub installation.",
-          resolveReplyParentId(data),
-        )
-      } catch {
-        // Best-effort visibility; the tenant guard still fails closed.
+      if (!config || config.writeback.comments) {
+        try {
+          await linear.createComment(
+            data.issue.id,
+            "**Sigilix configuration warning** — this Linear team is not bound to an accessible repository in the connected GitHub installation.",
+            resolveReplyParentId(data),
+          )
+        } catch {
+          // Best-effort visibility; the tenant guard still fails closed.
+        }
       }
       log("missing-tenant-binding", { teamId: data.issue.team.id })
       return
     }
     tenantRepo = { owner: parts[0]!, repo: parts[1]! }
+    if (!config.writeback.comments) {
+      log("comment-writeback-disabled", { teamId: data.issue.team.id })
+      return
+    }
   }
 
   // Skip self — never reply to our own comments. Linear's webhook fires
@@ -370,18 +377,26 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
   // objects so the agent can scope all indexed namespaces to the
   // requesting tenant owner before advertising or enforcing them.
   const teamRepo = tenantRepo ?? parseTeamGithubRepo(env.OPENCLAW_TEAM_GITHUB_REPO_MAP, teamKey)
-  const repoScope = tenant
-    ? await resolveTenantLinearRepoScope(env, teamRepo)
-    : await resolveLinearAgentRepoScope(env, teamRepo)
+  const contextEnabled = !tenantConfig || codebaseContextEnabled(tenantConfig)
+  const contextToolsEnabled = !tenantConfig || codebaseToolsEnabled(tenantConfig)
+  const repoScope = contextEnabled
+    ? tenant
+      ? await resolveTenantLinearRepoScope(env, teamRepo)
+      : await resolveLinearAgentRepoScope(env, teamRepo)
+    : { repo: null, mappedRepo: null, availableRepos: [], status: "unmapped" as const }
   const inferRepo = (): { owner: string; repo: string } | null => teamRepo
-  const prRefs = extractPullRequestRefs(fullQuestion, inferRepo).filter(
-    (ref) =>
-      !tenant ||
-      (teamRepo !== null &&
-        ref.owner.toLowerCase() === teamRepo.owner.toLowerCase() &&
-        ref.repo.toLowerCase() === teamRepo.repo.toLowerCase()),
-  )
-  const { contexts: linkedPrs, failures: linkedPrFailures } = await fetchLinkedPrs(prRefs, env)
+  const prRefs = contextEnabled
+    ? extractPullRequestRefs(fullQuestion, inferRepo).filter(
+        (ref) =>
+          !tenant ||
+          (teamRepo !== null &&
+            ref.owner.toLowerCase() === teamRepo.owner.toLowerCase() &&
+            ref.repo.toLowerCase() === teamRepo.repo.toLowerCase()),
+      )
+    : []
+  const { contexts: linkedPrs, failures: linkedPrFailures } = contextEnabled
+    ? await fetchLinkedPrs(prRefs, env)
+    : { contexts: [], failures: [] }
   log("linked-prs", {
     refs: prRefs.length,
     fetched: linkedPrs.length,
@@ -392,7 +407,7 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
   const retrievalText = `${data.issue.title}\n\n${question}`
   const retrievalTeamKey = linearRetrievalTeamKey(teamRepo)
   const chunks =
-    retrievalTeamKey && (!tenantConfig || codebaseContextEnabled(tenantConfig))
+    contextEnabled && retrievalTeamKey
       ? await retrieveChunks({
           text: retrievalText,
           teamKey: retrievalTeamKey,
@@ -420,7 +435,7 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
   let verdict: MentionVerdict | null = null
 
-  if (env.OPENCLAW_AGENTIC_LINEAR_MODE === "on") {
+  if (env.OPENCLAW_AGENTIC_LINEAR_MODE === "on" && contextToolsEnabled) {
     log("agent-loop-start")
     // Resolved once so the prompt's advisory list and the tool's
     // hard enforcement can't drift (CR PR #30 caught the gap where
@@ -522,14 +537,18 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
     return
   }
 
-  const verifiedAnswer = await verifyLinearMentionCitations({
-    env,
-    teamRepo,
-    retrievedChunks: chunks,
-    answer: verdict.answer,
-    log,
-    ...(tenant ? { installationId: tenant.installationId } : {}),
-  })
+  const verifiedAnswer = contextEnabled
+    ? await verifyLinearMentionCitations({
+        env,
+        teamRepo,
+        retrievedChunks: chunks,
+        answer: verdict.answer,
+        log,
+        ...(tenant ? { installationId: tenant.installationId } : {}),
+      })
+    : extractCodeCitations(verdict.answer).length > 0
+      ? appendCitationVerificationUnavailable(verdict.answer, "codebase context is disabled")
+      : verdict.answer
   const body = formatReply({ verdict: { ...verdict, answer: verifiedAnswer }, askerHandle })
   const replyParentId = resolveReplyParentId(data)
   const newCommentId = await linear.createComment(data.issue.id, body, replyParentId)
@@ -560,7 +579,9 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
   if (teamRepo) {
     const inst = tenant
       ? { ok: true as const, installationId: tenant.installationId }
-      : resolveInstallation(teamRepo.owner, teamRepo.repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
+      : env.LINEAR_TOKEN_BROKER
+        ? { ok: false as const }
+        : resolveInstallation(teamRepo.owner, teamRepo.repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
     if (inst.ok) {
       await captureInstructiveLearning({
         env,

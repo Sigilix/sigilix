@@ -22,6 +22,7 @@ import { listTeamRepoMappings, resolveInstallation } from "@/src/shared/adapters
 import { isAgentSessionCancelled } from "@/src/lib/linear-agent-cancel"
 import { resolveEntitlement, upsellFor as linearUpsellFor } from "@/src/features/entitlements"
 import {
+  codebaseContextEnabled,
   getLinearConfig,
   resolveLinearTeamBinding,
   teamIsSelected,
@@ -281,13 +282,40 @@ export async function runLinearAgentRun(
           team: issue.team.key,
         }),
       )
-      if (sessionId && tenant) {
+      if (sessionId) {
         await postAgentSessionCompletion(env, tenant, { issueId, sessionId, dispatched: false })
-      } else {
+      } else if (!tenantConfig || tenantConfig.writeback.comments) {
         try {
           await linear.createComment(
             issue.id,
             "**Sigilix configuration warning** — this Linear team is not bound to an accessible repository in the connected GitHub installation.",
+          )
+        } catch {
+          // best-effort visibility
+        }
+      }
+      return
+    }
+
+    if (tenantConfig && !codebaseContextEnabled(tenantConfig)) {
+      console.log(
+        JSON.stringify({
+          event: "linear-agent-run-context-disabled",
+          issueId,
+          organizationId: tenant?.organizationId,
+          installationId: tenant?.installationId,
+        }),
+      )
+      if (sessionId) {
+        // Agent sessions require a terminal activity even when configurable
+        // comment/progress writeback is off, otherwise Linear leaves the turn
+        // permanently stuck in "Working".
+        await postAgentSessionCompletion(env, tenant, { issueId, sessionId, dispatched: false })
+      } else if (tenantConfig.writeback.comments) {
+        try {
+          await linear.createComment(
+            issue.id,
+            "**Sigilix configuration** — codebase context is off, so no repository implementation was dispatched.",
           )
         } catch {
           // best-effort visibility
@@ -329,7 +357,7 @@ export async function runLinearAgentRun(
         if (sessionId) {
           const agent = tenant ? await buildLinearAgentClient(env, tenant) : await buildLinearAgentClient(env)
           if (agent) await agent.createAgentActivity(sessionId, upsell, "response")
-        } else {
+        } else if (!tenantConfig || tenantConfig.writeback.comments) {
           try {
             await linear.createComment(issue.id, upsell)
           } catch {
@@ -360,7 +388,7 @@ export async function runLinearAgentRun(
 
     // Milestone (SIG-145b): the repo + installation are resolved, so the run is about to
     // start real work — surface that as live progress instead of a silent "Working…".
-    if (sessionId && !skipMilestones && (!tenantConfig || tenantConfig.planning)) {
+    if (sessionId && !skipMilestones && (!tenantConfig || (tenantConfig.planning && tenantConfig.writeback.comments))) {
       await postMilestoneThought(env, tenant, {
         issueId,
         sessionId,
@@ -382,7 +410,7 @@ export async function runLinearAgentRun(
     // Milestone (SIG-145b): about to hand off to the container implementation. This is
     // the last milestone before the (single, opaque) await that runs the container to
     // completion — everything after this point is either the terminal post or a return.
-    if (sessionId && !skipMilestones && (!tenantConfig || tenantConfig.planning)) {
+    if (sessionId && !skipMilestones && (!tenantConfig || (tenantConfig.planning && tenantConfig.writeback.comments))) {
       await postMilestoneThought(env, tenant, {
         issueId,
         sessionId,

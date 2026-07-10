@@ -266,4 +266,25 @@ describe("handleMention — tenant-scoped unified Linear auth", () => {
     expect(authHeader).toBe("Bearer agent-token-xyz")
     expect(authHeader).not.toContain("human-key-must-never-be-used")
   })
+
+  it("fails closed when a broker-bound legacy job has no tenant or explicit dogfood scope", async () => {
+    const { env } = makeEnv()
+    const idFromName = vi.fn()
+    env.OPENCLAW_LINEAR_UNIFIED = "off"
+    env.LINEAR_TOKEN_BROKER = { idFromName } as unknown as Env["LINEAR_TOKEN_BROKER"]
+    let humanKeyRead = false
+    Object.defineProperty(env, "LINEAR_API_KEY", {
+      configurable: true,
+      get() {
+        humanKeyRead = true
+        return "human-key-must-never-be-used"
+      },
+    })
+    const actual = await vi.importActual<typeof import("@/src/lib/linear")>("@/src/lib/linear")
+    mockBuildLinearClient.mockImplementationOnce(actual.buildLinearClient)
+
+    await expect(handleMention("comment-missing-tenant", env)).rejects.toThrow(/explicit dogfood tenant token/)
+    expect(humanKeyRead).toBe(false)
+    expect(idFromName).not.toHaveBeenCalled()
+  })
 })

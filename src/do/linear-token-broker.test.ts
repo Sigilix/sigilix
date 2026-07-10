@@ -206,6 +206,58 @@ describe("LinearTokenBroker.uninstallTenant", () => {
     expect(storedRecord(store)).toBeUndefined()
     expect(alarms.at).toBeNull()
   })
+
+  it("waits for an in-flight refresh and leaves no token record behind", async () => {
+    const { ctx, store } = makeDoState()
+    const broker = new LinearTokenBroker(ctx, makeEnv())
+    const scope = { organizationId: "org-a", installationId: 11 }
+    await broker.installTenant(nearExpiryRecord({ ...scope, actorType: "app" }), scope)
+    let resolveFetch!: (response: Response) => void
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve
+        }),
+    )
+
+    const refresh = broker.forceRefreshTenant(scope)
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledOnce())
+    const uninstall = broker.uninstallTenant(scope)
+    resolveFetch(
+      new Response(JSON.stringify({ access_token: "tok-rotated", refresh_token: "ref-rotated", expires_in: 3600 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    )
+
+    await expect(refresh).resolves.toEqual({ ok: true, accessToken: "tok-rotated" })
+    await expect(uninstall).resolves.toEqual({ ok: true, removed: true })
+    expect(storedRecord(store)).toBeUndefined()
+  })
+})
+
+describe("LinearTokenBroker.installTenant", () => {
+  const scope = { organizationId: "org-a", installationId: 11 }
+
+  it("returns a structured tenant-conflict result for mismatched metadata", async () => {
+    const { ctx } = makeDoState()
+    const broker = new LinearTokenBroker(ctx, makeEnv())
+
+    await expect(
+      broker.installTenant(freshRecord({ organizationId: "org-b", installationId: 11, actorType: "app" }), scope),
+    ).resolves.toEqual({ ok: false, reason: "tenant-conflict" })
+  })
+
+  it("returns a structured tenant-conflict result when the shard holds another tenant", async () => {
+    const { ctx } = makeDoState()
+    const broker = new LinearTokenBroker(ctx, makeEnv())
+    await broker.install(freshRecord({ organizationId: "org-b", installationId: 22, actorType: "app" }))
+
+    await expect(broker.installTenant(freshRecord({ ...scope, actorType: "app" }), scope)).resolves.toEqual({
+      ok: false,
+      reason: "tenant-conflict",
+    })
+  })
 })
 
 describe("LinearTokenBroker tenant install staging", () => {

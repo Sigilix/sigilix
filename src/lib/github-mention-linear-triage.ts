@@ -60,25 +60,33 @@ export async function runLinearTriageAction(
 ): Promise<LinearTriageResult> {
   let tenant: LinearTenantContext | undefined
   let teamId: string | null = null
-  if (args.installationId && env.SIGILIX_PLATFORM_DB) {
+  if (env.SIGILIX_PLATFORM_DB) {
+    // Once the tenant store is present there is no global-map fallback: a
+    // missing installation or any connection/config/binding proof fails
+    // closed. The legacy map is only for deployments without D1.
+    if (!args.installationId) return { kind: "no-team" }
     const [connection, config, binding] = await Promise.all([
       getLinearConnectionByInstallation(env, args.installationId),
       getLinearConfig(env, args.installationId),
       resolveLinearTeamBindingForRepo(env, args.installationId, `${args.owner}/${args.repo}`),
     ])
-    if (config?.createIssue === "disabled") return { kind: "disabled" }
     if (
       connection?.status === "active" &&
       config &&
       binding?.accessState === "allowed" &&
+      binding.installationId === args.installationId &&
+      binding.githubRepoFullName.toLowerCase() === `${args.owner}/${args.repo}`.toLowerCase() &&
       teamIsSelected(config, binding.teamId)
     ) {
+      if (config.createIssue === "disabled") return { kind: "disabled" }
       teamId = binding.teamId
       tenant = {
         organizationId: connection.organizationId,
         installationId: args.installationId,
         teamId: binding.teamId,
       }
+    } else {
+      return { kind: "no-team" }
     }
   } else {
     teamId = resolveLinearTeamForRepo(env.OPENCLAW_GITHUB_REPO_LINEAR_TEAM_MAP, args.owner, args.repo)

@@ -266,6 +266,51 @@ describe("SIG-242 Linear tenant boundary", () => {
     expect(retried.status).toBe(200)
   })
 
+  it("rejects a malformed signed payload before D1 work and ignores an unconnected organization", async () => {
+    const send = vi.fn(async () => undefined)
+    const env = {
+      SIGILIX_PLATFORM_DB: db,
+      LINEAR_WEBHOOK_SECRET: SECRET,
+      OPENCLAW_JOBS: { send },
+    } as unknown as Env
+    const rowsBefore = await db
+      .prepare("SELECT COUNT(*) AS count FROM linear_delivery_lease")
+      .first<{ count: number }>()
+    const malformed = await handleLinearWebhook(
+      await webhookRequest(
+        { action: "create", type: "Issue", organizationId: "org-a", webhookTimestamp: Date.now() },
+        "delivery-malformed",
+      ),
+      env,
+      {} as ExecutionContext,
+    )
+
+    expect(malformed.status).toBe(400)
+    expect(await malformed.text()).toBe("invalid payload\n")
+    expect(send).not.toHaveBeenCalled()
+    const rowsAfter = await db.prepare("SELECT COUNT(*) AS count FROM linear_delivery_lease").first<{ count: number }>()
+    expect(rowsAfter?.count).toBe(rowsBefore?.count)
+
+    const unknownOrganization = await handleLinearWebhook(
+      await webhookRequest(
+        {
+          action: "create",
+          type: "Issue",
+          organizationId: "org-not-connected",
+          webhookTimestamp: Date.now(),
+          data: { id: "issue-unknown", team: { id: "team-unknown" } },
+        },
+        "delivery-unknown-org",
+      ),
+      env,
+      {} as ExecutionContext,
+    )
+    expect(unknownOrganization.status).toBe(200)
+    expect(send).not.toHaveBeenCalled()
+    const rowsFinal = await db.prepare("SELECT COUNT(*) AS count FROM linear_delivery_lease").first<{ count: number }>()
+    expect(rowsFinal?.count).toBe(rowsBefore?.count)
+  })
+
   it("never lets one organization's delivery lease claim the same id for another org", async () => {
     expect(
       await claimLinearDelivery(

@@ -1,6 +1,7 @@
 export {
   DEFAULT_LINEAR_CONFIG,
   codebaseContextEnabled,
+  codebaseToolsEnabled,
   teamIsSelected,
   validateLinearConfigInput,
   type LinearConfig,

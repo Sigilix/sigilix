@@ -57,4 +57,29 @@ describe("Linear dogfood singleton migration", () => {
     expect(exportLegacyRecordForMigration).toHaveBeenCalledTimes(1)
     expect(records.has("linear-org:v1:other-org")).toBe(false)
   })
+
+  it("fails closed when the tenant shard rejects the migrated record", async () => {
+    const legacy: LinearAgentTokenRecord = { accessToken: "legacy-token", installedAt: 1 }
+    const getValidTenantToken = vi.fn(async () => ({ ok: false as const, reason: "not-installed" as const }))
+    const namespace = {
+      idFromName: (name: string) => ({ name }),
+      get: (id: { name: string }) =>
+        id.name === "linear-agent"
+          ? { exportLegacyRecordForMigration: async () => legacy }
+          : {
+              getValidTenantToken,
+              installTenant: async () => ({ ok: false as const, reason: "tenant-conflict" as const }),
+            },
+    }
+    const env = {
+      LINEAR_TOKEN_BROKER: namespace,
+      OPENCLAW_LINEAR_ALLOWED_ORG_ID: "org-dogfood",
+      OPENCLAW_LINEAR_LEGACY_INSTALLATION_ID: "42",
+    } as unknown as LinearTokenBrokerEnv
+
+    await expect(
+      getValidAgentTokenViaBroker(env, { organizationId: "org-dogfood", installationId: 42 }, { readOnly: false }),
+    ).resolves.toBeNull()
+    expect(getValidTenantToken).toHaveBeenCalledOnce()
+  })
 })

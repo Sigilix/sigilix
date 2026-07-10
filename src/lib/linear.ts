@@ -164,15 +164,28 @@ export async function buildLinearAuth(env: LinearAuthEnv, tenant?: LinearTenantC
  * the broker.
  */
 export async function buildLinearClient(env: LinearAuthEnv, tenant?: LinearTenantContext): Promise<LinearClient> {
-  const auth = await buildLinearAuth(env, tenant)
   const brokerEnv = brokerEnvFrom(env)
+  // Production binds the broker. Legacy jobs/Slack that cannot yet carry a
+  // tenant tuple may use only the explicitly configured dogfood tenant; they
+  // must never degrade to client_credentials or the human API key just because
+  // the rollout flag is off. Broker-absent manual/test environments retain the
+  // pre-SIG-242 compatibility behavior in buildLinearAuth.
+  if (brokerEnv && !tenant) {
+    const scope = legacyDogfoodScope(brokerEnv)
+    const token = scope ? await getLegacyDogfoodAgentTokenViaBroker(brokerEnv, { readOnly: false }) : null
+    if (!scope || !token) {
+      throw new Error(
+        "buildLinearClient: a broker-bound legacy call requires an explicit dogfood tenant token — " +
+          "refusing to fall back to global Linear credentials",
+      )
+    }
+    return new LinearClient({ oauthToken: token }, { onUnauthorized: () => forceRefreshViaBroker(brokerEnv, scope) })
+  }
+
+  const auth = await buildLinearAuth(env, tenant)
   if (brokerEnv && tenant) {
     const scope = tenantScope(tenant)
     return new LinearClient(auth, { onUnauthorized: () => forceRefreshViaBroker(brokerEnv, scope) })
-  }
-  if (brokerEnv && resolveLinearUnifiedMode(env) === "on") {
-    const scope = legacyDogfoodScope(brokerEnv)
-    if (scope) return new LinearClient(auth, { onUnauthorized: () => forceRefreshViaBroker(brokerEnv, scope) })
   }
   return new LinearClient(auth)
 }

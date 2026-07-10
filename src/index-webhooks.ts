@@ -122,6 +122,18 @@ function isAgentSessionWebhook(raw: unknown): raw is LinearAgentSessionWebhook {
   return typeof raw === "object" && raw !== null && (raw as { type?: unknown }).type === "AgentSessionEvent"
 }
 
+/** Narrow a parsed non-agent webhook before any `data` fields are read. A
+ * signed payload can still be malformed; treating that as a 400 prevents a
+ * retrying 5xx/TypeError loop without weakening signature verification. */
+function isLinearWebhookPayload(raw: unknown): raw is LinearWebhookPayload {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return false
+  const candidate = raw as { action?: unknown; type?: unknown; data?: unknown }
+  if (candidate.action !== "create" && candidate.action !== "update" && candidate.action !== "remove") return false
+  if (typeof candidate.type !== "string" || !candidate.type) return false
+  if (typeof candidate.data !== "object" || candidate.data === null || Array.isArray(candidate.data)) return false
+  return typeof (candidate.data as { id?: unknown }).id === "string" && !!(candidate.data as { id: string }).id
+}
+
 async function runLinearDeliveryOnce(
   env: Env,
   tenant: LinearTenantContext | undefined,
@@ -221,6 +233,10 @@ export async function handleLinearWebhook(request: Request, env: Env, _ctx: Exec
   const deliveryId = request.headers.get("linear-delivery")
   if (!deliveryId) return new Response("missing Linear-Delivery\n", { status: 400 })
 
+  const agentSessionPayload = isAgentSessionWebhook(raw) ? raw : null
+  const payload = agentSessionPayload ? null : isLinearWebhookPayload(raw) ? raw : null
+  if (!agentSessionPayload && !payload) return new Response("invalid payload\n", { status: 400 })
+
   let tenant: LinearTenantContext | undefined
   if (env.SIGILIX_PLATFORM_DB) {
     const organizationId = typeof envelope.organizationId === "string" ? envelope.organizationId : ""
@@ -238,9 +254,7 @@ export async function handleLinearWebhook(request: Request, env: Env, _ctx: Exec
       return new Response("linear tenant lookup failed\n", { status: 500 })
     }
     if (!connection || connection.status !== "active") return new Response("ok\n", { status: 200 })
-    const teamId = isAgentSessionWebhook(raw)
-      ? raw.agentSession?.issue?.team?.id
-      : (raw as LinearWebhookPayload).data?.team?.id
+    const teamId = agentSessionPayload ? agentSessionPayload.agentSession?.issue?.team?.id : payload?.data.team?.id
     if (teamId) {
       const [binding, config] = await Promise.all([
         resolveLinearTeamBinding(env, organizationId, teamId),
@@ -271,11 +285,11 @@ export async function handleLinearWebhook(request: Request, env: Env, _ctx: Exec
   // is a real Linear agent, delegating/@-mentioning it fires this event (not an
   // Issue.update assignee diff). Handled BEFORE the legacy Issue/Comment dispatch
   // because it carries a different payload shape (no `data`).
-  if (isAgentSessionWebhook(raw)) {
-    return handleAgentSessionEvent(raw, env, tenant)
+  if (agentSessionPayload) {
+    return handleAgentSessionEvent(agentSessionPayload, env, tenant)
   }
-
-  const payload = raw as LinearWebhookPayload
+  // The only null case was the AgentSessionEvent branch above, which returned.
+  if (!payload) return new Response("invalid payload\n", { status: 400 })
 
   // SIG-545 B3: Issue.update assigning the issue to the Sigilix agent user →
   // dispatch the agent-runner (on the SAFE minimal engine) to implement it.

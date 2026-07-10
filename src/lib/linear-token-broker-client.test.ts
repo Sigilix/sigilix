@@ -18,7 +18,7 @@ import {
   __resetBrokerClientCacheForTests,
   type LinearTokenBrokerEnv,
 } from "@/src/lib/linear-token-broker-client"
-import type { BrokerTokenResult } from "@/src/do/linear-token-broker"
+import type { BrokerTenantInstallResult, BrokerTokenResult } from "@/src/do/linear-token-broker"
 import type { LinearAgentTokenRecord } from "@/src/lib/linear-agent-oauth"
 
 type Call = { method: string; args: unknown[] }
@@ -29,6 +29,10 @@ function makeEnv(stubMethods: {
   getValidToken?: (args: { readOnly: boolean }) => Promise<BrokerTokenResult>
   forceRefresh?: () => Promise<BrokerTokenResult>
   install?: (record: LinearAgentTokenRecord) => Promise<{ ok: true }>
+  installTenant?: (
+    record: LinearAgentTokenRecord,
+    scope: { organizationId: string; installationId: number },
+  ) => Promise<BrokerTenantInstallResult>
   stageTenantInstall?: (
     record: LinearAgentTokenRecord,
     scope: { organizationId: string; installationId: number },
@@ -60,6 +64,10 @@ function makeEnv(stubMethods: {
     install: (record: LinearAgentTokenRecord) => {
       calls.push({ method: "install", args: [record] })
       return (stubMethods.install ?? (async () => ({ ok: true as const })))(record)
+    },
+    installTenant: (record: LinearAgentTokenRecord, scope: { organizationId: string; installationId: number }) => {
+      calls.push({ method: "installTenant", args: [record, scope] })
+      return (stubMethods.installTenant ?? (async () => ({ ok: true as const })))(record, scope)
     },
     stageTenantInstall: (
       record: LinearAgentTokenRecord,
@@ -331,6 +339,17 @@ describe("installAgentTokenToBroker", () => {
     const read = await getValidAgentTokenViaBroker(env2, { readOnly: true })
     expect(read).toBe("tok-new")
     expect(calls2.filter((c) => c.method === "getValidToken")).toHaveLength(1)
+  })
+
+  it("maps a tenant install's structured conflict result to false", async () => {
+    const scope = { organizationId: "org-a", installationId: 11 }
+    const tenantRecord: LinearAgentTokenRecord = { ...record, ...scope, actorType: "app" }
+    const { env, calls } = makeEnv({
+      installTenant: async () => ({ ok: false, reason: "tenant-conflict" }),
+    })
+
+    await expect(installAgentTokenToBroker(env, scope, tenantRecord)).resolves.toBe(false)
+    expect(calls.find((call) => call.method === "installTenant")?.args).toEqual([tenantRecord, scope])
   })
 })
 

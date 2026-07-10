@@ -95,6 +95,8 @@ export type BrokerTenantStageResult =
   | { ok: true }
   | { ok: false; reason: "tenant-conflict" | "install-in-progress" | "invalid-generation" }
 
+export type BrokerTenantInstallResult = { ok: true } | { ok: false; reason: "tenant-conflict" }
+
 export type BrokerTenantCommitResult =
   | { ok: true; committed: boolean }
   | { ok: false; reason: "tenant-mismatch" | "generation-mismatch" | "not-staged" }
@@ -151,18 +153,18 @@ export class LinearTokenBroker extends DurableObject<Env> {
 
   /** Strict SIG-242 install entry. The caller-selected DO shard is not trusted
    * by itself: every stored record must carry the same immutable tenant pair. */
-  async installTenant(record: LinearAgentTokenRecord, expected: BrokerTenantScope): Promise<{ ok: true }> {
+  async installTenant(record: LinearAgentTokenRecord, expected: BrokerTenantScope): Promise<BrokerTenantInstallResult> {
     if (
       !this.validTenantScope(expected) ||
       record.organizationId !== expected.organizationId ||
       record.installationId !== expected.installationId ||
       record.actorType !== "app"
     ) {
-      throw new Error("linear token metadata mismatch")
+      return { ok: false, reason: "tenant-conflict" }
     }
     const existing = await this.read()
     if (existing && !this.matchesTenant(existing, expected)) {
-      throw new Error("linear token tenant conflict")
+      return { ok: false, reason: "tenant-conflict" }
     }
     return this.install(record)
   }

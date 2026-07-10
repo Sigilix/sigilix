@@ -69,7 +69,8 @@ async function migrateLegacyDogfoodRecord(env: LinearTokenBrokerEnv, scope: Line
       installationId: scope.installationId,
       actorType: "app",
     }
-    await brokerStub(env, scope).installTenant(tenantRecord, scope)
+    const result = await brokerStub(env, scope).installTenant(tenantRecord, scope)
+    if (!result.ok) return false
     console.log(
       JSON.stringify({
         event: "linear-token-legacy-dogfood-migrated",
@@ -262,7 +263,8 @@ export async function installAgentTokenToBroker(
     return false
   }
   try {
-    await brokerStub(env, scope).installTenant(record, scope)
+    const result = await brokerStub(env, scope).installTenant(record, scope)
+    if (!result.ok) return false
   } catch {
     return false
   }

@@ -7,6 +7,13 @@ FROM --platform=linux/amd64 node:22-slim
 
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
+# Provision the full agent engine: the published Sigilix CLI (an opencode fork).
+# Pinned — bump deliberately (a new CLI can change the permission/tool surface the
+# runner depends on). The bin is `sigilix`; cli-agent.ts reads SIGILIX_CLI_BIN.
+# Verified: this bun-compiled bin runs on linux/amd64 under node:22-slim.
+RUN npm i -g @sigilix/cli@1.17.14 && sigilix --version
+ENV SIGILIX_CLI_BIN=sigilix
+
 WORKDIR /app
 
 # Install all deps (including devDeps for the compile step) before copying src

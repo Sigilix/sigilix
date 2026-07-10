@@ -93,7 +93,10 @@ describe("buildOpencodeConfig", () => {
     expect(cfg.model).toBe("runner/glm-5.2:cloud");
     const provider = (cfg.provider as Record<string, { options: { baseURL: string; apiKey: string } }>).runner;
     expect(provider.options.baseURL).toBe("https://ollama.com/v1");
-    expect(provider.options.apiKey).toBe("sk-secret-key");
+    // Gate (c): the config references the key by env, NEVER embeds it. Assert the
+    // reference is present and the real key is absent from the whole rendered config.
+    expect(provider.options.apiKey).toBe("{env:SIGILIX_MODEL_KEY}");
+    expect(JSON.stringify(cfg)).not.toContain("sk-secret-key");
     expect(cfg.plugin).toEqual(["/p/index.js"]);
   });
 
@@ -223,6 +226,21 @@ describe("runCliAgent", () => {
       mode: 0o600,
     });
     expect(mocks.rm).toHaveBeenCalledWith("/tmp/sigilix-cfg-x", { recursive: true, force: true });
+  });
+
+  it("gate (c): the model key is in the child env, NEVER in the written config", async () => {
+    mocks.spawn.mockReturnValue(fakeChild('{"type":"step_finish"}', 0));
+    mocks.execFile.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+
+    await runCliAgent(makeArgs());
+
+    // The rendered config must reference the key by env, not embed it.
+    const writtenConfig = mocks.writeFile.mock.calls[0]?.[1] as string;
+    expect(writtenConfig).toContain("{env:SIGILIX_MODEL_KEY}");
+    expect(writtenConfig).not.toContain("sk-secret-key");
+    // The real key is set only in the child process env passed to spawn.
+    const spawnEnv = (mocks.spawn.mock.calls[0]?.[2] as { env: NodeJS.ProcessEnv }).env;
+    expect(spawnEnv.SIGILIX_MODEL_KEY).toBe("sk-secret-key");
   });
 
   it("no-change: clean tree → changed:false (no spurious PR)", async () => {

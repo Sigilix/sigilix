@@ -1370,6 +1370,12 @@ SIGILIX_SLACK_SCOPE_MAP = '{"T0AFVBGRDRD:C0BEL8ZAARE":{"repos":["sigilix/sigilix
 # automatic trigger exists until B3 (Linear-assignee). Flip back to dark to kill.
 SIGILIX_AGENT_RUNNER_MODE = "on"
 
+# sig-portal-agent: the SEPARATE portal gate for POST /v1/agent/runs (in-portal
+# Make-a-PR). Default-off keeps the already-live global runner private; "on" lets
+# the portal's session-authed, tenant-scoped (userControlsRepo) coding agent
+# dispatch REAL runs (clone → edit → PR) instead of the honest "preview" state.
+SIGILIX_PORTAL_AGENT_RUNNER_MODE = "on"
+
 # Consumer binding — DEFERRED out of wrangler.toml because Cloudflare's
 # Queue API rejects re-registering a consumer that's already bound to
 # this same script (HTTP 11004 — "Queue already has a consumer"), and

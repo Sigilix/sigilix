@@ -640,6 +640,10 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     // Run ids are short-lived. Opportunistic one-day GC prevents a trusted
     // internal caller bug from growing this counter table forever.
     this.ctx.storage.sql.exec("DELETE FROM sigilix_mcp_runtime_calls WHERE updated_at < ?", now - 86_400_000)
+    // SQLite-backed DO SQL is synchronous and atomically isolated inside this
+    // object's private database. A conflicting concurrent request therefore
+    // evaluates the WHERE guard against the committed counter and becomes a
+    // no-op once the cap is reached; rowsWritten is the reservation result.
     const cursor = this.ctx.storage.sql.exec(
       `INSERT INTO sigilix_mcp_runtime_calls (run_id, server_id, surface, call_count, updated_at)
        VALUES (?, ?, ?, 1, ?)

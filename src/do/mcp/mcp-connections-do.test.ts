@@ -628,25 +628,55 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
         enabled: true,
         surfaces: { chat: true, deepResearch: true },
         allowedReadTools: ["list_comments"],
-        maxCallsPerRun: 1,
+        maxCallsPerRun: 4,
       }),
     )
-    const invoke = (runId: string) =>
+    const invoke = (runId: string, surface: "chat" | "deep-research" = "chat") =>
       instance.fetch(
         runtimeRequest("invoke", {
           runId,
+          surface,
+          serverId: id,
+          toolName: "list_comments",
+          arguments: {},
+        }),
+      )
+    for (let call = 0; call < 4; call += 1) expect((await invoke("run-budget")).status).toBe(200)
+    const exhausted = await invoke("run-budget")
+    expect(exhausted.status).toBe(429)
+    expect(await exhausted.json()).toEqual({ error: "max_calls_per_run_exceeded" })
+    expect((await invoke("run-other")).status).toBe(200)
+    expect((await invoke("run-budget", "deep-research")).status).toBe(200)
+    expect(callToolSpy).toHaveBeenCalledTimes(6)
+  })
+
+  it("atomically grants only one concurrent reservation at a one-call cap", async () => {
+    nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+    const instance = makeInstance()
+    const id = await connectLinear(instance)
+    await instance.fetch(
+      policyRequest(id, "PUT", {
+        version: 0,
+        enabled: true,
+        surfaces: { chat: true, deepResearch: true },
+        allowedReadTools: ["list_comments"],
+        maxCallsPerRun: 1,
+      }),
+    )
+    const invoke = () =>
+      instance.fetch(
+        runtimeRequest("invoke", {
+          runId: "run-concurrent-budget",
           surface: "chat",
           serverId: id,
           toolName: "list_comments",
           arguments: {},
         }),
       )
-    expect((await invoke("run-budget")).status).toBe(200)
-    const exhausted = await invoke("run-budget")
-    expect(exhausted.status).toBe(429)
-    expect(await exhausted.json()).toEqual({ error: "max_calls_per_run_exceeded" })
-    expect((await invoke("run-other")).status).toBe(200)
-    expect(callToolSpy).toHaveBeenCalledTimes(2)
+
+    const responses = await Promise.all([invoke(), invoke()])
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 429])
+    expect(callToolSpy).toHaveBeenCalledTimes(1)
   })
 
   it("isolates a hung tool call behind a hard timeout", async () => {

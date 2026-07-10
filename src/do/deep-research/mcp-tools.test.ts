@@ -14,6 +14,16 @@ function tool(serverId: string, name: string): ResearchMcpTool {
 }
 
 describe("single-pass MCP evidence selection", () => {
+  it("returns before model selection when the governed catalog is empty", async () => {
+    const model = vi.fn<ResearchModelFn>()
+    const invoke = vi.fn()
+    const runtime: ResearchMcpRuntime = { catalog: async () => [], invoke }
+
+    await expect(selectMcpEvidence({ question: "q", surface: "chat", model, runtime })).resolves.toBeNull()
+    expect(model).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
   it("validates opaque names, dedupes exact tuples, and caps all calls globally at four", async () => {
     const catalog = [
       tool("s1", "list_comments"),

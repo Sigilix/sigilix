@@ -6,6 +6,13 @@ import { resolveEntitlement, upsellFor as linearUpsellFor } from "@/src/features
 import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import { isAuthorAllowedForReviewDismiss } from "./github-mention-dismiss"
+import {
+  getLinearConfig,
+  getLinearConnectionByInstallation,
+  resolveLinearTeamBindingForRepo,
+  teamIsSelected,
+  type LinearTenantContext,
+} from "@/src/features/linear-integration"
 
 export type GithubLinearTriageMode = "off" | "shadow" | "on"
 export function resolveGithubLinearTriageMode(
@@ -27,6 +34,7 @@ export function parseLinearTriageCommand(question: string): { matched: boolean }
 export type LinearTriageResult =
   | { kind: "created"; identifier: string; url: string; triaged: boolean }
   | { kind: "no-team" }
+  | { kind: "disabled" }
   | { kind: "error"; message: string }
 
 /**
@@ -47,19 +55,53 @@ export async function runLinearTriageAction(
     body: string
     author: string
     prUrl: string
+    installationId?: number
   },
 ): Promise<LinearTriageResult> {
-  const teamId = resolveLinearTeamForRepo(env.OPENCLAW_GITHUB_REPO_LINEAR_TEAM_MAP, args.owner, args.repo)
+  let tenant: LinearTenantContext | undefined
+  let teamId: string | null = null
+  if (env.SIGILIX_PLATFORM_DB) {
+    // Once the tenant store is present there is no global-map fallback: a
+    // missing installation or any connection/config/binding proof fails
+    // closed. The legacy map is only for deployments without D1.
+    if (!args.installationId) return { kind: "no-team" }
+    const [connection, config, binding] = await Promise.all([
+      getLinearConnectionByInstallation(env, args.installationId),
+      getLinearConfig(env, args.installationId),
+      resolveLinearTeamBindingForRepo(env, args.installationId, `${args.owner}/${args.repo}`),
+    ])
+    if (
+      connection?.status === "active" &&
+      config &&
+      binding?.accessState === "allowed" &&
+      binding.installationId === args.installationId &&
+      binding.githubRepoFullName.toLowerCase() === `${args.owner}/${args.repo}`.toLowerCase() &&
+      teamIsSelected(config, binding.teamId)
+    ) {
+      if (config.createIssue === "disabled") return { kind: "disabled" }
+      teamId = binding.teamId
+      tenant = {
+        organizationId: connection.organizationId,
+        installationId: args.installationId,
+        teamId: binding.teamId,
+      }
+    } else {
+      return { kind: "no-team" }
+    }
+  } else {
+    teamId = resolveLinearTeamForRepo(env.OPENCLAW_GITHUB_REPO_LINEAR_TEAM_MAP, args.owner, args.repo)
+  }
   if (!teamId) return { kind: "no-team" }
 
   const description = `${args.body}\n\n— filed by @${args.author} via Sigilix from ${args.prUrl}`
 
   try {
-    const lc = await buildLinearClient(env)
+    const lc = await buildLinearClient(env, tenant)
     const issue = await lc.createIssue({ teamId, title: args.title, description })
     let triaged = true
     try {
-      await triageIssue(issue.id, env)
+      if (tenant) await triageIssue(issue.id, env, tenant)
+      else await triageIssue(issue.id, env)
     } catch {
       triaged = false
     }
@@ -133,6 +175,7 @@ export async function handleLinearTriageCommand(args: {
     body: pr.body ?? "",
     author: authorLogin,
     prUrl,
+    ...(inst.ok ? { installationId: inst.installationId } : {}),
   })
   if (result.kind === "created") {
     await env.OPENCLAW_STATE.put(dedupeKey, `${result.identifier}|${result.url}`, { expirationTtl: 86400 })
@@ -145,6 +188,8 @@ export async function handleLinearTriageCommand(args: {
       handled: true,
       reply: "No Linear team is configured for this repo — an admin can set `OPENCLAW_GITHUB_REPO_LINEAR_TEAM_MAP`.",
     }
+  } else if (result.kind === "disabled") {
+    return { handled: true, reply: "Linear issue creation is disabled in this organization's Sigilix settings." }
   } else {
     return { handled: true, reply: "I couldn't create the Linear issue just now — please try again." }
   }

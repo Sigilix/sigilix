@@ -116,6 +116,20 @@ describe("handleMention — unified learnings capture", () => {
     expect(orgStore.entries[0].source.kind).toBe("chat")
   })
 
+  it("does not capture a broker-bound legacy correction without exact tenant proof", async () => {
+    seedComment("@sigilix remember: always keep the tenant boundary")
+    const { env, store } = makeEnv()
+    env.OPENCLAW_LINEAR_ALLOWED_ORG_ID = "org-dogfood"
+    env.OPENCLAW_LINEAR_LEGACY_INSTALLATION_ID = "77"
+    env.LINEAR_TOKEN_BROKER = {} as Env["LINEAR_TOKEN_BROKER"]
+
+    await handleMention("comment-1", env)
+
+    expect(
+      Array.from(store.keys()).filter((key) => key.startsWith("learnings:") || key.startsWith("learning")),
+    ).toEqual([])
+  })
+
   it("QUALITY GATE — an ordinary question writes NO learning", async () => {
     extractLearningMock.mockResolvedValue(null)
     seedComment("@sigilix where is handleMention implemented?")

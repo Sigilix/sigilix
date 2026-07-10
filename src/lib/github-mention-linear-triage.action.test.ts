@@ -142,4 +142,12 @@ describe("runLinearTriageAction", () => {
     // Issue was created; triage failure is absorbed.
     expect(mockCreateIssue).toHaveBeenCalledOnce()
   })
+
+  it("fails closed instead of using the global team map when D1 is present but installation proof is missing", async () => {
+    const env = makeEnv({ SIGILIX_PLATFORM_DB: {} as D1Database })
+
+    await expect(runLinearTriageAction(env, BASE_ARGS)).resolves.toEqual({ kind: "no-team" })
+    expect(mockCreateIssue).not.toHaveBeenCalled()
+    expect(mockTriageIssue).not.toHaveBeenCalled()
+  })
 })

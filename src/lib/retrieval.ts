@@ -71,6 +71,10 @@ interface RetrievalCtx {
   text: string
   teamKey: string | null
   env: RetrievalEnv
+  /** Exact tenant-resolved namespace. When present it bypasses every legacy
+   * mutable team-key map/fallback. Linear SIG-242 callers supply this only from
+   * an immutable organization/team binding. */
+  namespace?: string
   /**
    * Cross-repo context: sibling repo namespaces (same-installation, already
    * isolation-filtered by `resolveCrossRepoNamespaces`) to fold in as
@@ -166,7 +170,8 @@ export async function retrieveChunks(ctx: RetrievalCtx): Promise<RetrievedChunk[
   const trimmed = ctx.text.trim()
   if (!trimmed) return []
 
-  const namespace = teamKeyToNamespace(ctx.teamKey, ctx.env.OPENCLAW_TEAM_REPO_MAP)
+  const namespace =
+    ctx.namespace?.trim().toLowerCase() || teamKeyToNamespace(ctx.teamKey, ctx.env.OPENCLAW_TEAM_REPO_MAP)
   const hybrid = hybridRetrievalEnabled(ctx.env)
 
   // SIG-45: when hybrid is on, the lexical leg needs no embedding, so kick it

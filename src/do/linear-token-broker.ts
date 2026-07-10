@@ -40,9 +40,16 @@ import {
   FALLBACK_TOKEN_TTL_MS,
   type LinearAgentTokenRecord,
 } from "@/src/lib/linear-agent-oauth"
+import { getLinearConnectionByInstallation } from "@/src/features/linear-integration"
 
 /** DO-storage key holding the single agent token record (strongly consistent). */
 const TOKEN_KEY = "linear-agent-token"
+
+/** One staged OAuth credential that is not visible to token readers until D1
+ * durably links the tenant. Keeping it under a separate key preserves an older
+ * active token throughout a reconnect attempt. Both keys + the alarm are
+ * changed in one DO storage transaction. */
+const PENDING_TOKEN_KEY = "linear-agent-token-pending"
 
 /** Aggressive write-retry count for persisting a rotated record. The POST already
  *  rotated (and consumed) the refresh token at Linear, so a dropped write is the
@@ -57,6 +64,13 @@ const ALARM_MIN_DELAY_MS = 30 * 1000
  *  token is refreshed before its hard expiry rather than spinning immediately. */
 const ALARM_RETRY_MS = 5 * 60 * 1000
 
+/** A staged credential is first reconciled quickly, then retried while D1 is
+ * unavailable. The hard ceiling prevents an unreachable D1 from retaining an
+ * unlinked refresh token forever. */
+const PENDING_RECONCILE_DELAY_MS = 30 * 1000
+const PENDING_RECONCILE_RETRY_MS = 5 * 60 * 1000
+const PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1000
+
 /** Structured result of a token read/refresh. Never null → no NPE at call sites.
  *  `not-installed` = cold start / empty storage; `no-refresh-token` = a record
  *  exists but cannot be refreshed; `refresh-failed` = refresh failed AND the old
@@ -64,6 +78,34 @@ const ALARM_RETRY_MS = 5 * 60 * 1000
 export type BrokerTokenResult =
   | { ok: true; accessToken: string }
   | { ok: false; reason: "not-installed" | "no-refresh-token" | "refresh-failed" }
+
+export interface BrokerTenantScope {
+  organizationId: string
+  installationId: number
+}
+
+interface PendingTenantInstall {
+  generation: string
+  record: LinearAgentTokenRecord
+  reconcileAt: number
+  expiresAt: number
+}
+
+export type BrokerTenantStageResult =
+  | { ok: true }
+  | { ok: false; reason: "tenant-conflict" | "install-in-progress" | "invalid-generation" }
+
+export type BrokerLegacyInstallResult = { ok: true } | { ok: false; reason: "tenant-metadata-present" }
+
+export type BrokerTenantInstallResult = { ok: true } | { ok: false; reason: "tenant-conflict" }
+
+export type BrokerTenantCommitResult =
+  | { ok: true; committed: boolean }
+  | { ok: false; reason: "tenant-mismatch" | "generation-mismatch" | "not-staged" }
+
+export type BrokerTenantRollbackResult = { ok: true; removed: boolean } | { ok: false; reason: "generation-mismatch" }
+
+export type BrokerTenantUninstallResult = { ok: true; removed: boolean } | { ok: false; reason: "tenant-mismatch" }
 
 /** Neutral structured log — NEVER token material. */
 function emit(event: string, fields: Record<string, unknown> = {}): void {
@@ -98,15 +140,170 @@ export class LinearTokenBroker extends DurableObject<Env> {
    * proactive-refresh alarm at expiresAt - REFRESH_BUFFER_MS. The record becomes
    * the broker's source of truth in DO storage.
    */
-  async install(record: LinearAgentTokenRecord): Promise<{ ok: true }> {
-    await this.ctx.storage.put(TOKEN_KEY, record)
-    await this.scheduleAlarm(record.expiresAt)
+  /** @deprecated Pre-SIG-242 singleton bootstrap. Tenant-bearing records must
+   * use installTenant on their organization shard. */
+  async install(record: LinearAgentTokenRecord): Promise<BrokerLegacyInstallResult> {
+    if (this.hasTenantMetadata(record)) return { ok: false, reason: "tenant-metadata-present" }
+    const result = await this.ctx.storage.transaction(async (txn): Promise<BrokerLegacyInstallResult> => {
+      const existing = await this.readFrom(txn)
+      if (existing && this.hasTenantMetadata(existing)) {
+        return { ok: false, reason: "tenant-metadata-present" }
+      }
+      await txn.put(TOKEN_KEY, record)
+      await this.scheduleNextAlarmInTransaction(txn)
+      return { ok: true }
+    })
+    if (!result.ok) return result
+    emit("linear-token-broker-installed", {
+      hasRefresh: !!record.refreshToken,
+      hasExpiry: typeof record.expiresAt === "number",
+      scopePresent: !!record.scope,
+    })
+    return result
+  }
+
+  private async persistInstall(record: LinearAgentTokenRecord): Promise<{ ok: true }> {
+    await this.ctx.storage.transaction(async (txn) => {
+      await txn.put(TOKEN_KEY, record)
+      await this.scheduleNextAlarmInTransaction(txn)
+    })
     emit("linear-token-broker-installed", {
       hasRefresh: !!record.refreshToken,
       hasExpiry: typeof record.expiresAt === "number",
       scopePresent: !!record.scope,
     })
     return { ok: true }
+  }
+
+  /** Strict SIG-242 install entry. The caller-selected DO shard is not trusted
+   * by itself: every stored record must carry the same immutable tenant pair. */
+  async installTenant(record: LinearAgentTokenRecord, expected: BrokerTenantScope): Promise<BrokerTenantInstallResult> {
+    if (
+      !this.validTenantScope(expected) ||
+      record.organizationId !== expected.organizationId ||
+      record.installationId !== expected.installationId ||
+      record.actorType !== "app"
+    ) {
+      return { ok: false, reason: "tenant-conflict" }
+    }
+    const existing = await this.read()
+    if (existing && !this.matchesTenant(existing, expected)) {
+      return { ok: false, reason: "tenant-conflict" }
+    }
+    return this.persistInstall(record)
+  }
+
+  /** Stage a tenant credential without replacing the current active token. The
+   * caller creates `generation` before the RPC, so an ambiguous transport fault
+   * can always be followed by an exact-generation rollback. */
+  async stageTenantInstall(
+    record: LinearAgentTokenRecord,
+    expected: BrokerTenantScope,
+    generation: string,
+  ): Promise<BrokerTenantStageResult> {
+    if (!this.validTenantScope(expected) || !this.matchesTenant(record, expected)) {
+      return { ok: false, reason: "tenant-conflict" }
+    }
+    if (!generation || generation.length > 128) return { ok: false, reason: "invalid-generation" }
+
+    const now = Date.now()
+    return this.ctx.storage.transaction(async (txn) => {
+      const active = await this.readFrom(txn)
+      if (active && !this.matchesTenant(active, expected)) return { ok: false, reason: "tenant-conflict" }
+      if (active?.installGeneration === generation) return { ok: true }
+
+      const pending = await this.readPendingFrom(txn)
+      if (pending && pending.generation === generation) {
+        return this.matchesTenant(pending.record, expected) ? { ok: true } : { ok: false, reason: "tenant-conflict" }
+      }
+      if (pending && pending.expiresAt > now) return { ok: false, reason: "install-in-progress" }
+
+      await txn.put(PENDING_TOKEN_KEY, {
+        generation,
+        record,
+        reconcileAt: now + PENDING_RECONCILE_DELAY_MS,
+        expiresAt: now + PENDING_MAX_AGE_MS,
+      } satisfies PendingTenantInstall)
+      await this.scheduleNextAlarmInTransaction(txn)
+      return { ok: true }
+    })
+  }
+
+  /** Atomically promote only the staged generation that D1 linked. A repeated
+   * commit after a lost RPC response is idempotent via installGeneration. */
+  async commitTenantInstall(expected: BrokerTenantScope, generation: string): Promise<BrokerTenantCommitResult> {
+    if (!this.validTenantScope(expected)) return { ok: false, reason: "tenant-mismatch" }
+    return this.ctx.storage.transaction(async (txn) => {
+      const active = await this.readFrom(txn)
+      const pending = await this.readPendingFrom(txn)
+      if (!pending) {
+        if (active && this.matchesTenant(active, expected) && active.installGeneration === generation) {
+          return { ok: true, committed: false }
+        }
+        return { ok: false, reason: "not-staged" }
+      }
+      if (pending.generation !== generation) return { ok: false, reason: "generation-mismatch" }
+      if (!this.matchesTenant(pending.record, expected)) return { ok: false, reason: "tenant-mismatch" }
+
+      await txn.put(TOKEN_KEY, { ...pending.record, installGeneration: generation })
+      await txn.delete(PENDING_TOKEN_KEY)
+      await this.scheduleNextAlarmInTransaction(txn)
+      emit("linear-token-broker-install-committed", {
+        organizationId: expected.organizationId,
+        installationId: expected.installationId,
+      })
+      return { ok: true, committed: true }
+    })
+  }
+
+  /** Delete only the matching staged generation. The active token is never
+   * touched, so a failed reconnect cannot erase a previously valid credential. */
+  async rollbackTenantInstall(expected: BrokerTenantScope, generation: string): Promise<BrokerTenantRollbackResult> {
+    if (!this.validTenantScope(expected)) return { ok: false, reason: "generation-mismatch" }
+    return this.ctx.storage.transaction(async (txn) => {
+      const pending = await this.readPendingFrom(txn)
+      if (!pending) return { ok: true, removed: false }
+      if (pending.generation !== generation || !this.matchesTenant(pending.record, expected)) {
+        return { ok: false, reason: "generation-mismatch" }
+      }
+      await txn.delete(PENDING_TOKEN_KEY)
+      await this.scheduleNextAlarmInTransaction(txn)
+      emit("linear-token-broker-install-rolled-back", {
+        organizationId: expected.organizationId,
+        installationId: expected.installationId,
+      })
+      return { ok: true, removed: true }
+    })
+  }
+
+  /** Remove only the token whose immutable metadata exactly matches the
+   * requested tenant. Used to compensate a failed OAuth finalization after the
+   * token has been persisted but before D1 has durably linked the tenant. */
+  async uninstallTenant(expected: BrokerTenantScope): Promise<BrokerTenantUninstallResult> {
+    // A refresh that began before compensation can otherwise write the record
+    // back after the delete. Let that single-flight settle before the final
+    // read/metadata check/delete sequence.
+    if (this.refreshInFlight) await this.refreshInFlight.catch(() => undefined)
+    return this.ctx.storage.transaction(async (txn) => {
+      const record = await this.readFrom(txn)
+      if (!record) return { ok: true, removed: false }
+      if (!this.matchesTenant(record, expected)) return { ok: false, reason: "tenant-mismatch" }
+      await txn.delete(TOKEN_KEY)
+      await this.scheduleNextAlarmInTransaction(txn)
+      emit("linear-token-broker-uninstalled", {
+        organizationId: expected.organizationId,
+        installationId: expected.installationId,
+      })
+      return { ok: true, removed: true }
+    })
+  }
+
+  /** Read the pre-SIG-242 singleton record for the one explicitly-configured
+   * dogfood migration. Called only on the singleton shard; never logged. */
+  async exportLegacyRecordForMigration(): Promise<LinearAgentTokenRecord | null> {
+    const record = await this.read()
+    if (!record || record.organizationId || record.installationId) return null
+    return record
   }
 
   /**
@@ -133,9 +330,24 @@ export class LinearTokenBroker extends DurableObject<Env> {
     return this.guardedRefresh()
   }
 
+  async getValidTenantToken(args: BrokerTenantScope & { readOnly: boolean }): Promise<BrokerTokenResult> {
+    const record = await this.read()
+    if (!record) return { ok: false, reason: "not-installed" }
+    if (!this.matchesTenant(record, args)) return { ok: false, reason: "not-installed" }
+    if (args.readOnly || typeof record.expiresAt !== "number") return { ok: true, accessToken: record.accessToken }
+    if (Date.now() < record.expiresAt - REFRESH_BUFFER_MS) return { ok: true, accessToken: record.accessToken }
+    return this.guardedRefresh(args)
+  }
+
   /** Always perform a guarded refresh (used later by the 401-retry path). */
   async forceRefresh(): Promise<BrokerTokenResult> {
     return this.guardedRefresh()
+  }
+
+  async forceRefreshTenant(expected: BrokerTenantScope): Promise<BrokerTokenResult> {
+    const record = await this.read()
+    if (!record || !this.matchesTenant(record, expected)) return { ok: false, reason: "not-installed" }
+    return this.guardedRefresh(expected)
   }
 
   /**
@@ -145,16 +357,26 @@ export class LinearTokenBroker extends DurableObject<Env> {
    * installed) re-arm a short retry so we try again before the hard expiry.
    */
   override async alarm(): Promise<void> {
-    const result = await this.guardedRefresh()
-    // Keep the proactive cycle alive: a successful ROTATION already re-armed the
-    // alarm to the new expiry in doRefresh; any other outcome (a fall-back to the
-    // still-valid old token, or a hard failure) leaves no alarm set, so re-arm a
-    // short retry to try again before hard expiry. `result.ok` is true on a
-    // fall-back too, so we key off the actual alarm state, not the result. A
-    // not-installed broker (no record) is left without an alarm so it never spins.
+    const now = Date.now()
+    const pendingAtWake = await this.readPendingFrom(this.ctx.storage)
+    const pendingWasDue = !!pendingAtWake && pendingAtWake.reconcileAt <= now
+    await this.reconcilePendingInstall(now)
+
     const record = await this.read()
-    if (record && (await this.ctx.storage.getAlarm()) === null) {
-      await this.ctx.storage.setAlarm(Date.now() + ALARM_RETRY_MS)
+    const refreshAt = this.activeRefreshDueAt(record)
+    let result: BrokerTokenResult = record
+      ? { ok: true, accessToken: record.accessToken }
+      : { ok: false, reason: "not-installed" }
+    // Preserve the broker's original proactive-alarm contract: an active-only
+    // wake refreshes immediately. When the wake was specifically for pending
+    // reconciliation, refresh the active token only if its own deadline is due.
+    if (record && (!pendingWasDue || (refreshAt !== null && refreshAt <= now))) {
+      result = await this.guardedRefresh()
+      if (!(await this.ctx.storage.getAlarm())) {
+        await this.scheduleNextAlarm(now + ALARM_RETRY_MS)
+      }
+    } else {
+      await this.scheduleNextAlarm()
     }
     emit("linear-token-broker-alarm", { tokenAvailable: result.ok })
   }
@@ -163,9 +385,39 @@ export class LinearTokenBroker extends DurableObject<Env> {
 
   /** Read + validate the stored record, or null when none / malformed. */
   private async read(): Promise<LinearAgentTokenRecord | null> {
-    const record = await this.ctx.storage.get<LinearAgentTokenRecord>(TOKEN_KEY)
+    return this.readFrom(this.ctx.storage)
+  }
+
+  private async readFrom(
+    storage: Pick<DurableObjectStorage, "get"> | Pick<DurableObjectTransaction, "get">,
+  ): Promise<LinearAgentTokenRecord | null> {
+    const record = await storage.get<LinearAgentTokenRecord>(TOKEN_KEY)
     if (record && typeof record.accessToken === "string" && record.accessToken) return record
     return null
+  }
+
+  private async readPendingFrom(
+    storage: Pick<DurableObjectStorage, "get"> | Pick<DurableObjectTransaction, "get">,
+  ): Promise<PendingTenantInstall | null> {
+    const pending = await storage.get<PendingTenantInstall>(PENDING_TOKEN_KEY)
+    if (
+      !pending ||
+      typeof pending.generation !== "string" ||
+      !pending.generation ||
+      !Number.isFinite(pending.reconcileAt) ||
+      !Number.isFinite(pending.expiresAt) ||
+      !pending.record ||
+      typeof pending.record.accessToken !== "string" ||
+      !pending.record.accessToken ||
+      typeof pending.record.organizationId !== "string" ||
+      !pending.record.organizationId ||
+      !Number.isSafeInteger(pending.record.installationId) ||
+      Number(pending.record.installationId) <= 0 ||
+      pending.record.actorType !== "app"
+    ) {
+      return null
+    }
+    return pending
   }
 
   /**
@@ -176,9 +428,9 @@ export class LinearTokenBroker extends DurableObject<Env> {
    * the DO is single-threaded, so no concurrent caller can observe the unset slot
    * mid-creation.
    */
-  private guardedRefresh(): Promise<BrokerTokenResult> {
+  private guardedRefresh(expected?: BrokerTenantScope): Promise<BrokerTokenResult> {
     if (this.refreshInFlight) return this.refreshInFlight
-    const inFlight = this.doRefresh().finally(() => {
+    const inFlight = this.doRefresh(expected).finally(() => {
       if (this.refreshInFlight === inFlight) this.refreshInFlight = null
     })
     this.refreshInFlight = inFlight
@@ -193,9 +445,10 @@ export class LinearTokenBroker extends DurableObject<Env> {
    * stored record intact (never corrupted) and falls back to the old token while it
    * is still valid.
    */
-  private async doRefresh(): Promise<BrokerTokenResult> {
+  private async doRefresh(expected?: BrokerTenantScope): Promise<BrokerTokenResult> {
     const record = await this.read()
     if (!record) return { ok: false, reason: "not-installed" }
+    if (expected && !this.matchesTenant(record, expected)) return { ok: false, reason: "not-installed" }
     if (!record.refreshToken) {
       alert("linear-token-broker-no-refresh-token")
       return { ok: false, reason: "no-refresh-token" }
@@ -223,13 +476,28 @@ export class LinearTokenBroker extends DurableObject<Env> {
       installedAt: record.installedAt,
       expiresAt: Date.now() + (typeof result.expiresIn === "number" ? result.expiresIn * 1000 : FALLBACK_TOKEN_TTL_MS),
     }
+    if (record.organizationId) next.organizationId = record.organizationId
+    if (record.installationId) next.installationId = record.installationId
+    if (record.actorType) next.actorType = record.actorType
+    if (record.appUserId) next.appUserId = record.appUserId
+    if (record.installGeneration) next.installGeneration = record.installGeneration
     if (typeof result.scope === "string") next.scope = result.scope
     else if (record.scope) next.scope = record.scope
 
     // The POST already succeeded and rotated the refresh token at Linear. Persist
     // the new record durably BEFORE returning the new token.
-    const persisted = await this.persistWithRetry(next)
-    if (!persisted) {
+    const persistence = await this.persistWithRetry(record, next)
+    if (persistence.status === "superseded") {
+      // A tenant commit/uninstall won while the Linear refresh POST was in
+      // flight. Never overwrite that newer state with the old generation's
+      // rotated token.
+      const current = persistence.current
+      if (current && (!expected || this.matchesTenant(current, expected))) {
+        return { ok: true, accessToken: current.accessToken }
+      }
+      return { ok: false, reason: "not-installed" }
+    }
+    if (persistence.status === "failed") {
       // Persist failed AFTER a successful POST: loud alert, leave the stored record
       // intact (do NOT corrupt it), and return the OLD token if still valid so the
       // agent keeps working inside Linear's ~30-min refresh-replay grace.
@@ -237,8 +505,7 @@ export class LinearTokenBroker extends DurableObject<Env> {
       return this.fallbackOrError(record)
     }
 
-    // Durable — now safe to re-arm the proactive alarm and return the NEW token.
-    await this.scheduleAlarm(next.expiresAt)
+    // Durable with its next alarm in the same transaction — now safe to return.
     emit("linear-token-broker-refreshed", { scopePresent: !!next.scope })
     return { ok: true, accessToken: next.accessToken }
   }
@@ -255,21 +522,163 @@ export class LinearTokenBroker extends DurableObject<Env> {
     return { ok: false, reason: "refresh-failed" }
   }
 
+  private matchesTenant(record: LinearAgentTokenRecord, expected: BrokerTenantScope): boolean {
+    return (
+      record.organizationId === expected.organizationId &&
+      record.installationId === expected.installationId &&
+      record.actorType === "app"
+    )
+  }
+
+  private hasTenantMetadata(record: LinearAgentTokenRecord): boolean {
+    return (
+      record.organizationId !== undefined ||
+      record.installationId !== undefined ||
+      record.actorType !== undefined ||
+      record.appUserId !== undefined ||
+      record.installGeneration !== undefined
+    )
+  }
+
+  private validTenantScope(scope: BrokerTenantScope): boolean {
+    return (
+      typeof scope.organizationId === "string" &&
+      scope.organizationId.length > 0 &&
+      Number.isSafeInteger(scope.installationId) &&
+      scope.installationId > 0
+    )
+  }
+
   /**
    * Persist the rotated record, retrying a few times on a transient storage fault.
    * Returns true once the put is durable, false if every attempt threw. NEVER logs
    * the record (token material).
    */
-  private async persistWithRetry(record: LinearAgentTokenRecord): Promise<boolean> {
+  private async persistWithRetry(
+    previous: LinearAgentTokenRecord,
+    next: LinearAgentTokenRecord,
+  ): Promise<
+    { status: "persisted" } | { status: "superseded"; current: LinearAgentTokenRecord | null } | { status: "failed" }
+  > {
     for (let attempt = 0; attempt < PERSIST_RETRY_ATTEMPTS; attempt++) {
       try {
-        await this.ctx.storage.put(TOKEN_KEY, record)
-        return true
+        return await this.ctx.storage.transaction(async (txn) => {
+          const current = await this.readFrom(txn)
+          if (!this.sameTokenGeneration(current, previous)) {
+            return { status: "superseded" as const, current }
+          }
+          await txn.put(TOKEN_KEY, next)
+          await this.scheduleNextAlarmInTransaction(txn)
+          return { status: "persisted" as const }
+        })
       } catch {
         // best-effort; loop and retry. Never log the record.
       }
     }
-    return false
+    return { status: "failed" }
+  }
+
+  private sameTokenGeneration(current: LinearAgentTokenRecord | null, expected: LinearAgentTokenRecord): boolean {
+    return (
+      current !== null &&
+      current.accessToken === expected.accessToken &&
+      current.refreshToken === expected.refreshToken &&
+      current.installedAt === expected.installedAt &&
+      current.installGeneration === expected.installGeneration &&
+      current.organizationId === expected.organizationId &&
+      current.installationId === expected.installationId &&
+      current.actorType === expected.actorType &&
+      current.appUserId === expected.appUserId
+    )
+  }
+
+  /** Resolve a staged credential after a callback could not establish D1's
+   * outcome. Pending credentials are never served. Once D1 is readable, an
+   * exact active link commits it and every other state rolls it back. Repeated
+   * D1 faults retry until the hard pending ceiling, then discard it. */
+  private async reconcilePendingInstall(now: number): Promise<void> {
+    const pending = await this.readPendingFrom(this.ctx.storage)
+    if (!pending || pending.reconcileAt > now) return
+    const expected = {
+      organizationId: pending.record.organizationId ?? "",
+      installationId: pending.record.installationId ?? 0,
+    }
+    if (!this.matchesTenant(pending.record, expected)) {
+      const result = await this.rollbackTenantInstall(expected, pending.generation)
+      this.reportReconcileResult("rollback", result, expected)
+      return
+    }
+    if (pending.expiresAt <= now) {
+      const result = await this.rollbackTenantInstall(expected, pending.generation)
+      this.reportReconcileResult("rollback", result, expected)
+      return
+    }
+
+    try {
+      const connection = await getLinearConnectionByInstallation(this.env, expected.installationId)
+      if (
+        connection?.status === "active" &&
+        connection.organizationId === expected.organizationId &&
+        connection.installationId === expected.installationId
+      ) {
+        const result = await this.commitTenantInstall(expected, pending.generation)
+        this.reportReconcileResult("commit", result, expected)
+      } else {
+        const result = await this.rollbackTenantInstall(expected, pending.generation)
+        this.reportReconcileResult("rollback", result, expected)
+      }
+    } catch {
+      await this.ctx.storage.transaction(async (txn) => {
+        const current = await this.readPendingFrom(txn)
+        if (!current || current.generation !== pending.generation) return
+        await txn.put(PENDING_TOKEN_KEY, {
+          ...current,
+          reconcileAt: Math.min(current.expiresAt, now + PENDING_RECONCILE_RETRY_MS),
+        } satisfies PendingTenantInstall)
+        await this.scheduleNextAlarmInTransaction(txn)
+      })
+      alert("linear-token-broker-install-reconcile-deferred", {
+        organizationId: expected.organizationId,
+        installationId: expected.installationId,
+      })
+    }
+  }
+
+  private reportReconcileResult(
+    action: "commit" | "rollback",
+    result: BrokerTenantCommitResult | BrokerTenantRollbackResult,
+    expected: BrokerTenantScope,
+  ): void {
+    if (result.ok) return
+    alert("linear-token-broker-install-reconcile-failed", {
+      action,
+      reason: result.reason,
+      organizationId: expected.organizationId,
+      installationId: expected.installationId,
+    })
+  }
+
+  private activeRefreshDueAt(record: LinearAgentTokenRecord | null): number | null {
+    if (!record || typeof record.expiresAt !== "number") return null
+    return record.expiresAt - REFRESH_BUFFER_MS
+  }
+
+  private async scheduleNextAlarm(activeRetryAt?: number): Promise<void> {
+    await this.ctx.storage.transaction((txn) => this.scheduleNextAlarmInTransaction(txn, activeRetryAt))
+  }
+
+  private async scheduleNextAlarmInTransaction(txn: DurableObjectTransaction, activeRetryAt?: number): Promise<void> {
+    const now = Date.now()
+    const [active, pending] = await Promise.all([this.readFrom(txn), this.readPendingFrom(txn)])
+    const activeDueAt = activeRetryAt ?? this.activeRefreshDueAt(active)
+    const activeAt = activeDueAt === null ? null : Math.max(activeDueAt, now + ALARM_MIN_DELAY_MS)
+    const pendingAt = pending ? Math.max(pending.reconcileAt, now + ALARM_MIN_DELAY_MS) : null
+    const candidates = [activeAt, pendingAt].filter((value): value is number => typeof value === "number")
+    if (candidates.length === 0) {
+      await txn.deleteAlarm()
+      return
+    }
+    await txn.setAlarm(Math.min(...candidates))
   }
 
   /**
@@ -278,9 +687,4 @@ export class LinearTokenBroker extends DurableObject<Env> {
    * near-future fire. A record with no expiresAt (legacy) → no alarm (freshness
    * cannot be computed).
    */
-  private async scheduleAlarm(expiresAt?: number): Promise<void> {
-    if (typeof expiresAt !== "number") return
-    const at = Math.max(expiresAt - REFRESH_BUFFER_MS, Date.now() + ALARM_MIN_DELAY_MS)
-    await this.ctx.storage.setAlarm(at)
-  }
 }

@@ -6,6 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  handleAgentBranchCreateRoute,
   handleAgentBranchesRoute,
   handleAgentEventIngestRoute,
   handleAgentRunCreateRoute,
@@ -763,5 +764,98 @@ describe("handleAgentEventIngestRoute (POST /internal/agent-runs/:runId/events)"
     routeMocks.appendAgentRunEvent.mockResolvedValue({ ok: false })
     const res = await handleAgentEventIngestRoute(ingestReq(RID, "wrong", editBody), baseEnv(makeKV()), RID)
     expect(res.status).toBe(403)
+  })
+})
+
+describe("handleAgentBranchCreateRoute (POST /v1/agent/branches)", () => {
+  /** Stub scope + git-ref endpoints; `refsStatus` controls the create result. */
+  function stubGithubForCreate(refsStatus = 201) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = githubUrl(input)
+        if (url.startsWith("https://api.github.com/user/installations?")) {
+          return new Response(JSON.stringify({ total_count: 1, installations: [{ id: 42 }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        if (url.startsWith("https://api.github.com/user/installations/42/repositories?")) {
+          return new Response(JSON.stringify({ repositories: [{ full_name: "acme/api" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        if (url === "https://api.github.com/repos/acme/api") {
+          return new Response(JSON.stringify({ default_branch: "main" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        if (url === "https://api.github.com/repos/acme/api/git/ref/heads/main") {
+          return new Response(JSON.stringify({ object: { sha: "base-sha-123" } }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        if (url === "https://api.github.com/repos/acme/api/git/refs") {
+          return new Response(JSON.stringify(refsStatus === 201 ? { ref: "refs/heads/feature/new" } : {}), {
+            status: refsStatus,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        throw new Error(`unexpected fetch: ${url}`)
+      }),
+    )
+  }
+
+  const good = { installationId: 42, repo: "acme/api", name: "feature/new" }
+
+  it("401 without a session", async () => {
+    const kv = makeKV()
+    const res = await handleAgentBranchCreateRoute(reqPost("https://x/v1/agent/branches", null, good), baseEnv(kv))
+    expect(res.status).toBe(401)
+  })
+
+  it("400 on an invalid branch name", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "s1")
+    const res = await handleAgentBranchCreateRoute(
+      reqPost("https://x/v1/agent/branches", "s1", { ...good, name: "bad name!" }),
+      baseEnv(kv),
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it("403 when the user does not control the repo", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "s1")
+    stubGithubForCreate()
+    // scope returns acme/api only; ask to create on acme/other → not owned
+    const res = await handleAgentBranchCreateRoute(
+      reqPost("https://x/v1/agent/branches", "s1", { ...good, repo: "acme/other" }),
+      baseEnv(kv),
+    )
+    expect(res.status).toBe(403)
+  })
+
+  it("201 creates the branch off the default base", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "s1")
+    await seedInstallationToken(kv, 42)
+    stubGithubForCreate(201)
+    const res = await handleAgentBranchCreateRoute(reqPost("https://x/v1/agent/branches", "s1", good), baseEnv(kv))
+    expect(res.status).toBe(201)
+    const body = (await res.json()) as { name: string; created: boolean; from: string }
+    expect(body).toEqual({ name: "feature/new", created: true, from: "main" })
+  })
+
+  it("409 when the branch already exists (GitHub 422)", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "s1")
+    await seedInstallationToken(kv, 42)
+    stubGithubForCreate(422)
+    const res = await handleAgentBranchCreateRoute(reqPost("https://x/v1/agent/branches", "s1", good), baseEnv(kv))
+    expect(res.status).toBe(409)
   })
 })

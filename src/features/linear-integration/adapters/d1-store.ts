@@ -296,16 +296,28 @@ export async function connectLinearOrganization(
           " (installation_id, linear_organization_id, revision, context_mode, scope_mode," +
           " pr_validation_enabled, create_issue_mode, planning_enabled, writeback_comments," +
           " writeback_status, writeback_labels, updated_by, updated_at, update_token)" +
-          " VALUES (?, ?, 1, 'auto', 'auto', 0, 'manual', 1, 1, 0, 1, ?, ?, ?)" +
+          " SELECT ?, ?, 1, 'auto', 'auto', 0, 'manual', 1, 1, 0, 1, ?, ?, ?" +
+          " WHERE EXISTS (SELECT 1 FROM linear_connection c" +
+          " WHERE c.installation_id = ? AND c.linear_organization_id = ? AND c.status = 'active')" +
           " ON CONFLICT(installation_id) DO NOTHING",
       )
-      .bind(input.installationId, input.organizationId, input.installedByLogin, input.nowIso, crypto.randomUUID()),
+      .bind(
+        input.installationId,
+        input.organizationId,
+        input.installedByLogin,
+        input.nowIso,
+        crypto.randomUUID(),
+        input.installationId,
+        input.organizationId,
+      ),
     store
       .prepare(
         "UPDATE linear_team_binding SET access_state = 'revoked', selected = 0, synced_at = ?, updated_at = ?" +
-          " WHERE installation_id = ?",
+          " WHERE installation_id = ?" +
+          " AND EXISTS (SELECT 1 FROM linear_connection c" +
+          " WHERE c.installation_id = ? AND c.linear_organization_id = ? AND c.status = 'active')",
       )
-      .bind(input.nowIso, input.nowIso, input.installationId),
+      .bind(input.nowIso, input.nowIso, input.installationId, input.installationId, input.organizationId),
   ]
   for (const team of input.teams) {
     statements.push(
@@ -314,7 +326,9 @@ export async function connectLinearOrganization(
           "INSERT INTO linear_team_binding" +
             " (linear_organization_id, team_id, installation_id, team_key, team_name, access_state," +
             " selected, github_repo_id, github_repo_full_name, synced_at, updated_at)" +
-            " VALUES (?, ?, ?, ?, ?, 'allowed', 0, ?, ?, ?, ?)" +
+            " SELECT ?, ?, ?, ?, ?, 'allowed', 0, ?, ?, ?, ?" +
+            " WHERE EXISTS (SELECT 1 FROM linear_connection c" +
+            " WHERE c.installation_id = ? AND c.linear_organization_id = ? AND c.status = 'active')" +
             " ON CONFLICT(linear_organization_id, team_id) DO UPDATE SET" +
             " team_key = excluded.team_key, team_name = excluded.team_name, access_state = 'allowed'," +
             " github_repo_id = CASE WHEN linear_team_binding.github_repo_id > 0" +
@@ -333,10 +347,14 @@ export async function connectLinearOrganization(
           team.githubRepoFullName,
           input.nowIso,
           input.nowIso,
+          input.installationId,
+          input.organizationId,
         ),
     )
   }
-  await store.batch(statements)
+  const results = await store.batch(statements)
+  const connectionChanges = Number((results[0]?.meta as { changes?: unknown } | undefined)?.changes ?? 0)
+  if (connectionChanges !== 1) return { ok: false, reason: "installation-conflict" }
   return { ok: true }
 }
 
@@ -351,7 +369,8 @@ export async function resolveLinearTeamBinding(
         " b.access_state, b.selected, b.github_repo_id, b.github_repo_full_name, b.synced_at, b.updated_at" +
         " FROM linear_team_binding b JOIN linear_connection c" +
         " ON c.installation_id = b.installation_id AND c.linear_organization_id = b.linear_organization_id" +
-        " WHERE b.linear_organization_id = ? AND b.team_id = ? AND c.status = 'active'",
+        " WHERE b.linear_organization_id = ? AND b.team_id = ?" +
+        " AND b.access_state = 'allowed' AND c.status = 'active'",
     )
     .bind(organizationId, teamId)
     .first<TeamRow>()

@@ -143,16 +143,23 @@ export class LinearTokenBroker extends DurableObject<Env> {
   /** @deprecated Pre-SIG-242 singleton bootstrap. Tenant-bearing records must
    * use installTenant on their organization shard. */
   async install(record: LinearAgentTokenRecord): Promise<BrokerLegacyInstallResult> {
-    if (
-      record.organizationId !== undefined ||
-      record.installationId !== undefined ||
-      record.actorType !== undefined ||
-      record.appUserId !== undefined ||
-      record.installGeneration !== undefined
-    ) {
-      return { ok: false, reason: "tenant-metadata-present" }
-    }
-    return this.persistInstall(record)
+    if (this.hasTenantMetadata(record)) return { ok: false, reason: "tenant-metadata-present" }
+    const result = await this.ctx.storage.transaction(async (txn): Promise<BrokerLegacyInstallResult> => {
+      const existing = await this.readFrom(txn)
+      if (existing && this.hasTenantMetadata(existing)) {
+        return { ok: false, reason: "tenant-metadata-present" }
+      }
+      await txn.put(TOKEN_KEY, record)
+      await this.scheduleNextAlarmInTransaction(txn)
+      return { ok: true }
+    })
+    if (!result.ok) return result
+    emit("linear-token-broker-installed", {
+      hasRefresh: !!record.refreshToken,
+      hasExpiry: typeof record.expiresAt === "number",
+      scopePresent: !!record.scope,
+    })
+    return result
   }
 
   private async persistInstall(record: LinearAgentTokenRecord): Promise<{ ok: true }> {
@@ -520,6 +527,16 @@ export class LinearTokenBroker extends DurableObject<Env> {
       record.organizationId === expected.organizationId &&
       record.installationId === expected.installationId &&
       record.actorType === "app"
+    )
+  }
+
+  private hasTenantMetadata(record: LinearAgentTokenRecord): boolean {
+    return (
+      record.organizationId !== undefined ||
+      record.installationId !== undefined ||
+      record.actorType !== undefined ||
+      record.appUserId !== undefined ||
+      record.installGeneration !== undefined
     )
   }
 

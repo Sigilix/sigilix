@@ -491,7 +491,8 @@ export async function handleLinearOAuthCallback(request: Request, env: Env): Pro
   // Capture the rotating refresh token so a later background refresh can mint a
   // fresh access token without a re-install. NEVER logged.
   if (typeof json.refresh_token === "string" && json.refresh_token) record.refreshToken = json.refresh_token
-  if (typeof json.scope === "string") record.scope = json.scope
+  const legacyScopes = normalizeScopes(json.scope)
+  if (legacyScopes.length > 0) record.scope = legacyScopes.join(" ")
   if (typeof json.expires_in === "number") record.expiresAt = Date.now() + json.expires_in * 1000
 
   try {
@@ -621,7 +622,7 @@ async function finalizeTenantLinearInstall(
       }),
     )
     await compensateTenantBrokerInstall(env, scope, receipt)
-    return text("This GitHub installation or Linear workspace is already connected elsewhere.", 409)
+    return text("Sigilix could not persist the tenant connection. Please retry.", 502)
   }
   if (!connected.ok) {
     await rollbackAgentTokenFromBroker(env, scope, receipt)
@@ -768,7 +769,8 @@ export async function performAgentTokenRefresh(
   // the old one only when the response omits one (Linear always rotates).
   if (typeof json.refresh_token === "string" && json.refresh_token) out.refreshToken = json.refresh_token
   if (typeof json.expires_in === "number") out.expiresIn = json.expires_in
-  if (typeof json.scope === "string") out.scope = json.scope
+  const scopes = normalizeScopes(json.scope)
+  if (scopes.length > 0) out.scope = scopes.join(" ")
   return out
 }
 

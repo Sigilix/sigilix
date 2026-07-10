@@ -7,6 +7,7 @@ import {
   connectLinearOrganization,
   getLinearConfig,
   getLinearIntegrationSnapshot,
+  resolveLinearTeamBinding,
   updateLinearConfig,
 } from "@/src/features/linear-integration"
 import type { Env } from "@/src/shared/types/env"
@@ -45,6 +46,16 @@ async function makeDb(): Promise<D1Database> {
     .bind(202, 22, "globex/web", "2026-07-10T00:00:00.000Z")
     .run()
   return db
+}
+
+function withBatch(db: D1Database, batch: (statements: D1PreparedStatement[]) => Promise<D1Result[]>): D1Database {
+  return new Proxy(db, {
+    get(target, property) {
+      if (property === "batch") return batch
+      const value = Reflect.get(target, property)
+      return typeof value === "function" ? value.bind(target) : value
+    },
+  })
 }
 
 async function seedConnection(
@@ -211,6 +222,40 @@ describe("SIG-242 Linear tenant boundary", () => {
       },
     )
     expect(organizationConflict).toEqual({ ok: false, reason: "organization-conflict" })
+  })
+
+  it("does not report success when the guarded connection write loses a race", async () => {
+    const raced = withBatch(db, async (statements) =>
+      statements.map(() => ({ meta: { changes: 0 } }) as unknown as D1Result),
+    )
+
+    const result = await connectLinearOrganization(
+      { SIGILIX_PLATFORM_DB: raced },
+      {
+        installationId: 11,
+        organizationId: "org-a",
+        organizationName: "Org A",
+        appUserId: "app-org-a",
+        source: "oauth",
+        grantedScopes: [],
+        canAccessAllPublicTeams: false,
+        installedByUserId: "u",
+        installedByLogin: "u",
+        teams: [],
+        nowIso: "2026-07-10T00:04:00.000Z",
+      },
+    )
+
+    expect(result).toEqual({ ok: false, reason: "installation-conflict" })
+  })
+
+  it("does not resolve a revoked team binding", async () => {
+    await db
+      .prepare("UPDATE linear_team_binding SET access_state = 'revoked', selected = 0 WHERE team_id = ?")
+      .bind("team-a")
+      .run()
+
+    await expect(resolveLinearTeamBinding({ SIGILIX_PLATFORM_DB: db }, "org-a", "team-a")).resolves.toBeNull()
   })
 
   it("verifies signed fresh delivery, dedupes it, rejects stale payloads, and returns 500/retries on queue failure", async () => {

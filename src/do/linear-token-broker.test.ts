@@ -199,6 +199,20 @@ describe("LinearTokenBroker.install + getValidToken (no refresh)", () => {
     ).resolves.toEqual({ ok: false, reason: "tenant-metadata-present" })
     expect(storedRecord(store)).toBeUndefined()
   })
+
+  it("does not let a legacy singleton install overwrite an existing tenant record", async () => {
+    const { ctx, store } = makeDoState()
+    const broker = new LinearTokenBroker(ctx, makeEnv())
+    const scope = { organizationId: "org-a", installationId: 11 }
+    await broker.installTenant(freshRecord({ ...scope, actorType: "app" }), scope)
+
+    await expect(broker.install(freshRecord({ accessToken: "legacy-token" }))).resolves.toEqual({
+      ok: false,
+      reason: "tenant-metadata-present",
+    })
+    expect(storedRecord(store)?.accessToken).toBe("tok-1")
+    expect(storedRecord(store)).toMatchObject({ ...scope, actorType: "app" })
+  })
 })
 
 describe("LinearTokenBroker.uninstallTenant", () => {
@@ -435,7 +449,7 @@ describe("LinearTokenBroker.getValidToken (refresh on near-expiry)", () => {
       access_token: "tok-2",
       refresh_token: "ref-2",
       expires_in: 86400,
-      scope: "app:assignable,app:mentionable",
+      scope: ["app:assignable", "app:mentionable", "app:assignable"],
     })
 
     const result = await broker.getValidToken({ readOnly: false })
@@ -452,7 +466,7 @@ describe("LinearTokenBroker.getValidToken (refresh on near-expiry)", () => {
     const stored = storedRecord(store)
     expect(stored?.accessToken).toBe("tok-2")
     expect(stored?.refreshToken).toBe("ref-2")
-    expect(stored?.scope).toBe("app:assignable,app:mentionable")
+    expect(stored?.scope).toBe("app:assignable app:mentionable")
     expect(stored?.installedAt).toBe(42)
     expect(stored?.expiresAt).toBeGreaterThan(Date.now() + DAY_MS - 60_000)
   })

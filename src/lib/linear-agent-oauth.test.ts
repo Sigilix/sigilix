@@ -287,6 +287,24 @@ describe("handleLinearOAuthCallback", () => {
     expect(allOutput).not.toContain("lin_refresh_SECRET_1")
   })
 
+  it("normalizes an array scope on the legacy dogfood callback", async () => {
+    const kv = makeFakeKV()
+    const state = seedState(kv)
+    mockTokenFetch({
+      access_token: "lin_agent_xyz",
+      scope: ["app:assignable", "app:mentionable", "app:assignable"],
+    })
+
+    const res = await handleLinearOAuthCallback(callbackReq({ code: "the-code", state }), makeEnv(kv))
+
+    expect(res.status).toBe(200)
+    expect(readStoredRecord(kv)?.scope).toBe("app:assignable app:mentionable")
+    expect(mockInstallAgentTokenToBroker).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ scope: "app:assignable app:mentionable" }),
+    )
+  })
+
   it("sends grant_type, client creds, code + the request-origin redirect_uri when issuer unset", async () => {
     const kv = makeFakeKV()
     const state = seedState(kv)
@@ -657,7 +675,7 @@ describe("refreshAgentToken", () => {
       access_token: "access-new",
       refresh_token: "refresh-new",
       expires_in: 86400,
-      scope: "app:assignable,app:mentionable",
+      scope: ["app:assignable", "app:mentionable", "app:assignable"],
     })
 
     const result = await refreshAgentToken(makeEnv(kv))
@@ -676,7 +694,7 @@ describe("refreshAgentToken", () => {
     const record = readStoredRecord(kv)
     expect(record?.accessToken).toBe("access-new")
     expect(record?.refreshToken).toBe("refresh-new")
-    expect(record?.scope).toBe("app:assignable,app:mentionable")
+    expect(record?.scope).toBe("app:assignable app:mentionable")
     expect(record?.installedAt).toBe(42)
   })
 

@@ -303,7 +303,7 @@ describe("tenant-bound Linear OAuth", () => {
 
     const response = await handleLinearOAuthCallback(callbackRequest("code-a", state, "alice-session"), env)
 
-    expect(response.status).toBe(409)
+    expect(response.status).toBe(502)
     expect(uninstallCalls).toEqual([{ organizationId: "org-a", installationId: 11 }])
     expect(records.size).toBe(0)
     expect(await getLinearConnectionByInstallation({ SIGILIX_PLATFORM_DB: db }, 11)).toBeNull()
@@ -329,7 +329,7 @@ describe("tenant-bound Linear OAuth", () => {
 
     const response = await handleLinearOAuthCallback(callbackRequest("code-a", state, "alice-session"), env)
 
-    expect(response.status).toBe(409)
+    expect(response.status).toBe(502)
     expect(uninstallCalls).toEqual([{ organizationId: "org-a", installationId: 11 }])
     expect(pending.size).toBe(0)
     expect(records.get("linear-org:v1:org-a")?.accessToken).toBe("linear-token-prior")
@@ -347,7 +347,7 @@ describe("tenant-bound Linear OAuth", () => {
 
     const response = await handleLinearOAuthCallback(callbackRequest("code-a", state, "alice-session"), env)
 
-    expect(response.status).toBe(409)
+    expect(response.status).toBe(502)
     expect(uninstallCalls).toEqual([])
     expect(records.get("linear-org:v1:org-a")?.accessToken).toBe("linear-token-a")
     expect((await getLinearConnectionByInstallation({ SIGILIX_PLATFORM_DB: db }, 11))?.organizationId).toBe("org-a")

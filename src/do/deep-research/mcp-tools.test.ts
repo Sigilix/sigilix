@@ -83,6 +83,7 @@ describe("single-pass MCP evidence selection", () => {
       throw new Error("provider down")
     }
     expect(await selectMcpEvidence({ question: "q", surface: "chat", model: failing, runtime })).toBeNull()
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it("quotes tool output as untrusted data with visible provenance", () => {

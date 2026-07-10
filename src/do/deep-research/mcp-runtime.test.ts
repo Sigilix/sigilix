@@ -136,6 +136,48 @@ describe("research MCP runtime binding", () => {
     }
   })
 
+  it("cancels a response body that arrives after the internal deadline", async () => {
+    vi.useFakeTimers()
+    try {
+      let cancelled = false
+      const { env } = makeEnv(
+        () =>
+          new Promise<Response>((resolve) => {
+            setTimeout(
+              () =>
+                resolve(
+                  new Response(
+                    new ReadableStream<Uint8Array>({
+                      start() {
+                        // The timed-out caller must discard this unread body.
+                      },
+                      cancel() {
+                        cancelled = true
+                      },
+                    }),
+                  ),
+                ),
+              13_000,
+            )
+          }),
+      )
+      let outcome: unknown = "pending"
+      void buildResearchMcpRuntime(env, "tenant:99", "run-late-response")!
+        .catalog("chat")
+        .then((value) => {
+          outcome = value
+        })
+
+      await vi.advanceTimersByTimeAsync(12_001)
+      expect(outcome).toEqual([])
+      expect(cancelled).toBe(false)
+      await vi.advanceTimersByTimeAsync(999)
+      expect(cancelled).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("applies the same deadline to a stalled internal response body", async () => {
     vi.useFakeTimers()
     try {

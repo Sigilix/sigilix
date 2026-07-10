@@ -449,11 +449,17 @@ describe("McpConnectionsAgent — GET /oauth-callback", () => {
 })
 
 describe("McpConnectionsAgent — policy + safe runtime", () => {
-  async function connectLinear(instance: InstanceType<typeof McpConnectionsAgent>): Promise<string> {
-    const response = await instance.fetch(
-      connectRequest({ url: "https://mcp.linear.app/mcp", name: "Linear", callbackUrl: "https://cb" }),
-    )
+  async function connectOfficial(
+    instance: InstanceType<typeof McpConnectionsAgent>,
+    url: string,
+    name: string,
+  ): Promise<string> {
+    const response = await instance.fetch(connectRequest({ url, name, callbackUrl: "https://cb" }))
     return ((await response.json()) as { id: string }).id
+  }
+
+  async function connectLinear(instance: InstanceType<typeof McpConnectionsAgent>): Promise<string> {
+    return connectOfficial(instance, "https://mcp.linear.app/mcp", "Linear")
   }
 
   it("returns the stable policy envelope and only cataloged read tools", async () => {
@@ -476,20 +482,33 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
     expect(response.status).toBe(200)
     const body = (await response.json()) as {
       server: { vendorId: string }
-      policy: { version: number; readOnly: boolean; allowedReadTools: string[] }
+      policy: {
+        version: number
+        enabled: boolean
+        readOnly: boolean
+        surfaces: { chat: boolean; deepResearch: boolean }
+        allowedReadTools: string[]
+        maxCallsPerRun: number
+      }
       tools: Array<{ id: string; description: string; allowedByCatalog: boolean; enabled: boolean }>
       blockedToolCount: number
     }
     expect(body.server.vendorId).toBe("linear")
-    expect(body.policy).toMatchObject({ version: 0, readOnly: true })
-    expect(body.policy.allowedReadTools).toContain("list_comments")
+    expect(body.policy).toEqual({
+      version: 0,
+      enabled: false,
+      readOnly: true,
+      surfaces: { chat: false, deepResearch: false },
+      allowedReadTools: [],
+      maxCallsPerRun: 0,
+    })
     expect(body.tools).toEqual([
       {
         id: "list_comments",
         name: "list_comments",
         description: "Read Linear comments visible to the connected account.",
         allowedByCatalog: true,
-        enabled: true,
+        enabled: false,
       },
       {
         id: "create_issue",
@@ -499,7 +518,37 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
         enabled: false,
       },
     ])
-    expect(body.blockedToolCount).toBe(1)
+    expect(body.blockedToolCount).toBe(2)
+  })
+
+  it("keeps a newly curated vendor dark until the owner explicitly enables exact tools", async () => {
+    nextTools = [
+      { name: "search_issues", inputSchema: { type: "object", properties: { query: { type: "string" } } } },
+      { name: "delete_issue", inputSchema: { type: "object" } },
+    ]
+    const instance = makeInstance()
+    const id = await connectOfficial(instance, "https://mcp.sentry.dev/mcp", "Sentry")
+
+    const dark = await instance.fetch(runtimeRequest("catalog", { surface: "chat" }))
+    expect(((await dark.json()) as { tools: unknown[] }).tools).toEqual([])
+
+    const update = await instance.fetch(
+      policyRequest(id, "PUT", {
+        version: 0,
+        enabled: true,
+        surfaces: { chat: true, deepResearch: false },
+        allowedReadTools: ["search_issues"],
+        maxCallsPerRun: 1,
+      }),
+    )
+    expect(update.status).toBe(200)
+
+    const chat = await instance.fetch(runtimeRequest("catalog", { surface: "chat" }))
+    expect((await chat.json()) as { tools: unknown[] }).toMatchObject({
+      tools: [{ serverId: id, vendor: "sentry", name: "search_issues" }],
+    })
+    const deepResearch = await instance.fetch(runtimeRequest("catalog", { surface: "deep-research" }))
+    expect(((await deepResearch.json()) as { tools: unknown[] }).tools).toEqual([])
   })
 
   it("uses optimistic concurrency and only permits policy narrowing", async () => {
@@ -545,12 +594,21 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
     nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
     const instance = makeInstance()
     const id = await connectLinear(instance)
+    await instance.fetch(
+      policyRequest(id, "PUT", {
+        version: 0,
+        enabled: true,
+        surfaces: { chat: true, deepResearch: true },
+        allowedReadTools: ["list_comments"],
+        maxCallsPerRun: 4,
+      }),
+    )
     const catalog = await instance.fetch(runtimeRequest("catalog", { surface: "chat" }))
     expect(((await catalog.json()) as { tools: unknown[] }).tools).toHaveLength(1)
 
     await instance.fetch(
       policyRequest(id, "PUT", {
-        version: 0,
+        version: 1,
         enabled: false,
         surfaces: { chat: false, deepResearch: false },
         allowedReadTools: [],
@@ -599,6 +657,15 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
     })
     const instance = makeInstance()
     const id = await connectLinear(instance)
+    await instance.fetch(
+      policyRequest(id, "PUT", {
+        version: 0,
+        enabled: true,
+        surfaces: { chat: true, deepResearch: true },
+        allowedReadTools: ["list_comments"],
+        maxCallsPerRun: 4,
+      }),
+    )
     const response = await instance.fetch(
       runtimeRequest("invoke", {
         runId: "run-success",
@@ -685,6 +752,15 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
     callToolImpl = () => new Promise(() => undefined)
     const instance = makeInstance()
     const id = await connectLinear(instance)
+    await instance.fetch(
+      policyRequest(id, "PUT", {
+        version: 0,
+        enabled: true,
+        surfaces: { chat: true, deepResearch: true },
+        allowedReadTools: ["list_comments"],
+        maxCallsPerRun: 4,
+      }),
+    )
     const pending = instance.fetch(
       runtimeRequest("invoke", {
         runId: "run-timeout",

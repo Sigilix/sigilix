@@ -42,6 +42,7 @@ const OFFICIAL_ENDPOINTS: readonly OfficialEndpoint[] = [
   { vendor: "supabase", hostname: "mcp.supabase.com", pathname: "/mcp" },
   { vendor: "notion", hostname: "mcp.notion.com", pathname: "/mcp" },
   { vendor: "atlassian", hostname: "mcp.atlassian.com", pathname: "/v1/mcp" },
+  { vendor: "atlassian", hostname: "mcp.atlassian.com", pathname: "/v1/mcp/authv2" },
   { vendor: "stripe", hostname: "mcp.stripe.com", pathname: "/" },
   { vendor: "vercel", hostname: "mcp.vercel.com", pathname: "/" },
   { vendor: "hubspot", hostname: "mcp.hubspot.com", pathname: "/" },
@@ -64,15 +65,130 @@ const CURATED_READ_TOOLS: Readonly<Record<OfficialMcpVendor, readonly CuratedRea
     { name: "list_users", description: "Read Linear users visible to the connected account." },
     { name: "list_issue_labels", description: "Read Linear issue labels visible to the connected account." },
   ],
-  sentry: [],
-  cloudflare: [],
-  supabase: [],
-  notion: [],
-  atlassian: [],
-  stripe: [],
-  vercel: [],
-  hubspot: [],
-  intercom: [],
+  sentry: reviewedReadTools("Sentry", [
+    "find_organizations",
+    "find_projects",
+    "get_sentry_resource",
+    "search_events",
+    "search_issues",
+  ]),
+  cloudflare: reviewedReadTools("Cloudflare", [
+    "kv_namespaces_list",
+    "kv_namespace_get",
+    "r2_buckets_list",
+    "r2_bucket_get",
+    "d1_databases_list",
+    "d1_database_get",
+    "workers_list",
+    "workers_get_worker",
+    "workers_get_worker_code",
+    "hyperdrive_configs_list",
+    "hyperdrive_config_get",
+    "search_cloudflare_documentation",
+    "migrate_pages_to_workers_guide",
+  ]),
+  supabase: reviewedReadTools("Supabase", [
+    "list_tables",
+    "list_extensions",
+    "list_migrations",
+    "get_logs",
+    "get_advisors",
+    "get_project_url",
+    "generate_typescript_types",
+    "list_edge_functions",
+    "get_edge_function",
+    "list_projects",
+    "get_project",
+    "list_organizations",
+    "get_organization",
+    "get_cost",
+    "search_docs",
+    "list_branches",
+    "list_storage_buckets",
+    "get_storage_config",
+  ]),
+  notion: reviewedReadTools("Notion", [
+    "notion-search",
+    "notion-fetch",
+    "notion-query-data-sources",
+    "notion-query-database-view",
+    "notion-get-comments",
+    "notion-get-teams",
+    "notion-get-users",
+    "notion-get-self",
+    "search",
+    "fetch",
+  ]),
+  atlassian: reviewedReadTools("Atlassian", [
+    "atlassianUserInfo",
+    "getAccessibleAtlassianResources",
+    "getJiraIssue",
+    "getJiraIssueRemoteIssueLinks",
+    "getJiraIssueTypeMetaWithFields",
+    "getJiraProjectIssueTypesMetadata",
+    "getIssueLinkTypes",
+    "getTransitionsForJiraIssue",
+    "getVisibleJiraProjects",
+    "lookupJiraAccountId",
+    "searchJiraIssuesUsingJql",
+    "getConfluencePage",
+    "getConfluencePageDescendants",
+    "getConfluencePageFooterComments",
+    "getConfluencePageInlineComments",
+    "getConfluenceCommentChildren",
+    "getConfluenceSpaces",
+    "getPagesInConfluenceSpace",
+    "searchConfluenceUsingCql",
+  ]),
+  stripe: reviewedReadTools("Stripe", [
+    "stripe_api_search",
+    "stripe_api_details",
+    "stripe_api_read",
+    "get_stripe_account_info",
+    "search_stripe_resources",
+    "fetch_stripe_resources",
+    "search_stripe_documentation",
+    "stripe_implementation_planner",
+  ]),
+  vercel: reviewedReadTools("Vercel", [
+    "search_documentation",
+    "list_teams",
+    "list_projects",
+    "get_project",
+    "list_deployments",
+    "get_deployment",
+    "get_deployment_build_logs",
+    "get_runtime_logs",
+    "check_domain_availability_and_price",
+    "web_fetch_vercel_url",
+    "list_toolbar_threads",
+    "get_toolbar_thread",
+  ]),
+  hubspot: reviewedReadTools("HubSpot", [
+    "get_user_details",
+    "search_crm_objects",
+    "get_crm_objects",
+    "search_properties",
+    "get_properties",
+    "search_owners",
+    "get_campaign_contacts_by_type",
+    "get_campaign_analytics",
+    "get_campaign_asset_types",
+    "get_campaign_asset_metrics",
+  ]),
+  intercom: reviewedReadTools("Intercom", [
+    "search",
+    "fetch",
+    "search_conversations",
+    "get_conversation",
+    "search_contacts",
+    "get_contact",
+    "list_companies",
+    "get_company",
+    "list_articles",
+    "search_articles",
+    "get_article",
+  ]),
 }
 
 export interface StoredMcpPolicy {
@@ -136,18 +252,16 @@ export function effectiveMcpPolicy(rawUrl: string, stored?: StoredMcpPolicy): Ef
     }
   }
   const availableReadTools = base.readTools.map((tool) => tool.name)
-  const allowed = stored
-    ? stored.allowedReadTools.filter((name) => availableReadTools.includes(name))
-    : availableReadTools
+  const allowed = stored ? stored.allowedReadTools.filter((name) => availableReadTools.includes(name)) : []
   return {
     vendor: base.vendor,
     version: stored?.version ?? 0,
-    enabled: stored?.enabled ?? true,
-    chatEnabled: base.chat && (stored?.chatEnabled ?? true),
-    deepResearchEnabled: base.deepResearch && (stored?.deepResearchEnabled ?? true),
+    enabled: stored?.enabled ?? false,
+    chatEnabled: base.chat && (stored?.chatEnabled ?? false),
+    deepResearchEnabled: base.deepResearch && (stored?.deepResearchEnabled ?? false),
     allowedReadTools: allowed,
     availableReadTools,
-    maxCallsPerRun: Math.min(stored?.maxCallsPerRun ?? 4, 4),
+    maxCallsPerRun: Math.min(stored?.maxCallsPerRun ?? 0, 4),
   }
 }
 
@@ -227,4 +341,11 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function isOfficialVendor(value: string): value is OfficialMcpVendor {
   return Object.hasOwn(CURATED_READ_TOOLS, value)
+}
+
+function reviewedReadTools(vendor: string, names: readonly string[]): readonly CuratedReadTool[] {
+  return names.map((name) => ({
+    name,
+    description: `Use the reviewed ${vendor} ${name} read capability for data visible to the connected account.`,
+  }))
 }

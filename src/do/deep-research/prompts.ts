@@ -203,6 +203,7 @@ Rules:
   numbered "Repository files" list. Reference real file paths from the context.
 - Only claim what the provided context supports. If it doesn't contain the answer, say so plainly
   and point to where in the repo to look next — never invent files, paths, or symbols.
+- Do not use emojis.
 `.trim(),
     user: `
 Question:
@@ -267,7 +268,7 @@ this message. Answer directly from your own knowledge in clear markdown: lead wi
 bottom-line summary, then supporting detail. Be honest about uncertainty — flag anything that may be
 version-specific, time-sensitive, or that you cannot confirm without live sources, and never invent
 citations, URLs, or specific facts. If the message is casual (a greeting or small talk), just reply
-naturally and briefly instead of writing a report.
+naturally and briefly instead of writing a report. Do not use emojis.
 `.trim(),
     user: question,
   }
@@ -299,6 +300,7 @@ accurate, well-structured markdown — interpret and connect the findings, do no
 them. Lead with a short bottom-line summary, then the details. Cite sources inline with
 bracketed numbers like [1], [2] that refer to the numbered source list.${repoNote} Only claim what the
 notes/context support; if something is uncertain or unverified, say so. Do not invent sources or facts.
+Do not use emojis.
 `.trim(),
     user: `
 Write the final answer to the question below in markdown, using the research notes and citing

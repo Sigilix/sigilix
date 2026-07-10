@@ -5,18 +5,17 @@
 // built-in defaults. Config-as-code wins outright per field (the standard model);
 // where a repo commits no file, the dashboard config now actually applies.
 //
-// RECALL-SAFETY: the dashboard layers pass through `dashboardRecallSafeSubset`
-// (an allowlist of additive/shaping fields) BEFORE the merge, so a dashboard
-// setting can shape judgment but can never drop a file, PR, scanner, or finding
-// pre-severity and silence a P0/P1 — that power stays with the committed file
-// (see merge.ts for the full rationale). With no dashboard config the merge is a
-// no-op passthrough of the committed config → the committed path never regresses.
+// RECALL-SAFETY: the dashboard layers use a separate, statically closed contract
+// and are converted to `SigilixConfig` BEFORE the merge. That contract has no
+// suppression-capable fields, so a dashboard setting can never drop a file, PR,
+// scanner, category, or finding and silence a P0/P1 — that power stays with the
+// committed file (see dashboard.ts + merge.ts for the full rationale).
 
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { Env } from "@/src/shared/types/env"
 import { loadSigilixConfigWithVisibleParseError } from "@/src/lib/sigilix-config-error-comment"
 import { resolveDashboardConfigLayers } from "@/src/lib/review-config-store"
-import { mergeSigilixConfigLayers, dashboardRecallSafeSubset } from "@/src/shared/domain/config/merge"
+import { dashboardReviewConfigToSigilixConfig, mergeSigilixConfigLayers } from "@/src/shared/domain/config/merge"
 import type { SigilixConfig } from "@/src/shared/domain/config/types"
 
 export interface ResolveEffectiveConfigArgs {
@@ -41,8 +40,8 @@ export async function resolveEffectiveSigilixConfig(a: ResolveEffectiveConfigArg
     resolveDashboardConfigLayers(env, installationId, owner, repo),
   ])
   return mergeSigilixConfigLayers(
-    dashboardLayers.org ? dashboardRecallSafeSubset(dashboardLayers.org) : null,
-    dashboardLayers.repo ? dashboardRecallSafeSubset(dashboardLayers.repo) : null,
+    dashboardLayers.org ? dashboardReviewConfigToSigilixConfig(dashboardLayers.org) : null,
+    dashboardLayers.repo ? dashboardReviewConfigToSigilixConfig(dashboardLayers.repo) : null,
     committedConfig,
   )
 }

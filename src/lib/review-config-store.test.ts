@@ -44,14 +44,45 @@ describe("review-config-store", () => {
     expect(read?.profile).toBe("chill")
   })
 
-  it("persists the CANONICAL known-fields-only serialization (drops unknown keys)", async () => {
+  it("rejects unknown dashboard fields instead of silently storing no-ops", async () => {
     const { kv, store } = makeKV()
     const e = env(kv)
     const raw = JSON.stringify({ guidance: "x", bogusUnknownField: { a: 1 }, profile: "assertive" })
-    await writeDashboardReviewConfig(e, 7, raw)
-    const stored = store.get(orgConfigKey(7))!
-    expect(stored).not.toContain("bogusUnknownField")
-    expect(JSON.parse(stored)).toMatchObject({ guidance: "x", profile: "assertive" })
+    const write = await writeDashboardReviewConfig(e, 7, raw)
+    expect(write).toEqual({ ok: false, reason: "unknown dashboard config field `bogusUnknownField`" })
+    expect(store.has(orgConfigKey(7))).toBe(false)
+  })
+
+  it("round-trips the closed overview + gate contract canonically", async () => {
+    const { kv, store } = makeKV()
+    const e = env(kv)
+    const config = {
+      overview: {
+        showSummary: false,
+        showWalkthrough: true,
+        showSequenceDiagram: false,
+        showConfidence: true,
+      },
+      preMergeGates: {
+        titleFormat: { enabled: false },
+        descriptionCompleteness: { enabled: true },
+        linkedIssue: { enabled: false },
+      },
+    }
+    const write = await writeDashboardReviewConfig(e, 7, JSON.stringify(config))
+    expect(write).toEqual({ ok: true, config })
+    expect(JSON.parse(store.get(orgConfigKey(7))!)).toEqual(config)
+    expect(await readDashboardReviewConfig(e, 7)).toEqual(config)
+  })
+
+  it("reads legacy stored guidance/profile blobs without migration or key changes", async () => {
+    const { kv, store } = makeKV()
+    const e = env(kv)
+    store.set(orgConfigKey(7), JSON.stringify({ guidance: "legacy guidance", profile: "assertive" }))
+    expect(await readDashboardReviewConfig(e, 7)).toEqual({
+      guidance: "legacy guidance",
+      profile: "assertive",
+    })
   })
 
   it("rejects malformed JSON with a reason and stores nothing", async () => {

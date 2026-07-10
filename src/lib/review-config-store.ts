@@ -2,7 +2,7 @@
 // configuration, keyed by installation (org scope) and optionally by repo.
 //
 // STORE CHOICE — KV (`OPENCLAW_STATE`), not D1:
-//   The dashboard config is a single opaque `SigilixConfig` blob addressed by a
+//   The dashboard config is a single closed `DashboardReviewConfig` blob addressed by a
 //   stable key. It is read at most once per review and written rarely (only when
 //   an admin saves the dashboard). There is no relational query, no aggregation,
 //   no cross-row scan — exactly the key→blob shape KV is for. D1 would demand a
@@ -15,18 +15,17 @@
 //   org  : `review-config:<installationId>`
 //   repo : `review-config:<installationId>:<repoId>`   (repoId = lowercased `owner/repo`)
 //
-// VALIDATION: writes go through `parseSigilixConfigDetailed` — the SAME validator
-// the committed `sigilix.json` path uses — so a malformed blob is rejected with a
-// specific reason and never stored. What we persist is the CANONICAL re-serialized
-// parsed config (known fields only), so reads are clean and forward-compatible.
+// VALIDATION: writes go through `parseDashboardReviewConfig`, not the broad,
+// forward-compatible config-as-code parser. The dashboard contract is closed:
+// unknown/no-op/suppression-capable fields are rejected instead of silently
+// stored. What we persist is the canonical re-serialized parsed config.
 //
 // FAIL-SOFT reads: any KV / parse failure resolves to `null` (treated as "no
 // dashboard config") so a transient store fault degrades to built-in defaults
 // rather than breaking a review.
 
 import type { Env } from "@/src/shared/types/env"
-import { parseSigilixConfigDetailed } from "@/src/shared/domain/config/parse"
-import type { SigilixConfig } from "@/src/shared/domain/config/types"
+import { parseDashboardReviewConfig, type DashboardReviewConfig } from "@/src/shared/domain/config/dashboard"
 
 const KEY_PREFIX = "review-config:"
 
@@ -47,10 +46,10 @@ export function repoConfigKey(installationId: number, repoId: string): string {
 }
 
 /** Discriminated write result. `reason` is a human-readable parse-error message. */
-export type WriteResult = { ok: true; config: SigilixConfig } | { ok: false; reason: string }
+export type WriteResult = { ok: true; config: DashboardReviewConfig } | { ok: false; reason: string }
 
 /**
- * Validate a raw JSON body against the `SigilixConfig` schema and, on success,
+ * Validate a raw JSON body against the closed dashboard schema and, on success,
  * persist the canonical serialization to KV. Never throws — a KV write failure
  * surfaces as `{ ok: false }` so the caller returns a real error to the admin
  * instead of a false success.
@@ -61,7 +60,7 @@ export async function writeDashboardReviewConfig(
   rawJson: string,
   repoId?: string,
 ): Promise<WriteResult> {
-  const parsed = parseSigilixConfigDetailed(rawJson)
+  const parsed = parseDashboardReviewConfig(rawJson)
   if (!parsed.ok) return { ok: false, reason: parsed.reason }
 
   // Persist the canonical, known-fields-only serialization (not the caller's raw
@@ -92,7 +91,7 @@ export async function readDashboardReviewConfig(
   env: Pick<Env, "OPENCLAW_STATE">,
   installationId: number,
   repoId?: string,
-): Promise<SigilixConfig | null> {
+): Promise<DashboardReviewConfig | null> {
   const key = repoId ? repoConfigKey(installationId, repoId) : orgConfigKey(installationId)
   let raw: string | null
   try {
@@ -109,7 +108,7 @@ export async function readDashboardReviewConfig(
     return null
   }
   if (raw === null || raw.trim().length === 0) return null
-  const parsed = parseSigilixConfigDetailed(raw)
+  const parsed = parseDashboardReviewConfig(raw)
   // A stored blob was written canonically, so a parse failure here means it was
   // corrupted out-of-band — treat as absent rather than surfacing broken config.
   return parsed.ok ? parsed.config : null
@@ -117,8 +116,8 @@ export async function readDashboardReviewConfig(
 
 /** The org + repo dashboard layers for one PR, resolved together for the pipeline. */
 export interface DashboardConfigLayers {
-  org: SigilixConfig | null
-  repo: SigilixConfig | null
+  org: DashboardReviewConfig | null
+  repo: DashboardReviewConfig | null
 }
 
 /**

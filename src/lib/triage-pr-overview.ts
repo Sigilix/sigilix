@@ -13,9 +13,10 @@ import type { PrChangedFile, PrCommit, PullRequestMeta } from "@/src/shared/type
 import { PR_OVERVIEW_SCHEMA } from "@/src/shared/domain/schemas"
 import { PR_OVERVIEW_PROMPT } from "@/src/prompts/pr-overview"
 import { readRepoIndexManifest } from "./repo-index-manifest"
-import { loadSigilixConfig, resolvePreMergeGatesConfig } from "./sigilix-config"
+import { resolvePreMergeGatesConfig } from "./sigilix-config"
 import { CODEOWNERS_PATHS, mergeSuggestedReviewers, parseCodeowners, suggestedReviewersFromRules } from "./codeowners"
 import { runPreMergeGates, type GateResult } from "@/src/shared/domain/pre-merge-gates"
+import { resolveEffectiveSigilixConfig } from "./ensemble/app/context/resolve-effective-config"
 import { batchReadFileCache, batchWriteFileCache } from "./pr-overview-file-cache"
 import type { Env } from "@/src/shared/types/env"
 // SIG-376 (SIG-318 Tier-1 6/8): the pure parse/transform, render, and
@@ -160,7 +161,6 @@ export interface PrOverviewArgs {
 
 const DEDUPE_PREFIX = "pr-overview:"
 const DEDUPE_TTL_SECONDS = 300
-
 export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverviewVerdict | void> {
   const {
     owner,
@@ -241,7 +241,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
     // and a real diff is available. The fix: pass through `diff` as
     // the prompt diff when file-list fetch failed.
     let listFilesFailed = false
-    const [meta, diff, commits, files] = await Promise.all([
+    const [meta, diff, commits, files, effectiveSigilixConfig] = await Promise.all([
       client.getPullRequest(owner, repo, prNumber),
       client.getPullRequestDiff(owner, repo, prNumber),
       client.getPullRequestCommits(owner, repo, prNumber).catch(() => [] as PrCommit[]),
@@ -269,19 +269,18 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
         )
         return [] as PrChangedFile[]
       }),
+      resolveEffectiveSigilixConfig({ env, client, owner, repo, prNumber, headSha, installationId }),
     ])
     since("pr-fetched")
 
     // SIG-100: run deterministic pre-merge quality gates (no model).
     // Inputs come from `meta` + `commits`, both already in scope.
-    // Loaded config can be EMPTY_CONFIG (no sigilix.json on the PR)
-    // — `resolvePreMergeGatesConfig` fills in the locked defaults.
-    // Best-effort: a config-load failure falls through to default
-    // gate behavior; we don't block the overview render on it.
+    // Effective config is committed-wins over repo/org dashboard layers.
+    // It can be empty (no committed/dashboard config), in which case
+    // `resolvePreMergeGatesConfig` fills in the locked defaults.
     let gateResults: GateResult[] = []
     try {
-      const sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
-      const gatesConfig = resolvePreMergeGatesConfig(sigilixConfig.preMergeGates)
+      const gatesConfig = resolvePreMergeGatesConfig(effectiveSigilixConfig.preMergeGates)
       gateResults = runPreMergeGates(
         {
           prTitle: meta.title ?? "",
@@ -607,6 +606,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
       // pass — the formatter checks for an empty array internally and
       // skips the section.
       gateResults,
+      overviewConfig: effectiveSigilixConfig.overview,
     })
 
     // ─── SIG-84: stale-head guard #2 (pre-write) ────────────────────

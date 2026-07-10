@@ -7,8 +7,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   handleAgentBranchesRoute,
+  handleAgentEventIngestRoute,
   handleAgentRunCreateRoute,
   handleAgentRunDiffRoute,
+  handleAgentRunEventsRoute,
   handleAgentRunStatusRoute,
 } from "@/src/lib/agent-portal-route"
 import { base64urlEncode, createSession } from "@/src/lib/auth-session"
@@ -17,12 +19,16 @@ import type { Env } from "@/src/shared/types/env"
 const routeMocks = vi.hoisted(() => ({
   dispatchAgentRun: vi.fn(),
   getAgentRunStatus: vi.fn(),
+  getAgentRunEvents: vi.fn(),
+  appendAgentRunEvent: vi.fn(),
   getValidGithubToken: vi.fn(),
 }))
 
 vi.mock("@/src/lib/agent-runner/dispatch", () => ({
   dispatchAgentRun: routeMocks.dispatchAgentRun,
   getAgentRunStatus: routeMocks.getAgentRunStatus,
+  getAgentRunEvents: routeMocks.getAgentRunEvents,
+  appendAgentRunEvent: routeMocks.appendAgentRunEvent,
 }))
 
 vi.mock("@/src/lib/github-user-token", () => ({
@@ -184,6 +190,10 @@ beforeEach(() => {
   }))
   routeMocks.getAgentRunStatus.mockReset()
   routeMocks.getAgentRunStatus.mockResolvedValue(null)
+  routeMocks.getAgentRunEvents.mockReset()
+  routeMocks.getAgentRunEvents.mockResolvedValue({ events: [], cursor: 0 })
+  routeMocks.appendAgentRunEvent.mockReset()
+  routeMocks.appendAgentRunEvent.mockResolvedValue({ ok: true, seq: 1 })
   routeMocks.getValidGithubToken.mockReset()
   routeMocks.getValidGithubToken.mockResolvedValue("ghu_refreshed_token")
 })
@@ -639,5 +649,119 @@ describe("handleAgentRunDiffRoute (GET /v1/agent/runs/:runId/diff)", () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ready: boolean }
     expect(body.ready).toBe(false)
+  })
+})
+
+describe("handleAgentRunEventsRoute (GET /v1/agent/runs/:runId/events)", () => {
+  it("401 without a session", async () => {
+    const kv = makeKV()
+    const res = await handleAgentRunEventsRoute(reqGet("https://x/v1/agent/runs/a/events", null), baseEnv(kv), "a")
+    expect(res.status).toBe(401)
+  })
+
+  it("404 when a different GitHub user owns the run (IDOR guard)", async () => {
+    const kv = makeKV()
+    await seedRunOwner(kv, "foreign")
+    await seedSession(kv, "intruder", 222)
+    stubGithubOwning42()
+    const res = await handleAgentRunEventsRoute(
+      reqGet("https://x/v1/agent/runs/foreign/events", "intruder"),
+      baseEnv(kv),
+      "foreign",
+    )
+    expect(res.status).toBe(404)
+    expect(routeMocks.getAgentRunEvents).not.toHaveBeenCalled()
+  })
+
+  it("returns events after the given cursor for the owner", async () => {
+    const kv = makeKV()
+    await seedRunOwner(kv, "run1")
+    await seedSession(kv, "owner", 111)
+    stubGithubOwning42()
+    routeMocks.getAgentRunEvents.mockResolvedValue({
+      events: [{ seq: 3, ts: 1, type: "file-edit", path: "a.ts", patch: "@@", additions: 1, deletions: 0 }],
+      cursor: 3,
+    })
+    const env = baseEnv(kv)
+    const res = await handleAgentRunEventsRoute(
+      reqGet("https://x/v1/agent/runs/run1/events?after=2", "owner"),
+      env,
+      "run1",
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { events: { seq: number }[]; cursor: number }
+    expect(body.cursor).toBe(3)
+    expect(body.events).toHaveLength(1)
+    expect(routeMocks.getAgentRunEvents).toHaveBeenCalledWith(env, "run1", 2)
+  })
+})
+
+describe("handleAgentEventIngestRoute (POST /internal/agent-runs/:runId/events)", () => {
+  function ingestReq(runId: string, secret: string | null, body: unknown): Request {
+    const headers = new Headers({ "content-type": "application/json" })
+    if (secret !== null) headers.set("x-sigilix-run-secret", secret)
+    return new Request(`https://x/internal/agent-runs/${runId}/events`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    })
+  }
+
+  const RID = "11111111-1111-4111-8111-111111111111"
+  const editBody = { type: "file-edit", path: "a.ts", patch: "@@ -1 +1 @@", additions: 1, deletions: 0 }
+
+  it("400 on a non-UUID runId (blocks DO fan-out before any storage touch)", async () => {
+    const res = await handleAgentEventIngestRoute(ingestReq("run1", "s3cr3t", editBody), baseEnv(makeKV()), "run1")
+    expect(res.status).toBe(400)
+    expect(routeMocks.appendAgentRunEvent).not.toHaveBeenCalled()
+  })
+
+  it("403 without the run secret", async () => {
+    const res = await handleAgentEventIngestRoute(ingestReq(RID, null, editBody), baseEnv(makeKV()), RID)
+    expect(res.status).toBe(403)
+    expect(routeMocks.appendAgentRunEvent).not.toHaveBeenCalled()
+  })
+
+  it("400 on a malformed body", async () => {
+    const res = await handleAgentEventIngestRoute(
+      ingestReq(RID, "s3cr3t", { type: "file-edit", path: "a.ts" }),
+      baseEnv(makeKV()),
+      RID,
+    )
+    expect(res.status).toBe(400)
+    expect(routeMocks.appendAgentRunEvent).not.toHaveBeenCalled()
+  })
+
+  it("400 on an over-large patch", async () => {
+    const res = await handleAgentEventIngestRoute(
+      ingestReq(RID, "s3cr3t", { ...editBody, patch: "x".repeat(200_001) }),
+      baseEnv(makeKV()),
+      RID,
+    )
+    expect(res.status).toBe(400)
+    expect(routeMocks.appendAgentRunEvent).not.toHaveBeenCalled()
+  })
+
+  it("202 and appends when the secret matches", async () => {
+    routeMocks.appendAgentRunEvent.mockResolvedValue({ ok: true, seq: 7 })
+    const env = baseEnv(makeKV())
+    const res = await handleAgentEventIngestRoute(ingestReq(RID, "s3cr3t", editBody), env, RID)
+    expect(res.status).toBe(202)
+    const body = (await res.json()) as { ok: boolean; seq: number }
+    expect(body).toEqual({ ok: true, seq: 7 })
+    expect(routeMocks.appendAgentRunEvent).toHaveBeenCalledWith(env, RID, "s3cr3t", {
+      ts: expect.any(Number),
+      type: "file-edit",
+      path: "a.ts",
+      patch: "@@ -1 +1 @@",
+      additions: 1,
+      deletions: 0,
+    })
+  })
+
+  it("403 identically for a wrong secret AND an unknown run (no oracle)", async () => {
+    routeMocks.appendAgentRunEvent.mockResolvedValue({ ok: false })
+    const res = await handleAgentEventIngestRoute(ingestReq(RID, "wrong", editBody), baseEnv(makeKV()), RID)
+    expect(res.status).toBe(403)
   })
 })

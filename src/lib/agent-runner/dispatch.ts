@@ -17,7 +17,7 @@ import { getContainer } from "@cloudflare/containers"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { resolveAgentRunnerMode, type AgentRunnerEngine } from "@/src/lib/agent-runner/mode"
 import { retainTrainingRecord } from "@/src/lib/training-retention/retain-training"
-import type { AgentRunnerContainer, AgentRunRecord } from "@/src/do/agent-runner-container"
+import type { AgentRunnerContainer, AgentRunRecord, RunEvent } from "@/src/do/agent-runner-container"
 import type { Env } from "@/src/shared/types/env"
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -115,9 +115,42 @@ interface TaskPacket {
     apiKey: string
     repoSlug: string
   }
+  /**
+   * Live-events wiring (step 2 of the portal diff pane). When present, the
+   * container POSTs each file-edit event to `url`, authenticated with `secret`
+   * (a per-run token the Worker also stored in the run DO). Omitted unless
+   * SIGILIX_AGENT_EVENTS_ENDPOINT is set — then the run streams nothing and the
+   * diff pane simply shows the finished PR diff. `secret` is NEVER logged.
+   */
+  events?: {
+    url: string
+    secret: string
+  }
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
+
+/** A fresh 256-bit per-run ingest secret, hex-encoded. */
+function mintEventSecret(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32))
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")
+}
+
+/**
+ * Resolve the live-events ingest target from the Worker env. Returns undefined
+ * unless SIGILIX_AGENT_EVENTS_ENDPOINT (SIGILIX_-preferred, OPENCLAW_ fallback)
+ * is set — then the run streams no events and the diff pane shows the finished
+ * PR diff. The URL is the Worker's OWN public base; the secret is per-run.
+ */
+function resolveEventsConfig(
+  env: Pick<Env, "SIGILIX_AGENT_EVENTS_ENDPOINT" | "OPENCLAW_AGENT_EVENTS_ENDPOINT">,
+  runId: string,
+): TaskPacket["events"] {
+  const base = env.SIGILIX_AGENT_EVENTS_ENDPOINT ?? env.OPENCLAW_AGENT_EVENTS_ENDPOINT
+  if (!base) return undefined
+  const trimmed = base.replace(/\/+$/, "")
+  return { url: `${trimmed}/internal/agent-runs/${encodeURIComponent(runId)}/events`, secret: mintEventSecret() }
+}
 
 /**
  * Resolve the grounding config for the container's sigilix-grounding plugin from
@@ -183,6 +216,25 @@ export async function dispatchAgentRun(
     // Grounding config for the full CLI agent (omitted unless env-configured).
     const groundingConfig = resolveGroundingConfig(env, input.owner, input.repo)
 
+    // Live-events wiring (omitted unless SIGILIX_AGENT_EVENTS_ENDPOINT is set).
+    // Store the per-run secret in the DO BEFORE dispatch so the ingest route can
+    // validate the container's event POSTs; a store failure just drops streaming
+    // (the run still completes and the finished diff still shows) — never fatal.
+    const eventsConfig = resolveEventsConfig(env, runId)
+    if (eventsConfig) {
+      try {
+        await agentRunnerStub(env, runId).setRunEventSecret(eventsConfig.secret)
+      } catch (secretErr) {
+        console.error(
+          JSON.stringify({
+            event: "agent-run-event-secret-store-failed",
+            runId,
+            err: secretErr instanceof Error ? secretErr.message : String(secretErr),
+          }),
+        )
+      }
+    }
+
     const packet: TaskPacket = {
       runId,
       repo: {
@@ -196,6 +248,7 @@ export async function dispatchAgentRun(
       model: input.model, // model.key is never logged
       engine: input.engine ?? "minimal",
       ...(groundingConfig !== undefined ? { sigilix: groundingConfig } : {}),
+      ...(eventsConfig !== undefined ? { events: eventsConfig } : {}),
       caps: input.caps,
     }
 
@@ -309,5 +362,32 @@ export async function getAgentRunStatus(env: Env, runId: string): Promise<AgentR
     return await stub.getRunRecord()
   } catch {
     return null
+  }
+}
+
+/** Read a run's live events with `seq > afterSeq` (for the portal's diff pane). */
+export async function getAgentRunEvents(
+  env: Env,
+  runId: string,
+  afterSeq: number,
+): Promise<{ events: RunEvent[]; cursor: number }> {
+  try {
+    return await agentRunnerStub(env, runId).getRunEvents(afterSeq)
+  } catch {
+    return { events: [], cursor: afterSeq }
+  }
+}
+
+/** Append a container-emitted run event IF the per-run secret matches. */
+export async function appendAgentRunEvent(
+  env: Env,
+  runId: string,
+  secret: string,
+  event: Omit<RunEvent, "seq">,
+): Promise<{ ok: true; seq: number } | { ok: false }> {
+  try {
+    return await agentRunnerStub(env, runId).appendRunEventAuthed(secret, event)
+  } catch {
+    return { ok: false }
   }
 }

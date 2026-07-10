@@ -1454,6 +1454,11 @@ export interface Env {
   OPENCLAW_PORTAL_AGENT_RUNNER_MODE?: string
   OPENCLAW_AGENT_RUNNER_ENGINE?: string
   OPENCLAW_AGENT_GROUNDING_ENDPOINT?: string
+  //   SIGILIX_AGENT_EVENTS_ENDPOINT  — Worker's OWN public base (e.g. https://api.sigilix.ai);
+  //     the runner container POSTs live file-edit events to {base}/internal/agent-runs/:runId/events
+  //     (per-run secret from the packet). Unset → no live streaming (finished-diff fallback).
+  SIGILIX_AGENT_EVENTS_ENDPOINT?: string
+  OPENCLAW_AGENT_EVENTS_ENDPOINT?: string
   OPENCLAW_LINEAR_AGENT_RUN_MODE?: string
   OPENCLAW_LINEAR_AGENT_USER_ID?: string
   // Install hardening: when SET, the actor=app OAuth callback only accepts installs

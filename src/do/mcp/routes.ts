@@ -9,6 +9,7 @@
 //   POST   /v1/mcp/servers          → connect a server, return connected/auth_required
 //   GET    /v1/mcp/servers          → list the caller's connected servers
 //   DELETE /v1/mcp/servers/:id      → disconnect + purge (404 if not this caller's)
+//   GET/PUT /v1/mcp/servers/:id/policy → read/narrow the server's runtime policy
 //   GET    /mcp/oauth/callback      → completes the OAuth handshake, redirects to the portal
 //
 // The /v1/mcp/servers routes are CORS'd (same as /v1/research); the OAuth
@@ -21,29 +22,26 @@
 // COMPLIANCE.md §4 line budget) — it still needs `isPortalCorsPath` to cover
 // this surface for the shared OPTIONS-preflight branch.
 
-import { requireSession } from "@/src/lib/auth-middleware"
-import { requireApiTenant } from "@/src/lib/api-key-resolver"
 import { handlePortalPreflight, hasJsonContentType, isAllowedPortalOrigin, withPortalCors } from "@/src/lib/portal-cors"
 import { guardUrl } from "@/src/do/deep-research/fetch-guard"
 import type { McpConnectResult, McpServerSummary } from "./mcp-connections-do"
+import { requireRuntimePrincipal } from "@/src/lib/runtime-principal"
 import type { Env } from "@/src/shared/types/env"
+import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 
 const DO_BASE = "https://mcp-connections.do"
 const OAUTH_CALLBACK_PATH = "/mcp/oauth/callback"
 const DEFAULT_PORTAL_URL = "https://app.sigilix.ai"
+const MAX_POLICY_BODY_BYTES = 16 * 1024
 
 /** The caller's stable identity + the 401 branch when unauthenticated. Mirrors
  *  deep-research routes.ts's `authorize()` exactly (same dual-auth shape). */
-type CallerAuth = { scope: string } | { response: Response }
+type CallerAuth = { scope: string; kind: "session" | "tenant" } | { response: Response }
 
 async function authorize(request: Request, env: Env, ctx: ExecutionContext): Promise<CallerAuth> {
-  const session = await requireSession(request, env, ctx)
-  // sig-user-identity: prefer the provider-agnostic user_id so non-GitHub
-  // sessions get a distinct scope instead of all sharing "session:undefined".
-  if (session) return { scope: `session:${session.record.githubUserId ?? session.record.userId ?? "anon"}` }
-  const tenant = await requireApiTenant(request, env, ctx)
-  if ("caller" in tenant) return { scope: `tenant:${tenant.caller.installationId}` }
-  return { response: tenant.response }
+  const auth = await requireRuntimePrincipal(request, env, ctx)
+  if ("response" in auth) return auth
+  return { scope: auth.principal.scope, kind: auth.principal.kind }
 }
 
 function resolveStub(env: Env, scope: string): DurableObjectStub {
@@ -71,6 +69,8 @@ export async function handleMcpServersCreate(request: Request, env: Env, ctx: Ex
   // spinning up/naming a DO instance for an obviously-blocked target).
   const guard = guardUrl(url)
   if (!guard.ok) return json({ error: `url not allowed: ${guard.reason}` }, 400)
+  if (guard.url.protocol !== "https:") return json({ error: "url not allowed: https-required" }, 400)
+  if (guard.url.username || guard.url.password) return json({ error: "url not allowed: embedded-credentials" }, 400)
 
   const name = typeof body.name === "string" ? body.name.trim() : ""
   const callbackUrl = new URL(request.url).origin + OAUTH_CALLBACK_PATH
@@ -81,7 +81,12 @@ export async function handleMcpServersCreate(request: Request, env: Env, ctx: Ex
     response = await stub.fetch(`${DO_BASE}/connect`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url: guard.url.toString(), name: name || undefined, callbackUrl }),
+      body: JSON.stringify({
+        url: guard.url.toString(),
+        name: name || undefined,
+        callbackUrl,
+        allowOAuth: auth.kind === "session",
+      }),
     })
   } catch (err) {
     console.error("mcp-servers: connect DO call failed", err instanceof Error ? err.message : err)
@@ -93,13 +98,29 @@ export async function handleMcpServersCreate(request: Request, env: Env, ctx: Ex
   } catch {
     return json({ error: "failed to connect" }, 502)
   }
-  if (result.status === "error") return json({ error: result.error }, response.ok ? 502 : response.status)
+  if (result.status === "error") {
+    return json(
+      { error: result.error, ...(result.existingId ? { existingServerId: result.existingId } : {}) },
+      response.ok ? 502 : response.status,
+    )
+  }
   // The OAuth callback (GET /mcp/oauth/callback below) can only resolve a
   // SESSION scope (it authenticates off the browser's cookie, not a bearer
   // key) — an api-key/tenant caller that needs OAuth would hit a dead end:
   // the pending PKCE/state lives in a DIFFERENT DO than the one the callback
   // would resolve to. Reject up front with a clear message instead.
-  if (result.status === "auth_required" && auth.scope.startsWith("tenant:")) {
+  if (result.status === "auth_required" && auth.kind === "tenant") {
+    // Defense for a rolling/older DO that did not honor allowOAuth=false: do
+    // not leave the pending SDK row behind when this API caller cannot complete
+    // the browser-cookie callback.
+    let cleaned = false
+    try {
+      const cleanup = await stub.fetch(`${DO_BASE}/servers/${encodeURIComponent(result.id)}`, { method: "DELETE" })
+      cleaned = cleanup.ok || cleanup.status === 404
+    } catch (err) {
+      console.error("mcp-servers: oauth rejection cleanup failed", err instanceof Error ? err.message : err)
+    }
+    if (!cleaned) return json({ error: "failed to clean up rejected OAuth connection" }, 502)
     return json({ error: "this server requires OAuth, which is only supported from a signed-in browser session" }, 400)
   }
   return json(result)
@@ -145,6 +166,42 @@ export async function handleMcpServersDelete(
   if (response.status === 404) return json({ error: "not found" }, 404)
   if (!response.ok) return json({ error: "failed to disconnect" }, 502)
   return json({ ok: true })
+}
+
+/** GET/PUT /v1/mcp/servers/:id/policy — authenticated policy for one server.
+ * The owning DO verifies existence and enforces server-owned narrowing. */
+export async function handleMcpServerPolicy(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  id: string,
+): Promise<Response> {
+  if (!id) return json({ error: "missing id" }, 400)
+  if (request.method === "PUT" && !hasJsonContentType(request)) {
+    return json({ error: "content-type must be application/json" }, 415)
+  }
+  const auth = await authorize(request, env, ctx)
+  if ("response" in auth) return auth.response
+
+  let body: string | undefined
+  if (request.method === "PUT") {
+    const raw = await readBodyCapped(request, MAX_POLICY_BODY_BYTES)
+    if (raw === null) return json({ error: "payload_too_large" }, 413)
+    body = raw
+  }
+  try {
+    const response = await resolveStub(env, auth.scope).fetch(
+      `${DO_BASE}/servers/${encodeURIComponent(id)}/policy`,
+      request.method === "PUT"
+        ? { method: "PUT", headers: { "content-type": "application/json" }, body: body ?? "" }
+        : { method: "GET" },
+    )
+    const result = await response.text()
+    return new Response(result, { status: response.status, headers: { "content-type": "application/json" } })
+  } catch (err) {
+    console.error("mcp-servers: policy DO call failed", err instanceof Error ? err.message : err)
+    return json({ error: "failed to update policy" }, 502)
+  }
 }
 
 /**
@@ -234,6 +291,14 @@ export async function tryHandleMcpRoute(
   }
   if (request.method === "GET" && url.pathname === "/v1/mcp/servers") {
     return withPortalCors(request, await handleMcpServersList(request, env, ctx), env)
+  }
+  const policyMatch = /^\/v1\/mcp\/servers\/([^/]+)\/policy$/.exec(url.pathname)
+  if (policyMatch?.[1] && (request.method === "GET" || request.method === "PUT")) {
+    return withPortalCors(
+      request,
+      await handleMcpServerPolicy(request, env, ctx, decodeURIComponent(policyMatch[1])),
+      env,
+    )
   }
   if (request.method === "DELETE" && url.pathname.startsWith("/v1/mcp/servers/")) {
     const id = decodeURIComponent(url.pathname.slice("/v1/mcp/servers/".length))

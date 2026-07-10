@@ -25,6 +25,7 @@ import { fetchPage } from "./fetch-guard"
 import { gatherRepoGrounding, type GatherRepoGroundingArgs } from "./repo-grounding"
 import { isCodebaseQuestion, isTrivialMessage } from "./text-utils"
 import type { RepoGrounding, ResearchEffort, ResearchEvent, ResearchMode, ResearchTier } from "./types"
+import { buildResearchMcpRuntime } from "./mcp-runtime"
 
 const META_KEY = "meta"
 const EVENT_PREFIX = "evt:"
@@ -190,11 +191,12 @@ export class DeepResearchDO extends DurableObject<Env> {
     // data. Engine untouched; the wrapper only sums (pure aside from the counter).
     let tokensAccum = 0
     const baseModel: ResearchModelFn = this.hooks?.model ?? buildModelFn(this.env, config)
-    const meteredModel: ResearchModelFn = async (role, messages) => {
-      const r = await baseModel(role, messages)
+    const meteredModel: ResearchModelFn = async (role, messages, tools) => {
+      const r = await baseModel(role, messages, tools)
       if (Number.isFinite(r.tokens) && r.tokens > 0) tokensAccum += r.tokens
       return r
     }
+    const mcp = buildResearchMcpRuntime(this.env, this.creator, runId)
 
     const deps: EngineDeps = {
       question,
@@ -206,6 +208,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       mode: this.mode,
       emit: (event) => this.emit(event),
       model: meteredModel,
+      ...(mcp ? { mcp } : {}),
       search: this.hooks?.search ?? ((query) => searchWeb({ query, env: this.env, runId, tenant })),
       fetchPage: this.hooks?.fetchPage ?? ((pageUrl) => fetchPage({ url: pageUrl, runId, tenant })),
       isCancelled: () => this.cancelled,

@@ -288,6 +288,131 @@ export async function handleAgentBranchesRoute(request: Request, env: Env, ctx?:
   return json({ defaultBranch, branches } satisfies AgentBranchesResponse, 200)
 }
 
+// A conservative git branch-name gate: [A-Za-z0-9._/-] segments, no leading
+// dash, no "//" or ".." (rejects refs git/GitHub would reject or traversal-ish).
+const BRANCH_NAME_RE = /^(?!-)(?!.*\/\/)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/
+
+/**
+ * POST /v1/agent/branches — create a new branch off an existing base so users
+ * can start a Build on a fresh branch from the composer.
+ *
+ * Body: { installationId, repo: "owner/repo", name, from? }. Session-authed +
+ * tenant-scoped (userControlsRepo) exactly like the GET. `from` defaults to the
+ * repo's default branch. 201 `{ name, created, from }`; 409 if it already exists.
+ */
+export async function handleAgentBranchCreateRoute(
+  request: Request,
+  env: Env,
+  ctx?: ExecutionContext,
+): Promise<Response> {
+  const authed = await requireSession(request, env, ctx)
+  if (!authed) return json({ error: "unauthenticated" }, 401)
+  if (!hasJsonContentType(request)) return json({ error: "content_type_must_be_application_json" }, 415)
+
+  let raw: unknown
+  try {
+    raw = await request.json()
+  } catch {
+    return json({ error: "bad json" }, 400)
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return json({ error: "body must be an object" }, 400)
+  const body = raw as Record<string, unknown>
+
+  const installationId = typeof body.installationId === "number" ? body.installationId : NaN
+  const repoRaw = typeof body.repo === "string" ? body.repo : null
+  const name = typeof body.name === "string" ? body.name.trim() : ""
+  const from = typeof body.from === "string" && body.from.trim() ? body.from.trim() : null
+  if (!Number.isSafeInteger(installationId) || installationId <= 0 || !repoRaw || !name) {
+    return json({ error: "installationId (int) + repo (owner/repo) + name required" }, 400)
+  }
+  if (!BRANCH_NAME_RE.test(name)) return json({ error: "invalid_branch_name" }, 400)
+  const repo = parseRepo(repoRaw)
+  if (!repo) return json({ error: "repo must be owner/repo" }, 400)
+
+  const tok = await sessionAccessToken(authed, env)
+  if (!tok.ok) return tok.response
+  const owns = await userControlsRepo(tok.token, installationId, repo.owner, repo.name)
+  if (!owns.ok) {
+    return owns.reason === "not_owned" ? json({ error: "forbidden" }, 403) : json({ error: "lookup_failed" }, 502)
+  }
+
+  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
+    console.error(JSON.stringify({ event: "agent-portal-github-app-unconfigured" }))
+    return json({ error: "misconfigured" }, 503)
+  }
+  let token: string
+  try {
+    token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId,
+    })
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "agent-portal-install-token-failed",
+        installationId,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return json({ error: "install_token_failed" }, 502)
+  }
+
+  const base = from ?? (await fetchDefaultBranch(token, repo.owner, repo.name))
+  if (!base) return json({ error: "no_base_branch" }, 502)
+  const baseSha = await fetchBranchSha(token, repo.owner, repo.name, base)
+  if (!baseSha) return json({ error: "base_not_found" }, 404)
+
+  const outcome = await createBranchRef(token, repo.owner, repo.name, name, baseSha)
+  if (outcome === "exists") return json({ error: "branch_exists" }, 409)
+  if (outcome === "error") return json({ error: "create_failed" }, 502)
+  return json({ name, created: true, from: base }, 201)
+}
+
+/** The head SHA of a branch, or null (soft-fail). Slashes are literal (GitHub
+ *  ref paths use them), so the validated name is passed unencoded. */
+async function fetchBranchSha(token: string, owner: string, name: string, branch: string): Promise<string | null> {
+  let res: Response
+  try {
+    res = await fetch(`https://api.github.com/repos/${owner}/${name}/git/ref/heads/${branch}`, {
+      headers: githubHeaders(token),
+    })
+  } catch {
+    return null
+  }
+  if (!res.ok) return null
+  try {
+    const b = (await res.json()) as { object?: { sha?: string } }
+    return typeof b.object?.sha === "string" ? b.object.sha : null
+  } catch {
+    return null
+  }
+}
+
+/** Create refs/heads/<branch> at <sha>. GitHub 422 = the ref already exists. */
+async function createBranchRef(
+  token: string,
+  owner: string,
+  name: string,
+  branch: string,
+  sha: string,
+): Promise<"created" | "exists" | "error"> {
+  let res: Response
+  try {
+    res = await fetch(`https://api.github.com/repos/${owner}/${name}/git/refs`, {
+      method: "POST",
+      headers: { ...githubHeaders(token), "content-type": "application/json" },
+      body: JSON.stringify({ ref: `refs/heads/${branch}`, sha }),
+    })
+  } catch {
+    return "error"
+  }
+  if (res.status === 201) return "created"
+  if (res.status === 422) return "exists"
+  return "error"
+}
+
 /** The repo's default branch, or null on any error (soft-fail). */
 async function fetchDefaultBranch(token: string, owner: string, name: string): Promise<string | null> {
   let res: Response
@@ -787,6 +912,9 @@ export async function tryHandleAgentPortalRoute(
 ): Promise<Response | null> {
   if (request.method === "GET" && url.pathname === "/v1/agent/branches") {
     return handleAgentBranchesRoute(request, env, ctx)
+  }
+  if (request.method === "POST" && url.pathname === "/v1/agent/branches") {
+    return handleAgentBranchCreateRoute(request, env, ctx)
   }
   if (request.method === "POST" && url.pathname === "/v1/agent/runs") {
     return handleAgentRunCreateRoute(request, env, ctx)

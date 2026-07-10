@@ -29,6 +29,16 @@ const CODEBASE_PATTERNS: RegExp[] = [
   /\bin\s+(our|my|this|the)\s+(code|code\s?base|repo|repository|project)\b/i,
   // "the repo | repository | codebase" — product-contextual: refers to the user's own
   /\bthe\s+(repo|repository|code\s?base)\b/i,
+  // An explicit "owner/repo" slug after a locating preposition — the caller named a
+  // specific repository ("in sigilix/sigilix", "within acme/api"). A strong,
+  // unambiguous codebase signal the possessive patterns above miss (the broken-moat
+  // repro: "in sigilix/sigilix, what other repos does it use" was going un-grounded).
+  /\b(?:in|within|inside|for|from|of)\s+[a-z0-9][\w.-]{0,38}\/[a-z0-9][\w.-]{0,99}\b/i,
+  // "does it | this | the repo … use | depend on | import | contain | call …" — a
+  // question about what an EXISTING thing (the caller's code) uses. Deliberately
+  // scoped to "does it/this/the repo …" so a GENERAL design question ("which service
+  // should we use for queues?") is NOT misrouted into grounding, per the note above.
+  /\bdoes\s+(?:it|this|that|the\s+(?:repo|repository|code\s?base|project|app|service))\s+(?:use|uses|depend|import|contain|include|have|call|need|require)/i,
 ]
 
 /**

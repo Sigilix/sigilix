@@ -3,11 +3,11 @@
 //   GET  /v1/org/:installationId/review-config[?repoId=owner/repo] → read stored config
 //   PUT  /v1/org/:installationId/review-config[?repoId=owner/repo] → validate + store
 //
-// The settings an admin sets here are validated against the `sigilix.json`
-// schema, stored server-side (KV — see review-config-store.ts), and merged UNDER
-// any committed `sigilix.json` at review time (config-as-code wins; see
-// mergeSigilixConfigLayers). This replaces the localStorage-only editor that
-// silently did nothing.
+// The settings an admin sets here are validated against a closed, recall-safe
+// dashboard schema, stored server-side (KV — see review-config-store.ts), and
+// merged UNDER any committed `sigilix.json` at review time (config-as-code wins;
+// see mergeSigilixConfigLayers). This replaces the localStorage-only editor
+// that silently did nothing without granting the dashboard suppression power.
 //
 // AUTH — SESSION-ONLY, admin-gated, PER-INSTALLATION (mirrors data-consent-route.ts
 // / org-seat-route.ts). A portal SESSION cookie is required; the caller must be an
@@ -26,7 +26,7 @@ import { decryptAccessToken } from "@/src/lib/auth-session"
 import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import { readDashboardReviewConfig, writeDashboardReviewConfig, repoScopeId } from "@/src/lib/review-config-store"
-import type { SigilixConfig } from "@/src/shared/domain/config/types"
+import type { DashboardReviewConfig } from "@/src/shared/domain/config/dashboard"
 import type { Env } from "@/src/shared/types/env"
 
 const MAX_BODY_BYTES = 65_536 // mirror the config-as-code 64KB cap
@@ -34,7 +34,7 @@ const MAX_BODY_BYTES = 65_536 // mirror the config-as-code 64KB cap
 export interface ReviewConfigResponse {
   installationId: number
   scope: { level: "org" } | { level: "repo"; repoId: string }
-  config: SigilixConfig
+  config: DashboardReviewConfig
 }
 
 function json(body: unknown, status: number): Response {

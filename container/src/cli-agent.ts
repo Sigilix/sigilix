@@ -7,29 +7,46 @@
  *
  * SECURITY: the full agent has a wide tool surface. On untrusted input the
  * container is the only boundary, so this renders a HARDENED OPENCODE_CONFIG
- * (deny bash/webfetch/websearch/subagents) + hardening env flags, and runs with
- * a per-run timeout. See the B2 design doc for the full threat model.
+ * (deny-by-default allow-list) + hardening env flags, and runs with a per-run
+ * timeout. See the B2 design doc for the full threat model.
  *
- * ⚠️ PERMISSION MODEL — Part-2 security gate (DO NOT expose to untrusted input
- * until resolved). This Part-1 foundation uses a deny-LIST config; the agent
- * only edits headless when run with opencode's `--dangerously-skip-permissions`,
- * which auto-approves every NOT-explicitly-denied tool — making the deny list
- * the sole boundary. That bypass is therefore OPT-IN (off by default; gated on
- * SIGILIX_AGENT_SKIP_PERMISSIONS), never unconditionally baked in. Part 2 MUST,
- * before any trusted OR untrusted use, against the real binary:
- *   (a) replace the bypass with a config-respecting non-interactive / deny-by-
- *       default (allow-LIST) permission mode, and add a negative test asserting a
- *       `bash` tool_use in the NDJSON stream is rejected by the runtime; and
- *   (b) enforce container network egress isolation (block the cloud metadata
- *       endpoint + every non-allowlisted host), since a config deny alone does
- *       not stop a compromised runtime from reaching the network.
+ * ⚠️ PERMISSION MODEL — the deny-by-default allow-list (Part-2 (a), DONE). The
+ * config allows ONLY the editing core (read/edit/write/grep/glob/list/todowrite)
+ * with a `"*": "deny"` catch-all; NO `--dangerously-skip-permissions`. Verified
+ * against the real binary (@sigilix/cli 1.17.14, Ollama Turbo, node:22-slim
+ * linux/amd64): allowed in-repo edits auto-approve headless with no hang;
+ * `{"*":"deny"}` blocks the same edit; a forced bash task never runs; and an
+ * out-of-repo write (`filepath:/tmp/…`) is ATTEMPTED by the model and REJECTED
+ * at runtime (NDJSON tool part `state.status:"error"`, file never created) —
+ * the observed execute-time negative. Runtime rejection is belt-and-suspenders
+ * in the fork: a `"*"`-denied tool is filtered out of the model's toolset
+ * (registry `whollyDisabled`) AND hard-fails `DeniedError` at execute
+ * (`permission.assert`). This is verified manually against a live model; it is
+ * NOT in this offline unit suite (which has no model) — the automated live
+ * runtime-rejection test belongs in a key-gated e2e (cf. the logic-recall
+ * evals), tracked as a follow-up.
+ *
+ * ⚠️ STILL OPEN before ANY untrusted use (keep engine flag-gated OFF):
+ *   (b) container network EGRESS isolation — block the cloud metadata endpoint
+ *       (169.254.169.254) + every non-allowlisted host. A config deny does not
+ *       stop a compromised runtime reaching the network. Genuinely hard on an
+ *       unprivileged CF Container (no NET_ADMIN/iptables) → likely a broker
+ *       re-arch. This is the primary remaining gate.
+ *   (c) secret-scoping — read/write are unrestricted within the run, and the
+ *       model.key sits in the 0600 OPENCODE_CONFIG the same-user agent can read.
+ *       So an attacker-controlled ticket can read a secret and WRITE it into a
+ *       repo file that surfaces in the PR diff — a network-free exfil path that
+ *       egress isolation does NOT close. Mitigations (broker the model call so
+ *       the agent never holds the key; scrub secrets from the diff pre-PR) land
+ *       with (b). Bounded today only by the engine being flag-gated off.
  *
  * TOKEN SAFETY: model.key and the grounding apiKey are written only to a
  * 0600 temp config (outside the repo) and the child env — NEVER logged.
  *
  * NOTE: ships dark (server.ts selects this only when packet.engine === "full",
- * which is gated to trusted callers). The compiled CLI binary + bundled grounding
- * plugin are provisioned into the image in a follow-up (B2 Part 2).
+ * which is gated to trusted callers). The CLI binary is now provisioned into the
+ * image (@sigilix/cli, SIGILIX_CLI_BIN); the grounding plugin is provisioned in a
+ * follow-up (until then GROUNDING_PLUGIN_PATH is empty and the plugin is omitted).
  */
 
 import { spawn, execFile } from "node:child_process";
@@ -52,10 +69,16 @@ export interface CliAgentArgs extends EditLoopArgs {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /** The CLI executable. Overridable for tests / image layout. */
-const CLI_BIN = process.env.SIGILIX_CLI_BIN ?? "opencode";
+const CLI_BIN = process.env.SIGILIX_CLI_BIN ?? "sigilix";
 
-/** Absolute path to the pre-bundled sigilix-grounding plugin in the image. */
-const GROUNDING_PLUGIN_PATH = process.env.SIGILIX_GROUNDING_PLUGIN ?? "/opt/sigilix/grounding/index.js";
+/**
+ * Absolute path to the pre-bundled sigilix-grounding plugin in the image. Empty
+ * until the plugin is provisioned — the Dockerfile ships the CLI binary but NOT
+ * yet the grounding plugin, so this defaults empty and buildOpencodeConfig omits
+ * the `plugin` entry rather than pointing opencode at a missing file (a crash).
+ * Set SIGILIX_GROUNDING_PLUGIN in the image once the plugin is provisioned.
+ */
+const GROUNDING_PLUGIN_PATH = process.env.SIGILIX_GROUNDING_PLUGIN ?? "";
 
 /** Synthetic provider id the rendered config registers for the packet's model. */
 const PROVIDER_ID = "runner";
@@ -66,29 +89,26 @@ const DEFAULT_BASE_URL = "https://openrouter.ai/api/v1";
 /** Cap on captured stdout (bytes) so a verbose run can't balloon memory. */
 const STDOUT_CAP = 5_000_000;
 
-/**
- * Whether to pass opencode's `--dangerously-skip-permissions` (auto-approve every
- * not-explicitly-denied tool). OFF by default — the full bypass is never baked in
- * unconditionally. Part 2 replaces this with a config-respecting deny-by-default
- * mode verified against the real binary (see the header security gate).
- */
-const SKIP_PERMISSIONS = process.env.SIGILIX_AGENT_SKIP_PERMISSIONS === "1";
-
 // ── Config / env / prompt builders (pure, unit-tested) ────────────────────────
 
 /**
  * Render the hardened OPENCODE_CONFIG for one run. Registers the packet's model
- * as an OpenAI-compatible provider and applies the deny-default ruleset.
+ * as an OpenAI-compatible provider and applies a DENY-BY-DEFAULT (allow-list)
+ * permission map — the container is the only boundary on untrusted input.
  *
- * Deny list (the container is the only boundary on untrusted input):
- *   bash      — no arbitrary shell (founder decision; a build/test allow-list
- *               is a later refinement against the real binary).
- *   webfetch / websearch — no outbound model-driven network.
- *   task      — no subagents.
- *   skill / lsp / plan_exit — peripheral surface.
- * The editing core (read/edit/write/grep/glob) is left at the default (allow);
- * note opencode collapses edit/write/apply_patch into the "edit" key, so it is
- * deliberately NOT denied. model.key is embedded — write to a 0600 file only.
+ * The `"*": "deny"` catch-all is the security posture AND a headless invariant:
+ * opencode's unmatched-tool default is "ask" (which, with no interactive prompter
+ * in `run`, would hang). Catching all with deny makes every tool resolve to
+ * allow|deny, never ask. Only the editing core is explicitly allowed; everything
+ * else (bash, webfetch, websearch, task/subagents, skill, lsp, …) falls through
+ * the catch-all to deny — filtered out of the model's toolset AND hard-rejected
+ * at execute-time (opencode `permission.assert` → DeniedError).
+ *
+ * Verified against the real binary (@sigilix/cli 1.17.14, Ollama Turbo): the
+ * allow-list runs headless without `--dangerously-skip-permissions` and without
+ * hanging (allowed edits auto-approve), `"*":"deny"` blocks the same edit, and a
+ * forced bash task never runs. Note opencode collapses edit/write/apply_patch
+ * into the "edit" key. model.key is embedded — write to a 0600 file only.
  */
 export function buildOpencodeConfig(
   model: CliAgentArgs["model"],
@@ -101,22 +121,29 @@ export function buildOpencodeConfig(
     provider: {
       [PROVIDER_ID]: {
         // npm tells opencode how to instantiate this otherwise-unknown provider id
-        // (OpenAI-compatible chat-completions). Verify against the real binary in Part 2.
+        // (OpenAI-compatible chat-completions).
         npm: "@ai-sdk/openai-compatible",
         name: "Sigilix agent-runner",
         options: { baseURL, apiKey: model.key },
         models: { [model.id]: { name: model.id } },
       },
     },
-    plugin: [groundingPluginPath],
+    // Only wire the grounding plugin when it is actually provisioned — pointing
+    // opencode at a missing plugin file would crash the run.
+    ...(groundingPluginPath ? { plugin: [groundingPluginPath] } : {}),
     permission: {
-      bash: "deny",
-      webfetch: "deny",
-      websearch: "deny",
-      task: "deny",
-      skill: "deny",
-      lsp: "deny",
-      plan_exit: "deny",
+      // Deny-by-default: catch-all first, then the editing core allow-list.
+      "*": "deny",
+      read: "allow",
+      edit: "allow",
+      write: "allow",
+      grep: "allow",
+      glob: "allow",
+      list: "allow",
+      todowrite: "allow",
+      // Keep edit/write inside the cloned repo — deny mutation of any directory
+      // outside the active Location (opencode gates out-of-dir writes on this).
+      external_directory: "deny",
     },
   };
 }
@@ -125,10 +152,15 @@ export function buildOpencodeConfig(
  * Build the child-process env: hardening flags + grounding wiring layered over a
  * base env. Secrets (grounding apiKey) are included but this object is NEVER
  * logged. OPENCODE_CONFIG is set by the caller (it points at the temp file).
+ *
+ * `groundingActive` gates the grounding secret: when the grounding plugin is not
+ * provisioned nothing consumes SIGILIX_*, so injecting the secret is dead wiring
+ * and a needless secret in an untrusted-input process's env (see header (c)).
  */
 export function buildCliEnv(
   args: Pick<CliAgentArgs, "sigilix">,
   base: NodeJS.ProcessEnv = process.env,
+  groundingActive = true,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...base,
@@ -139,9 +171,11 @@ export function buildCliEnv(
     OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
     OPENCODE_DISABLE_PROJECT_CONFIG: "1",
   };
-  if (args.sigilix?.endpoint) env.SIGILIX_ENDPOINT = args.sigilix.endpoint;
-  if (args.sigilix?.apiKey) env.SIGILIX_API_KEY = args.sigilix.apiKey;
-  if (args.sigilix?.repoSlug) env.SIGILIX_REPO_SLUG = args.sigilix.repoSlug;
+  if (groundingActive) {
+    if (args.sigilix?.endpoint) env.SIGILIX_ENDPOINT = args.sigilix.endpoint;
+    if (args.sigilix?.apiKey) env.SIGILIX_API_KEY = args.sigilix.apiKey;
+    if (args.sigilix?.repoSlug) env.SIGILIX_REPO_SLUG = args.sigilix.repoSlug;
+  }
   return env;
 }
 
@@ -181,28 +215,14 @@ export function parseCliEvents(stdout: string): { modelCalls: number; errored: b
 }
 
 /**
- * Build the `opencode run` argv. `--dangerously-skip-permissions` is included
- * ONLY when skipPermissions is true (opt-in) — otherwise opencode falls back to
- * its config-respecting permission gating (the rendered deny list / future
- * deny-by-default). Pure + exported so the default-off posture is unit-tested.
+ * Build the `opencode run` argv. Deliberately NEVER passes
+ * `--dangerously-skip-permissions`: the run relies entirely on the config's
+ * deny-by-default allow-list (which auto-approves the allowed editing core
+ * headless). No bypass exists, so the catch-all deny cannot be overridden by an
+ * env flip. Pure + exported so the no-bypass posture is unit-tested.
  */
-export function buildCliArgs(
-  model: CliAgentArgs["model"],
-  dir: string,
-  prompt: string,
-  skipPermissions: boolean,
-): string[] {
-  return [
-    "run",
-    prompt,
-    "-m",
-    `${PROVIDER_ID}/${model.id}`,
-    ...(skipPermissions ? ["--dangerously-skip-permissions"] : []),
-    "--format",
-    "json",
-    "--dir",
-    dir,
-  ];
+export function buildCliArgs(model: CliAgentArgs["model"], dir: string, prompt: string): string[] {
+  return ["run", prompt, "-m", `${PROVIDER_ID}/${model.id}`, "--format", "json", "--dir", dir];
 }
 
 // ── Subprocess + git helpers ──────────────────────────────────────────────────
@@ -287,10 +307,12 @@ export async function runCliAgent(args: CliAgentArgs): Promise<EditLoopResult> {
       mode: 0o600,
     });
 
-    const env = buildCliEnv(args);
+    // Only carry the grounding secret into the child env when the plugin that
+    // consumes it is actually provisioned (see header (c) + buildCliEnv).
+    const env = buildCliEnv(args, process.env, GROUNDING_PLUGIN_PATH !== "");
     env.OPENCODE_CONFIG = configPath;
 
-    const cliArgs = buildCliArgs(model, dir, buildPrompt(ticket, grounding), SKIP_PERMISSIONS);
+    const cliArgs = buildCliArgs(model, dir, buildPrompt(ticket, grounding));
 
     // CAPS GAP (Part 2): unlike the minimal loop, this enforces only caps.timeoutMs
     // (via the SIGKILL below). caps.maxModelCalls / maxTokens are NOT yet enforced and

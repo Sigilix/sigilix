@@ -65,16 +65,27 @@ function fakeChild(stdout: string, code: number) {
 // ── buildOpencodeConfig ───────────────────────────────────────────────────────
 
 describe("buildOpencodeConfig", () => {
-  it("denies bash + the wide tool surface, keeps the editing core allowed", () => {
+  it("is deny-by-default: a '*' catch-all deny with only the editing core allowed", () => {
     const cfg = buildOpencodeConfig(MODEL, "/opt/sigilix/grounding/index.js");
     const perm = cfg.permission as Record<string, string>;
-    expect(perm.bash).toBe("deny");
-    expect(perm.webfetch).toBe("deny");
-    expect(perm.websearch).toBe("deny");
-    expect(perm.task).toBe("deny");
-    // The editing core must NOT be denied (opencode collapses edit/write/apply_patch).
-    expect(perm.edit).toBeUndefined();
-    expect(perm.read).toBeUndefined();
+    // The catch-all is the security posture AND the headless invariant (no "ask").
+    expect(perm["*"]).toBe("deny");
+    // The editing core is explicitly allowed (opencode collapses edit/write/apply_patch).
+    for (const allowed of ["read", "edit", "write", "grep", "glob", "list", "todowrite"]) {
+      expect(perm[allowed]).toBe("allow");
+    }
+    // Out-of-repo mutation is explicitly denied even though edit/write are allowed.
+    expect(perm.external_directory).toBe("deny");
+    // Nothing else is allowed. A dangerous tool must be strictly absent — not
+    // even "ask" (which would hang a headless run, the very failure the catch-all
+    // exists to prevent). toBeUndefined() catches an accidental allow OR ask.
+    for (const denied of ["bash", "webfetch", "websearch", "task", "skill", "lsp", "plan_exit"]) {
+      expect(perm[denied]).toBeUndefined();
+    }
+    // Lock the allow-list to EXACTLY these keys — adding a new allow must fail here.
+    expect(new Set(Object.keys(perm))).toEqual(
+      new Set(["*", "read", "edit", "write", "grep", "glob", "list", "todowrite", "external_directory"]),
+    );
   });
 
   it("wires the packet model as an OpenAI-compatible provider", () => {
@@ -84,6 +95,11 @@ describe("buildOpencodeConfig", () => {
     expect(provider.options.baseURL).toBe("https://ollama.com/v1");
     expect(provider.options.apiKey).toBe("sk-secret-key");
     expect(cfg.plugin).toEqual(["/p/index.js"]);
+  });
+
+  it("omits the plugin entry when the grounding plugin is not provisioned", () => {
+    const cfg = buildOpencodeConfig(MODEL, "");
+    expect(cfg.plugin).toBeUndefined();
   });
 
   it("defaults baseURL to OpenRouter when the model has none", () => {
@@ -116,6 +132,13 @@ describe("buildCliEnv", () => {
     expect(without.SIGILIX_API_KEY).toBeUndefined();
   });
 
+  it("omits the grounding secret when grounding is inactive (plugin unprovisioned)", () => {
+    const env = buildCliEnv({ sigilix: { endpoint: "https://w.dev", apiKey: "sk-g", repoSlug: "o/r" } }, {}, false);
+    expect(env.SIGILIX_ENDPOINT).toBeUndefined();
+    expect(env.SIGILIX_API_KEY).toBeUndefined();
+    expect(env.SIGILIX_REPO_SLUG).toBeUndefined();
+  });
+
   it("preserves the base env", () => {
     const env = buildCliEnv({}, { PATH: "/usr/bin", HOME: "/root" });
     expect(env.PATH).toBe("/usr/bin");
@@ -143,15 +166,10 @@ describe("buildPrompt", () => {
 // ── buildCliArgs ──────────────────────────────────────────────────────────────
 
 describe("buildCliArgs", () => {
-  it("does NOT include --dangerously-skip-permissions by default (config-gated)", () => {
-    const args = buildCliArgs(MODEL, "/tmp/clone", "prompt", false);
+  it("NEVER includes --dangerously-skip-permissions (no bypass exists)", () => {
+    const args = buildCliArgs(MODEL, "/tmp/clone", "prompt");
     expect(args).not.toContain("--dangerously-skip-permissions");
     expect(args).toEqual(["run", "prompt", "-m", "runner/glm-5.2:cloud", "--format", "json", "--dir", "/tmp/clone"]);
-  });
-
-  it("includes the bypass only when explicitly opted in", () => {
-    const args = buildCliArgs(MODEL, "/tmp/clone", "prompt", true);
-    expect(args).toContain("--dangerously-skip-permissions");
   });
 });
 

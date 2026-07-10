@@ -16,6 +16,13 @@ import type { Env } from "@/src/shared/types/env"
 import { normalizeEnv } from "@/src/shared/util/normalize-env"
 
 const RUN_RECORD_KEY = "run-record"
+const RUN_EVENTS_KEY = "run-events"
+const RUN_EVENTS_SEQ_KEY = "run-events-seq"
+const RUN_EVENT_SECRET_KEY = "run-event-secret"
+// Cap the live event log so a runaway run can't grow DO storage unbounded. The
+// diff pane only needs the latest per-file state, so dropping the oldest events
+// past the cap is safe (a full run edits far fewer than this many files).
+const MAX_RUN_EVENTS = 1000
 
 /**
  * Durable run-state record stored in the DO's SQLite storage.
@@ -27,6 +34,30 @@ export interface AgentRunRecord {
   status: "started" | "opened" | "no-change" | "error"
   prUrl?: string
   error?: string
+}
+
+/**
+ * A live event emitted BY THE CONTAINER as a run works, for the portal's live
+ * diff pane. `seq` is a monotonic per-run cursor the portal polls against.
+ * Today only "file-edit" (a unified-diff patch for one file); the union is left
+ * open for later event kinds (commands, status).
+ */
+export interface RunEvent {
+  seq: number
+  ts: number
+  type: "file-edit"
+  path: string
+  patch: string
+  additions: number
+  deletions: number
+}
+
+/** Timing-safe string compare (avoids leaking the secret via early-return). */
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return diff === 0
 }
 
 /**
@@ -77,5 +108,45 @@ export class AgentRunnerContainer extends Container<Env> {
    */
   async setRunRecord(r: AgentRunRecord): Promise<void> {
     await this.ctx.storage.put(RUN_RECORD_KEY, r)
+  }
+
+  // -------------------------------------------------------------------------
+  // Live event log — the container streams file-edit events here as it works
+  // (authenticated by a per-run secret the Worker minted at dispatch), and the
+  // portal polls them via the Worker's session-authed events route. Kept apart
+  // from the run record so streaming never races the terminal-status write.
+  // -------------------------------------------------------------------------
+
+  /** Store the per-run ingest secret (set by the Worker before dispatch). */
+  async setRunEventSecret(secret: string): Promise<void> {
+    await this.ctx.storage.put(RUN_EVENT_SECRET_KEY, secret)
+  }
+
+  /**
+   * Append a container-emitted event IF the presented secret matches the one
+   * stored for this run. The secret never leaves the DO — the ingest route hands
+   * it in and only learns ok/rejected. Returns the assigned `seq` on success.
+   */
+  async appendRunEventAuthed(
+    secret: string,
+    event: Omit<RunEvent, "seq">,
+  ): Promise<{ ok: true; seq: number } | { ok: false }> {
+    const stored = await this.ctx.storage.get<string>(RUN_EVENT_SECRET_KEY)
+    if (!stored || !safeEqual(stored, secret)) return { ok: false }
+    const seq = ((await this.ctx.storage.get<number>(RUN_EVENTS_SEQ_KEY)) ?? 0) + 1
+    const events = (await this.ctx.storage.get<RunEvent[]>(RUN_EVENTS_KEY)) ?? []
+    events.push({ ...event, seq })
+    // Drop the oldest beyond the cap (the diff pane keeps latest-per-file state).
+    const trimmed = events.length > MAX_RUN_EVENTS ? events.slice(events.length - MAX_RUN_EVENTS) : events
+    await this.ctx.storage.put(RUN_EVENTS_SEQ_KEY, seq)
+    await this.ctx.storage.put(RUN_EVENTS_KEY, trimmed)
+    return { ok: true, seq }
+  }
+
+  /** Read events with `seq > afterSeq`, plus the latest cursor for the next poll. */
+  async getRunEvents(afterSeq: number): Promise<{ events: RunEvent[]; cursor: number }> {
+    const events = (await this.ctx.storage.get<RunEvent[]>(RUN_EVENTS_KEY)) ?? []
+    const cursor = (await this.ctx.storage.get<number>(RUN_EVENTS_SEQ_KEY)) ?? 0
+    return { events: events.filter((e) => e.seq > afterSeq), cursor }
   }
 }

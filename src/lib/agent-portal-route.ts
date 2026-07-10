@@ -36,7 +36,12 @@ import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { listGithubUserInstallationRepos } from "@/src/lib/github-user-repo-scope"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
-import { dispatchAgentRun, getAgentRunStatus } from "@/src/lib/agent-runner/dispatch"
+import {
+  appendAgentRunEvent,
+  dispatchAgentRun,
+  getAgentRunEvents,
+  getAgentRunStatus,
+} from "@/src/lib/agent-runner/dispatch"
 import { resolveAgentRunnerMode } from "@/src/lib/agent-runner/mode"
 import type { Env } from "@/src/shared/types/env"
 
@@ -365,6 +370,10 @@ export interface AgentRunDiffResponse {
 
 const MAX_DIFF_FILES = 300
 const MAX_DIFF_PAGES = 10
+// A run's live-event ingest is machine-only: runIds are UUIDs, and a single
+// file-edit patch is bounded so a secret-holding container can't bloat the DO.
+const AGENT_RUNID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const MAX_EVENT_PATCH_BYTES = 200_000
 
 /** A separate default-off portal gate keeps the already-live global runner private. */
 function isPortalAgentRunnerEnabled(env: Env): boolean {
@@ -676,12 +685,96 @@ export async function handleAgentRunDiffRoute(
   )
 }
 
+/**
+ * GET /v1/agent/runs/:runId/events?after=<seq> — the run's live file-edit
+ * events with seq > after, for the portal's diff pane to stream a run's changes
+ * as they happen. SAME tenant/IDOR guard as the status + diff routes.
+ */
+export async function handleAgentRunEventsRoute(
+  request: Request,
+  env: Env,
+  runId: string,
+  ctx?: ExecutionContext,
+): Promise<Response> {
+  const authed = await requireSession(request, env, ctx)
+  if (!authed) return json({ error: "unauthenticated" }, 401)
+  if (!runId) return json({ error: "runId required" }, 400)
+
+  const owner = await readAgentRunOwner(env, runId)
+  if (owner === null) return json({ error: "not_found" }, 404)
+  if (authed.record.githubUserId !== owner.githubUserId) return json({ error: "not_found" }, 404)
+
+  const tok = await sessionAccessToken(authed, env)
+  if (!tok.ok) return tok.response
+
+  const owns = await userControlsRepo(tok.token, owner.installationId, owner.owner, owner.repo)
+  if (!owns.ok) {
+    return owns.reason === "not_owned" ? json({ error: "not_found" }, 404) : json({ error: "lookup_failed" }, 502)
+  }
+
+  const afterRaw = new URL(request.url).searchParams.get("after")
+  const after = afterRaw !== null && /^\d+$/.test(afterRaw) ? Number(afterRaw) : 0
+  const { events, cursor } = await getAgentRunEvents(env, runId, after)
+  return json({ runId, events, cursor }, 200)
+}
+
+/**
+ * POST /internal/agent-runs/:runId/events — the runner CONTAINER streams a
+ * file-edit event here as it works. MACHINE-authed by the per-run secret the
+ * Worker minted at dispatch and stored in the run DO (header
+ * `x-sigilix-run-secret`); there is NO session and NO portal CORS — it's a
+ * server-to-server call from inside the container. A bad/absent secret, an
+ * unknown run, or a malformed body all 403/400 without revealing which.
+ */
+export async function handleAgentEventIngestRoute(request: Request, env: Env, runId: string): Promise<Response> {
+  // Reject non-UUID runIds BEFORE any DO touch: runIds are crypto.randomUUID(),
+  // so a shape check cheaply blocks arbitrary-runId DO-instantiation fan-out from
+  // an unauthenticated caller (amplification hardening) without a storage hit.
+  if (!AGENT_RUNID_RE.test(runId)) return json({ error: "bad_request" }, 400)
+  const secret = request.headers.get("x-sigilix-run-secret")
+  if (!secret) return json({ error: "forbidden" }, 403)
+  if (!hasJsonContentType(request)) return json({ error: "content_type_must_be_application_json" }, 415)
+
+  let raw: unknown
+  try {
+    raw = await request.json()
+  } catch {
+    return json({ error: "bad json" }, 400)
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return json({ error: "bad_request" }, 400)
+  const body = raw as Record<string, unknown>
+  if (
+    body.type !== "file-edit" ||
+    typeof body.path !== "string" ||
+    body.path === "" ||
+    typeof body.patch !== "string" ||
+    body.patch.length > MAX_EVENT_PATCH_BYTES ||
+    typeof body.additions !== "number" ||
+    typeof body.deletions !== "number"
+  ) {
+    return json({ error: "bad_request" }, 400)
+  }
+
+  const result = await appendAgentRunEvent(env, runId, secret, {
+    ts: Date.now(),
+    type: "file-edit",
+    path: body.path,
+    patch: body.patch,
+    additions: body.additions,
+    deletions: body.deletions,
+  })
+  // A secret mismatch (or unknown run) is indistinguishable — always 403.
+  if (!result.ok) return json({ error: "forbidden" }, 403)
+  return json({ ok: true, seq: result.seq }, 202)
+}
+
 export function isAgentPortalPath(pathname: string): boolean {
   return (
     pathname === "/v1/agent/branches" ||
     pathname === "/v1/agent/runs" ||
     /^\/v1\/agent\/runs\/[^/]+$/.test(pathname) ||
-    /^\/v1\/agent\/runs\/[^/]+\/diff$/.test(pathname)
+    /^\/v1\/agent\/runs\/[^/]+\/diff$/.test(pathname) ||
+    /^\/v1\/agent\/runs\/[^/]+\/events$/.test(pathname)
   )
 }
 
@@ -708,6 +801,16 @@ export async function tryHandleAgentPortalRoute(
     }
     return handleAgentRunDiffRoute(request, env, runId, ctx)
   }
+  const eventsMatch = /^\/v1\/agent\/runs\/([^/]+)\/events$/.exec(url.pathname)
+  if (request.method === "GET" && eventsMatch) {
+    let runId: string
+    try {
+      runId = decodeURIComponent(eventsMatch[1]!)
+    } catch {
+      return json({ error: "bad runId" }, 400)
+    }
+    return handleAgentRunEventsRoute(request, env, runId, ctx)
+  }
   const statusMatch = /^\/v1\/agent\/runs\/([^/]+)$/.exec(url.pathname)
   if (request.method === "GET" && statusMatch) {
     let runId: string
@@ -719,4 +822,22 @@ export async function tryHandleAgentPortalRoute(
     return handleAgentRunStatusRoute(request, env, runId, ctx)
   }
   return isAgentPortalPath(url.pathname) ? json({ error: "method_not_allowed" }, 405) : null
+}
+
+/**
+ * The container's live-event ingest — a MACHINE route (per-run secret, no
+ * session, no CORS), dispatched separately from the session-authed portal
+ * routes above. Returns null when the path/method doesn't match.
+ */
+export function tryHandleAgentEventIngestRoute(request: Request, env: Env, url: URL): Promise<Response> | null {
+  const match = /^\/internal\/agent-runs\/([^/]+)\/events$/.exec(url.pathname)
+  if (!match) return null
+  if (request.method !== "POST") return Promise.resolve(json({ error: "method_not_allowed" }, 405))
+  let runId: string
+  try {
+    runId = decodeURIComponent(match[1]!)
+  } catch {
+    return Promise.resolve(json({ error: "bad runId" }, 400))
+  }
+  return handleAgentEventIngestRoute(request, env, runId)
 }

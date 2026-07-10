@@ -31,7 +31,11 @@ import {
 } from "@/src/lib/recall-alarm"
 import { handleValidationMetricsRoute } from "@/src/lib/metrics-validation-route"
 import { handleReviewApiRoute } from "@/src/lib/api-review-route"
-import { isAgentPortalPath, tryHandleAgentPortalRoute } from "@/src/lib/agent-portal-route"
+import {
+  isAgentPortalPath,
+  tryHandleAgentEventIngestRoute,
+  tryHandleAgentPortalRoute,
+} from "@/src/lib/agent-portal-route"
 import { handleCliGatewayRoutes } from "@/src/lib/boreas-gateway/gateway-routes"
 import { handleJwksRoute, handleOpenidConfigurationRoute } from "@/src/lib/boreas-gateway/well-known-routes"
 import { handleAgentContextRoute } from "@/src/lib/api-context-route"
@@ -499,6 +503,10 @@ export default {
     if (request.method === "POST" && url.pathname === "/v1/review") {
       return withPortalCors(request, await handleReviewApiRoute(request, env, ctx), env)
     }
+    // The runner container's live-event ingest — machine-authed (per-run secret),
+    // no session, no CORS; must be handled before the session/CORS blocks below.
+    const eventIngestResponse = tryHandleAgentEventIngestRoute(request, env, url)
+    if (eventIngestResponse) return eventIngestResponse
     const agentPortalResponse = await tryHandleAgentPortalRoute(request, env, ctx, url)
     if (agentPortalResponse) return withPortalCors(request, agentPortalResponse, env)
 

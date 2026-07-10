@@ -187,6 +187,18 @@ describe("LinearTokenBroker.install + getValidToken (no refresh)", () => {
     expect(result).toEqual({ ok: true, accessToken: "tok-1" })
     expect(fetchSpy).not.toHaveBeenCalled()
   })
+
+  it("rejects tenant metadata on the deprecated singleton install seam", async () => {
+    const { ctx, store } = makeDoState()
+    const broker = new LinearTokenBroker(ctx, makeEnv())
+
+    await expect(
+      broker.install(
+        freshRecord({ organizationId: "org-a", installationId: 11, actorType: "app", appUserId: "app-a" }),
+      ),
+    ).resolves.toEqual({ ok: false, reason: "tenant-metadata-present" })
+    expect(storedRecord(store)).toBeUndefined()
+  })
 })
 
 describe("LinearTokenBroker.uninstallTenant", () => {
@@ -251,7 +263,8 @@ describe("LinearTokenBroker.installTenant", () => {
   it("returns a structured tenant-conflict result when the shard holds another tenant", async () => {
     const { ctx } = makeDoState()
     const broker = new LinearTokenBroker(ctx, makeEnv())
-    await broker.install(freshRecord({ organizationId: "org-b", installationId: 22, actorType: "app" }))
+    const otherScope = { organizationId: "org-b", installationId: 22 }
+    await broker.installTenant(freshRecord({ ...otherScope, actorType: "app" }), otherScope)
 
     await expect(broker.installTenant(freshRecord({ ...scope, actorType: "app" }), scope)).resolves.toEqual({
       ok: false,
@@ -385,6 +398,31 @@ describe("LinearTokenBroker tenant install staging", () => {
     await broker.alarm()
     expect(store.has(PENDING_TOKEN_KEY)).toBe(false)
     expect(storedRecord(store)?.accessToken).toBe("tok-old")
+  })
+
+  it("emits a structured alert when alarm reconciliation cannot roll back the pending generation", async () => {
+    const { ctx, store } = makeDoState()
+    const broker = new LinearTokenBroker(ctx, makeEnv())
+    await broker.installTenant(tenantRecord("tok-old"), scope)
+    await broker.stageTenantInstall(tenantRecord("tok-new"), scope, "generation-a")
+    const pending = store.get(PENDING_TOKEN_KEY) as {
+      generation: string
+      record: LinearAgentTokenRecord
+      reconcileAt: number
+      expiresAt: number
+    }
+    store.set(PENDING_TOKEN_KEY, { ...pending, reconcileAt: 0, expiresAt: 0 })
+    vi.spyOn(broker, "rollbackTenantInstall").mockResolvedValue({
+      ok: false,
+      reason: "generation-mismatch",
+    })
+    const error = vi.spyOn(console, "error")
+
+    await broker.alarm()
+
+    expect(error.mock.calls.flat().map(String).join("\n")).toContain("linear-token-broker-install-reconcile-failed")
+    expect(error.mock.calls.flat().map(String).join("\n")).toContain('"action":"rollback"')
+    expect(error.mock.calls.flat().map(String).join("\n")).toContain('"reason":"generation-mismatch"')
   })
 })
 

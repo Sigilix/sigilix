@@ -245,7 +245,8 @@ export async function installAgentTokenToBroker(
   if (tenantRecord === undefined) {
     const ns = env.LINEAR_TOKEN_BROKER as unknown as DurableObjectNamespace<LinearTokenBroker>
     try {
-      await ns.get(ns.idFromName("linear-agent")).install(scopeOrLegacyRecord as LinearAgentTokenRecord)
+      const result = await ns.get(ns.idFromName("linear-agent")).install(scopeOrLegacyRecord as LinearAgentTokenRecord)
+      if (!result.ok) return false
       cachedReadOnlyTokens.delete("__legacy_singleton__")
       return true
     } catch {

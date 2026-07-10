@@ -95,6 +95,8 @@ export type BrokerTenantStageResult =
   | { ok: true }
   | { ok: false; reason: "tenant-conflict" | "install-in-progress" | "invalid-generation" }
 
+export type BrokerLegacyInstallResult = { ok: true } | { ok: false; reason: "tenant-metadata-present" }
+
 export type BrokerTenantInstallResult = { ok: true } | { ok: false; reason: "tenant-conflict" }
 
 export type BrokerTenantCommitResult =
@@ -138,7 +140,22 @@ export class LinearTokenBroker extends DurableObject<Env> {
    * proactive-refresh alarm at expiresAt - REFRESH_BUFFER_MS. The record becomes
    * the broker's source of truth in DO storage.
    */
-  async install(record: LinearAgentTokenRecord): Promise<{ ok: true }> {
+  /** @deprecated Pre-SIG-242 singleton bootstrap. Tenant-bearing records must
+   * use installTenant on their organization shard. */
+  async install(record: LinearAgentTokenRecord): Promise<BrokerLegacyInstallResult> {
+    if (
+      record.organizationId !== undefined ||
+      record.installationId !== undefined ||
+      record.actorType !== undefined ||
+      record.appUserId !== undefined ||
+      record.installGeneration !== undefined
+    ) {
+      return { ok: false, reason: "tenant-metadata-present" }
+    }
+    return this.persistInstall(record)
+  }
+
+  private async persistInstall(record: LinearAgentTokenRecord): Promise<{ ok: true }> {
     await this.ctx.storage.transaction(async (txn) => {
       await txn.put(TOKEN_KEY, record)
       await this.scheduleNextAlarmInTransaction(txn)
@@ -166,7 +183,7 @@ export class LinearTokenBroker extends DurableObject<Env> {
     if (existing && !this.matchesTenant(existing, expected)) {
       return { ok: false, reason: "tenant-conflict" }
     }
-    return this.install(record)
+    return this.persistInstall(record)
   }
 
   /** Stage a tenant credential without replacing the current active token. The
@@ -570,11 +587,13 @@ export class LinearTokenBroker extends DurableObject<Env> {
       installationId: pending.record.installationId ?? 0,
     }
     if (!this.matchesTenant(pending.record, expected)) {
-      await this.rollbackTenantInstall(expected, pending.generation)
+      const result = await this.rollbackTenantInstall(expected, pending.generation)
+      this.reportReconcileResult("rollback", result, expected)
       return
     }
     if (pending.expiresAt <= now) {
-      await this.rollbackTenantInstall(expected, pending.generation)
+      const result = await this.rollbackTenantInstall(expected, pending.generation)
+      this.reportReconcileResult("rollback", result, expected)
       return
     }
 
@@ -585,9 +604,11 @@ export class LinearTokenBroker extends DurableObject<Env> {
         connection.organizationId === expected.organizationId &&
         connection.installationId === expected.installationId
       ) {
-        await this.commitTenantInstall(expected, pending.generation)
+        const result = await this.commitTenantInstall(expected, pending.generation)
+        this.reportReconcileResult("commit", result, expected)
       } else {
-        await this.rollbackTenantInstall(expected, pending.generation)
+        const result = await this.rollbackTenantInstall(expected, pending.generation)
+        this.reportReconcileResult("rollback", result, expected)
       }
     } catch {
       await this.ctx.storage.transaction(async (txn) => {
@@ -604,6 +625,20 @@ export class LinearTokenBroker extends DurableObject<Env> {
         installationId: expected.installationId,
       })
     }
+  }
+
+  private reportReconcileResult(
+    action: "commit" | "rollback",
+    result: BrokerTenantCommitResult | BrokerTenantRollbackResult,
+    expected: BrokerTenantScope,
+  ): void {
+    if (result.ok) return
+    alert("linear-token-broker-install-reconcile-failed", {
+      action,
+      reason: result.reason,
+      organizationId: expected.organizationId,
+      installationId: expected.installationId,
+    })
   }
 
   private activeRefreshDueAt(record: LinearAgentTokenRecord | null): number | null {

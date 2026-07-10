@@ -18,7 +18,11 @@ import {
   __resetBrokerClientCacheForTests,
   type LinearTokenBrokerEnv,
 } from "@/src/lib/linear-token-broker-client"
-import type { BrokerTenantInstallResult, BrokerTokenResult } from "@/src/do/linear-token-broker"
+import type {
+  BrokerLegacyInstallResult,
+  BrokerTenantInstallResult,
+  BrokerTokenResult,
+} from "@/src/do/linear-token-broker"
 import type { LinearAgentTokenRecord } from "@/src/lib/linear-agent-oauth"
 
 type Call = { method: string; args: unknown[] }
@@ -28,7 +32,7 @@ const NOT_INSTALLED: BrokerTokenResult = { ok: false, reason: "not-installed" }
 function makeEnv(stubMethods: {
   getValidToken?: (args: { readOnly: boolean }) => Promise<BrokerTokenResult>
   forceRefresh?: () => Promise<BrokerTokenResult>
-  install?: (record: LinearAgentTokenRecord) => Promise<{ ok: true }>
+  install?: (record: LinearAgentTokenRecord) => Promise<BrokerLegacyInstallResult>
   installTenant?: (
     record: LinearAgentTokenRecord,
     scope: { organizationId: string; installationId: number },
@@ -319,6 +323,14 @@ describe("installAgentTokenToBroker", () => {
         throw new Error("DO unreachable")
       },
     })
+    await expect(installAgentTokenToBroker(env, record)).resolves.toBe(false)
+  })
+
+  it("maps a singleton install rejection to false", async () => {
+    const { env } = makeEnv({
+      install: async () => ({ ok: false, reason: "tenant-metadata-present" }),
+    })
+
     await expect(installAgentTokenToBroker(env, record)).resolves.toBe(false)
   })
 

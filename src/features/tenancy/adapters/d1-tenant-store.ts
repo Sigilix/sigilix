@@ -312,7 +312,7 @@ export async function lookupRepoByFullName(
   const db = env.SIGILIX_PLATFORM_DB
   try {
     const row = await db
-      .prepare("SELECT repo_id, installation_id FROM repo WHERE full_name = ?")
+      .prepare("SELECT repo_id, installation_id FROM repo WHERE lower(full_name) = lower(?)")
       .bind(fullName)
       .first<{ repo_id: number; installation_id: number }>()
     if (row == null) return null
@@ -326,6 +326,35 @@ export async function lookupRepoByFullName(
       }),
     )
     return null
+  }
+}
+
+/**
+ * Every registered repo for one positive installation id, sorted
+ * case-insensitively for deterministic callers. This is an authorization input,
+ * so an absent binding, invalid id, or D1 fault fails closed to an empty list.
+ */
+export async function listRepoFullNamesForInstallation(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  installationId: number,
+): Promise<string[]> {
+  if (!env.SIGILIX_PLATFORM_DB || !Number.isInteger(installationId) || installationId <= 0) return []
+  try {
+    const { results } = await env.SIGILIX_PLATFORM_DB.prepare(
+      "SELECT full_name FROM repo WHERE installation_id = ? ORDER BY lower(full_name), full_name",
+    )
+      .bind(installationId)
+      .all<{ full_name: string }>()
+    return (results ?? []).flatMap((row) => (typeof row.full_name === "string" && row.full_name ? [row.full_name] : []))
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "d1-tenant-store-list-repos-failed",
+        installationId,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return []
   }
 }
 

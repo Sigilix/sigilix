@@ -1,13 +1,44 @@
 import { describe, it, expect } from "vitest"
-import { isCodebaseQuestion, ownersForInstallation, resolveRepoTarget } from "./repo-grounding"
+import { readFileSync } from "node:fs"
+import { isCodebaseQuestion, resolveRepoTarget } from "./repo-grounding"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import type { Env } from "@/src/shared/types/env"
 
-// A minimal KV fake exposing just the `list` the manifest scan uses.
-function fakeKv(manifestNamespaces: string[]): KVNamespace {
+const MIGRATION_0001 = readFileSync(
+  new URL("../../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url),
+  "utf8",
+)
+
+// A minimal KV fake exposing the manifest scan + per-installation default reads.
+function fakeKv(manifestNamespaces: string[], values: Record<string, string> = {}): KVNamespace {
   const keys = manifestNamespaces.map((ns) => ({ name: `repo-index-manifest:${ns}` }))
+  const store = new Map(Object.entries(values))
   return {
-    list: async () => ({ keys, list_complete: true, cacheStatus: null }),
+    get: async (key: string) => store.get(key) ?? null,
+    list: async (opts?: { prefix?: string }) => ({
+      keys: keys.filter((key) => !opts?.prefix || key.name.startsWith(opts.prefix)),
+      list_complete: true,
+      cacheStatus: null,
+    }),
   } as unknown as KVNamespace
+}
+
+async function repoDb(rows: Array<{ repoId: number; installationId: number; fullName: string }>): Promise<D1Database> {
+  const db = makeD1()
+  await db.exec(MIGRATION_0001)
+  for (const installationId of new Set(rows.map((row) => row.installationId))) {
+    await db
+      .prepare("INSERT INTO tenant (installation_id, created_at, updated_at) VALUES (?, 't', 't')")
+      .bind(installationId)
+      .run()
+  }
+  for (const row of rows) {
+    await db
+      .prepare("INSERT INTO repo (repo_id, installation_id, full_name, updated_at) VALUES (?, ?, ?, 't')")
+      .bind(row.repoId, row.installationId, row.fullName)
+      .run()
+  }
+  return db
 }
 
 function envWith(over: Partial<Env>): Env {
@@ -27,6 +58,12 @@ describe("isCodebaseQuestion", () => {
     }
   })
 
+  it("matches a narrow descriptive implementation-location question without an ownership phrase", () => {
+    expect(
+      isCodebaseQuestion("Where does the per-tier rate-limit cap get computed, and what are the multipliers?"),
+    ).toBe(true)
+  })
+
   it("does NOT match general/external questions (no ownership cue → web research)", () => {
     for (const q of [
       "what is the latest stable version of Node.js?",
@@ -36,6 +73,12 @@ describe("isCodebaseQuestion", () => {
       "which service should we use for queues?",
       "where should rate limiting be implemented?",
       "which file format is best for config?",
+      "Where does GDP get computed?",
+      "How are tax multipliers computed?",
+      "Where does OpenAI document its external rate limits?",
+      "Where does OpenAI compute its external API rate-limit cap?",
+      "Where does the rate limit get computed in the GitHub API?",
+      "Where is the auth handler implemented in the Express framework?",
       "",
     ]) {
       expect(isCodebaseQuestion(q)).toBe(false)
@@ -43,46 +86,37 @@ describe("isCodebaseQuestion", () => {
   })
 })
 
-describe("ownersForInstallation", () => {
-  it("returns owners (from bare + owner/repo keys) whose id matches", () => {
-    const map = JSON.stringify({ acme: 111, "acme/widgets": 111, other: 222, "foo/bar": "111" })
-    expect(ownersForInstallation(map, 111).sort()).toEqual(["acme", "foo"])
-    expect(ownersForInstallation(map, 222)).toEqual(["other"])
-  })
-
-  it("soft-fails to [] on bad/absent JSON or a non-positive id", () => {
-    expect(ownersForInstallation(undefined, 111)).toEqual([])
-    expect(ownersForInstallation("not json", 111)).toEqual([])
-    expect(ownersForInstallation(JSON.stringify({ acme: 111 }), 0)).toEqual([])
-  })
-})
-
 describe("resolveRepoTarget", () => {
-  it("accepts an explicit owner/repo a SESSION caller owns (login = owner)", async () => {
-    const res = await resolveRepoTarget(envWith({}), {
+  it("accepts an explicit owner/repo in a SESSION caller's exact live scope", async () => {
+    const res = await resolveRepoTarget(envWith({ OPENCLAW_STATE: fakeKv(["acme/widgets"]) }), {
       explicitOwner: "Acme",
       explicitRepo: "widgets",
-      sessionLogin: "acme",
+      sessionRepos: [{ installationId: 111, owner: "Acme", repo: "widgets" }],
     })
     expect(res).toEqual({ target: { owner: "Acme", repo: "widgets" }, hasIndexedRepo: true })
   })
 
   it("accepts an explicit owner/repo a TENANT key owns (installation match)", async () => {
+    const db = await repoDb([{ repoId: 1, installationId: 111, fullName: "acme/widgets" }])
     const res = await resolveRepoTarget(
-      envWith({ OPENCLAW_GITHUB_INSTALLATION_MAP: JSON.stringify({ "acme/widgets": 111 }) }),
-      { explicitOwner: "acme", explicitRepo: "widgets", installationId: 111 },
+      envWith({ SIGILIX_PLATFORM_DB: db, OPENCLAW_STATE: fakeKv(["acme/widgets"]) }),
+      {
+        explicitOwner: "acme",
+        explicitRepo: "widgets",
+        installationId: 111,
+      },
     )
     expect(res).toEqual({ target: { owner: "acme", repo: "widgets" }, hasIndexedRepo: true })
   })
 
   it("REJECTS an explicit repo the caller does not own (cross-tenant guard) and falls back", async () => {
-    // A session user for `acme` tries to ground against `victim/secret` — must be
-    // ignored, falling back to their OWN indexed repo instead.
+    // A session user scoped to `acme/widgets` tries `victim/secret` — ignore it
+    // and fall back only to their exact authorized indexed repo.
     const env = envWith({ OPENCLAW_STATE: fakeKv(["acme/widgets"]) })
     const res = await resolveRepoTarget(env, {
       explicitOwner: "victim",
       explicitRepo: "secret",
-      sessionLogin: "acme",
+      sessionRepos: [{ installationId: 111, owner: "acme", repo: "widgets" }],
     })
     expect(res).toEqual({ target: { owner: "acme", repo: "widgets" }, hasIndexedRepo: true })
   })
@@ -92,24 +126,91 @@ describe("resolveRepoTarget", () => {
     expect(res).toEqual({ target: null, hasIndexedRepo: false })
   })
 
-  it("falls back to a session caller's first indexed repo (owner = login)", async () => {
+  it("falls back to a session caller's only indexed repo in its exact live scope", async () => {
     const env = envWith({ OPENCLAW_STATE: fakeKv(["acme/widgets"]) })
-    const res = await resolveRepoTarget(env, { sessionLogin: "acme" })
+    const res = await resolveRepoTarget(env, {
+      sessionRepos: [{ installationId: 111, owner: "acme", repo: "widgets" }],
+    })
     expect(res).toEqual({ target: { owner: "acme", repo: "widgets" }, hasIndexedRepo: true })
   })
 
-  it("falls back to a tenant caller's indexed repo via the installation map", async () => {
+  it("falls back to a tenant caller's only indexed repo via D1", async () => {
+    const db = await repoDb([{ repoId: 1, installationId: 111, fullName: "acme/widgets" }])
     const env = envWith({
       OPENCLAW_STATE: fakeKv(["acme/widgets"]),
-      OPENCLAW_GITHUB_INSTALLATION_MAP: JSON.stringify({ acme: 111 }),
+      SIGILIX_PLATFORM_DB: db,
     })
     const res = await resolveRepoTarget(env, { installationId: 111 })
     expect(res).toEqual({ target: { owner: "acme", repo: "widgets" }, hasIndexedRepo: true })
   })
 
+  it("uses an explicit per-installation default within a SESSION caller's exact repo scope", async () => {
+    const env = envWith({
+      OPENCLAW_STATE: fakeKv(["sigilix/.github", "sigilix/sigilix"], {
+        "deep-research-default-repo:134811639": "Sigilix/sigilix",
+      }),
+    })
+    const res = await resolveRepoTarget(env, {
+      sessionRepos: [
+        { installationId: 134811639, owner: "Sigilix", repo: ".github" },
+        { installationId: 134811639, owner: "Sigilix", repo: "sigilix" },
+      ],
+    })
+    expect(res).toEqual({ target: { owner: "Sigilix", repo: "sigilix" }, hasIndexedRepo: true })
+  })
+
+  it("does not guess when a session has multiple indexed repos and no configured default", async () => {
+    const env = envWith({ OPENCLAW_STATE: fakeKv(["acme/api", "acme/web"]) })
+    const res = await resolveRepoTarget(env, {
+      sessionRepos: [
+        { installationId: 111, owner: "acme", repo: "api" },
+        { installationId: 111, owner: "acme", repo: "web" },
+      ],
+    })
+    expect(res).toEqual({ target: null, hasIndexedRepo: true })
+  })
+
+  it("rejects an explicit unindexed repo and falls back only to an indexed authorized repo", async () => {
+    const env = envWith({ OPENCLAW_STATE: fakeKv(["acme/indexed"]) })
+    const res = await resolveRepoTarget(env, {
+      explicitOwner: "acme",
+      explicitRepo: "unindexed",
+      sessionRepos: [
+        { installationId: 111, owner: "acme", repo: "indexed" },
+        { installationId: 111, owner: "acme", repo: "unindexed" },
+      ],
+    })
+    expect(res).toEqual({ target: { owner: "acme", repo: "indexed" }, hasIndexedRepo: true })
+  })
+
+  it("resolves a real tenant key through D1 without the static installation map", async () => {
+    const db = await repoDb([
+      { repoId: 1, installationId: 111, fullName: "Acme/.github" },
+      { repoId: 2, installationId: 111, fullName: "Acme/widgets" },
+    ])
+    const env = envWith({
+      SIGILIX_PLATFORM_DB: db,
+      OPENCLAW_STATE: fakeKv(["acme/.github", "acme/widgets"], {
+        "deep-research-default-repo:111": "Acme/widgets",
+      }),
+    })
+    const res = await resolveRepoTarget(env, { installationId: 111 })
+    expect(res).toEqual({ target: { owner: "Acme", repo: "widgets" }, hasIndexedRepo: true })
+  })
+
+  it("gives the legacy global-key sentinel no repo scope", async () => {
+    const env = envWith({ OPENCLAW_STATE: fakeKv(["victim/secret"]) })
+    const res = await resolveRepoTarget(env, {
+      explicitOwner: "victim",
+      explicitRepo: "secret",
+      installationId: -1,
+    })
+    expect(res).toEqual({ target: null, hasIndexedRepo: false })
+  })
+
   it("returns no target + hasIndexedRepo:false when the caller has no indexed repo", async () => {
     const env = envWith({ OPENCLAW_STATE: fakeKv([]) })
-    const res = await resolveRepoTarget(env, { sessionLogin: "acme" })
+    const res = await resolveRepoTarget(env, { sessionRepos: [] })
     expect(res).toEqual({ target: null, hasIndexedRepo: false })
   })
 

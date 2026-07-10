@@ -44,6 +44,7 @@ export {
   resolveInstallationByAccountLogin,
   readTenantBillingGuard,
   lookupRepoByFullName,
+  listRepoFullNamesForInstallation,
 } from "./adapters/d1-tenant-store"
 export type { TenantBillingGuard } from "./adapters/d1-tenant-store"
 export { resolveTenantCap } from "./adapters/resolve-tenant-cap"

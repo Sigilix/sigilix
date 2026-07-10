@@ -265,4 +265,40 @@ describe("usage_events cost (sig-cost-based-metering)", () => {
       updateUsageEventCost(env, { meter: "chatbot", eventId: "  ", tokens: 1, costUsd: 1 }),
     ).resolves.toBeUndefined()
   })
+
+  it("updateUsageEventCost userKey scope refuses to bind a FOREIGN seat's event (tenant safety)", async () => {
+    const env = makeEnv(db)
+    const now = new Date().toISOString()
+    const win = { meter: "coding_agent" as const, sinceIso: "2000-01-01T00:00:00.000Z" }
+    // Seat gh:222 owns the row keyed by this (client-generated) correlation id.
+    await appendUsageEvent(env, {
+      meter: "coding_agent",
+      installationId: 0,
+      userKey: "gh:222",
+      surface: "cli",
+      eventId: "corr-victim",
+      nowIso: now,
+    })
+
+    // An ATTACKER seat gh:111 reports the same (guessed) correlation id, scoped to ITS
+    // own seat. The user_key scope means the UPDATE matches nothing — gh:222 is untouched.
+    await updateUsageEventCost(env, {
+      meter: "coding_agent",
+      eventId: "corr-victim",
+      tokens: 999_999,
+      costUsd: 9.99,
+      userKey: "gh:111",
+    })
+    expect(await readUsageEventCostSince(env, { ...win, userKey: "gh:222" })).toEqual({ ok: true, costUsd: 0 })
+
+    // The rightful owner gh:222 reports it → binds, scoped to its own seat.
+    await updateUsageEventCost(env, {
+      meter: "coding_agent",
+      eventId: "corr-victim",
+      tokens: 10,
+      costUsd: 0.5,
+      userKey: "gh:222",
+    })
+    expect(await readUsageEventCostSince(env, { ...win, userKey: "gh:222" })).toEqual({ ok: true, costUsd: 0.5 })
+  })
 })

@@ -14,6 +14,8 @@ import {
   readTenantSubscriptionStatus,
   resolveInstallationByAccountLogin,
   readTenantBillingGuard,
+  lookupRepoByFullName,
+  listRepoFullNamesForInstallation,
 } from "@/src/features/tenancy/adapters/d1-tenant-store"
 import type { Env } from "@/src/shared/types/env"
 
@@ -63,6 +65,30 @@ describe("upsertTenantAndRepo", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(MIGRATION_SQL)
+  })
+
+  it("looks up a repo case-insensitively and lists one installation's repos deterministically", async () => {
+    await upsertTenantAndRepo(makeEnv(db), {
+      installationId: 7,
+      repoId: 701,
+      fullName: "Acme/Zeta",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    await upsertTenantAndRepo(makeEnv(db), {
+      installationId: 7,
+      repoId: 702,
+      fullName: "Acme/alpha",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+
+    expect(await lookupRepoByFullName(makeEnv(db), "acme/zeta")).toEqual({ repoId: 701, installationId: 7 })
+    expect(await listRepoFullNamesForInstallation(makeEnv(db), 7)).toEqual(["Acme/alpha", "Acme/Zeta"])
+  })
+
+  it("fails closed to [] when listing repos without a valid D1 scope", async () => {
+    await expect(listRepoFullNamesForInstallation(makeAbsentEnv(), 7)).resolves.toEqual([])
+    await expect(listRepoFullNamesForInstallation(makeEnv(db), 0)).resolves.toEqual([])
+    await expect(listRepoFullNamesForInstallation({ SIGILIX_PLATFORM_DB: makeBrokenDb() }, 7)).resolves.toEqual([])
   })
 
   it("creates a tenant row and a repo row on first call", async () => {

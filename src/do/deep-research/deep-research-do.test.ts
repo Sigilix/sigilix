@@ -461,7 +461,7 @@ describe("DeepResearchDO — conversational mode + trivial guard", () => {
     expect(events.some((e) => e.type === "final")).toBe(true)
   })
 
-  it("chat mode + a CODEBASE question DOES gather grounding (repo-cited, no web)", async () => {
+  it("chat mode + the implicit implementation-location question DOES gather grounding (repo-cited, no web)", async () => {
     const { ctx } = makeDoState()
     const instance = new DeepResearchDO(ctx, makeEnv())
     let gatherCalls = 0
@@ -471,13 +471,14 @@ describe("DeepResearchDO — conversational mode + trivial guard", () => {
         gatherGrounding: async () => {
           gatherCalls++
           return {
-            namespace: "acme/widgets",
-            context: "[symbol] src/session/cache.ts",
+            namespace: "sigilix/sigilix",
+            context:
+              "[symbol] src/features/tenancy/domain/rate-limit.ts\nconst TIER_CAP_MULTIPLIER = { pro: 1, teams: 2, max: 5, ultra: 50 }",
             sources: [
               {
-                url: "https://github.com/acme/widgets/blob/HEAD/src/session/cache.ts#L1-L20",
-                title: "src/session/cache.ts:1-20",
-                domain: "acme/widgets",
+                url: "https://github.com/Sigilix/sigilix/blob/HEAD/src/features/tenancy/domain/rate-limit.ts#L101-L129",
+                title: "src/features/tenancy/domain/rate-limit.ts:101-129",
+                domain: "Sigilix/sigilix",
                 kind: "repo" as const,
               },
             ],
@@ -488,11 +489,11 @@ describe("DeepResearchDO — conversational mode + trivial guard", () => {
     )
     await instance.fetch(
       req("/start", "POST", {
-        question: "where does session caching live in our repo?",
+        question: "Where does the per-tier rate-limit cap get computed, and what are the multipliers?",
         mode: "chat",
         creator: "session:alice",
-        owner: "acme",
-        repo: "widgets",
+        owner: "Sigilix",
+        repo: "sigilix",
         hasIndexedRepo: true,
       }),
     )

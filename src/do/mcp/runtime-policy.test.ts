@@ -1,5 +1,34 @@
 import { describe, expect, it } from "vitest"
-import { curatedReadToolForVendor, effectiveMcpPolicy, narrowMcpPolicy, vendorPolicyForUrl } from "./runtime-policy"
+import {
+  MCP_RUNTIME_SURFACES,
+  MCP_SURFACES,
+  curatedReadToolForVendor,
+  effectiveMcpPolicy,
+  isMcpRuntimeSurface,
+  isMcpSurface,
+  mcpSurfaceEnabled,
+  narrowMcpPolicy,
+  vendorPolicyForUrl,
+  type McpSurface,
+} from "./runtime-policy"
+
+const ALL_SURFACES_OFF = {
+  chat: false,
+  "deep-research": false,
+  cli: false,
+  "pr-review": false,
+  agent: false,
+  "memory-index": false,
+} as const
+
+const RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF = {
+  chat: true,
+  "deep-research": true,
+  cli: true,
+  "pr-review": true,
+  agent: true,
+  "memory-index": false,
+} as const
 
 const VERIFIED_VENDOR_CASES = [
   {
@@ -164,6 +193,15 @@ const VERIFIED_VENDOR_CASES = [
 ] as const
 
 describe("MCP server-owned runtime policy", () => {
+  it("defines every product surface explicitly while keeping memory indexing non-runtime", () => {
+    expect(MCP_SURFACES).toEqual(["chat", "deep-research", "cli", "pr-review", "agent", "memory-index"])
+    expect(MCP_RUNTIME_SURFACES).toEqual(["chat", "deep-research", "cli", "pr-review", "agent"])
+    for (const surface of MCP_SURFACES) expect(isMcpSurface(surface)).toBe(true)
+    for (const surface of MCP_RUNTIME_SURFACES) expect(isMcpRuntimeSurface(surface)).toBe(true)
+    expect(isMcpRuntimeSurface("memory-index")).toBe(false)
+    expect(isMcpSurface("unknown")).toBe(false)
+  })
+
   it("matches only exact HTTPS official endpoints", () => {
     expect(vendorPolicyForUrl("https://mcp.linear.app/mcp")?.vendor).toBe("linear")
     expect(vendorPolicyForUrl("https://mcp.linear.app/mcp/")?.vendor).toBe("linear")
@@ -183,13 +221,14 @@ describe("MCP server-owned runtime policy", () => {
     "keeps the verified $vendor catalog dark until an explicit policy update",
     ({ vendor, url, tools }) => {
       expect(vendorPolicyForUrl(url)).toMatchObject({ vendor })
+      expect(vendorPolicyForUrl(url)?.surfaces).toEqual(RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF)
+      expect(vendorPolicyForUrl(url)?.surfaces["memory-index"]).toBe(false)
       expect(vendorPolicyForUrl(url)?.readTools.map((tool) => tool.name)).toEqual(tools)
       expect(effectiveMcpPolicy(url)).toEqual({
         vendor,
         version: 0,
         enabled: false,
-        chatEnabled: false,
-        deepResearchEnabled: false,
+        surfaces: ALL_SURFACES_OFF,
         allowedReadTools: [],
         availableReadTools: tools,
         maxCallsPerRun: 0,
@@ -201,7 +240,7 @@ describe("MCP server-owned runtime policy", () => {
         narrowMcpPolicy(url, {
           version: 0,
           enabled: true,
-          surfaces: { chat: true, deepResearch: true },
+          surfaces: RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF,
           allowedReadTools: [tools[0]],
           maxCallsPerRun: 4,
         }),
@@ -210,8 +249,7 @@ describe("MCP server-owned runtime policy", () => {
         policy: {
           version: 1,
           enabled: true,
-          chatEnabled: true,
-          deepResearchEnabled: true,
+          surfaces: RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF,
           allowedReadTools: [tools[0]],
           maxCallsPerRun: 4,
         },
@@ -224,8 +262,7 @@ describe("MCP server-owned runtime policy", () => {
       vendor: "custom",
       version: 0,
       enabled: false,
-      chatEnabled: false,
-      deepResearchEnabled: false,
+      surfaces: ALL_SURFACES_OFF,
       allowedReadTools: [],
       availableReadTools: [],
       maxCallsPerRun: 0,
@@ -241,7 +278,7 @@ describe("MCP server-owned runtime policy", () => {
       narrowMcpPolicy("https://mcp.linear.app/mcp", {
         version: 0,
         enabled: true,
-        surfaces: { chat: true, deepResearch: true },
+        surfaces: RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF,
         allowedReadTools: ["list_issues"],
         maxCallsPerRun: 4,
       }),
@@ -259,7 +296,7 @@ describe("MCP server-owned runtime policy", () => {
       narrowMcpPolicy("https://mcp.linear.app/mcp", {
         version: 0,
         enabled: false,
-        surfaces: { chat: false, deepResearch: false },
+        surfaces: ALL_SURFACES_OFF,
         allowedReadTools: [],
         maxCallsPerRun: 0,
       }),
@@ -268,8 +305,7 @@ describe("MCP server-owned runtime policy", () => {
       policy: {
         version: 1,
         enabled: false,
-        chatEnabled: false,
-        deepResearchEnabled: false,
+        surfaces: ALL_SURFACES_OFF,
         allowedReadTools: [],
         maxCallsPerRun: 0,
       },
@@ -283,12 +319,135 @@ describe("MCP server-owned runtime policy", () => {
         {
           version: 0,
           enabled: true,
-          surfaces: { chat: true, deepResearch: true },
+          surfaces: RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF,
           allowedReadTools: [],
           maxCallsPerRun: 1,
         },
         2,
       ),
     ).toEqual({ ok: false, error: "stale_version" })
+  })
+
+  it("treats the global policy switch as authoritative for every surface", () => {
+    const policy = effectiveMcpPolicy("https://mcp.linear.app/mcp", {
+      version: 1,
+      enabled: false,
+      surfaces: RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF,
+      allowedReadTools: ["list_comments"],
+      maxCallsPerRun: 4,
+    })
+
+    for (const surface of MCP_SURFACES) expect(mcpSurfaceEnabled(policy, surface)).toBe(false)
+  })
+
+  it("fails closed when a stored policy is missing the new surface record", () => {
+    const malformedStored = {
+      version: 1,
+      enabled: true,
+      allowedReadTools: ["list_comments"],
+      maxCallsPerRun: 4,
+    } as unknown as NonNullable<Parameters<typeof effectiveMcpPolicy>[1]>
+
+    const policy = effectiveMcpPolicy("https://mcp.linear.app/mcp", malformedStored)
+    expect(policy.surfaces).toEqual(ALL_SURFACES_OFF)
+    for (const surface of MCP_SURFACES) expect(mcpSurfaceEnabled(policy, surface)).toBe(false)
+  })
+
+  it("defensively keeps memory indexing off for a forged effective policy", () => {
+    const forgedPolicy = {
+      ...effectiveMcpPolicy("https://mcp.linear.app/mcp"),
+      enabled: true,
+      surfaces: { ...RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF, "memory-index": true },
+    } as unknown as ReturnType<typeof effectiveMcpPolicy>
+
+    expect(mcpSurfaceEnabled(forgedPolicy, "memory-index")).toBe(false)
+  })
+
+  it("allows each runtime surface to be independently disabled", () => {
+    for (const disabledSurface of MCP_RUNTIME_SURFACES) {
+      const surfaces = { ...RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF, [disabledSurface]: false }
+      const narrowed = narrowMcpPolicy("https://mcp.linear.app/mcp", {
+        version: 0,
+        enabled: true,
+        surfaces,
+        allowedReadTools: ["list_comments"],
+        maxCallsPerRun: 1,
+      })
+      expect(narrowed).toMatchObject({ ok: true, policy: { surfaces } })
+      if (!narrowed.ok) throw new Error(narrowed.error)
+      const effective = effectiveMcpPolicy("https://mcp.linear.app/mcp", narrowed.policy)
+      expect(mcpSurfaceEnabled(effective, disabledSurface)).toBe(false)
+      for (const surface of MCP_RUNTIME_SURFACES.filter((candidate) => candidate !== disabledSurface)) {
+        expect(mcpSurfaceEnabled(effective, surface)).toBe(true)
+      }
+      expect(mcpSurfaceEnabled(effective, "memory-index")).toBe(false)
+    }
+  })
+
+  it("rejects enabling memory indexing until a real indexer exists", () => {
+    expect(
+      narrowMcpPolicy("https://mcp.linear.app/mcp", {
+        version: 0,
+        enabled: true,
+        surfaces: { ...RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF, "memory-index": true },
+        allowedReadTools: [],
+        maxCallsPerRun: 1,
+      }),
+    ).toEqual({ ok: false, error: "unsupported_surface" })
+  })
+
+  it.each(MCP_SURFACES)("requires the explicit %s surface field", (missingSurface) => {
+    const surfaces = { ...RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF } as Record<McpSurface, boolean>
+    delete surfaces[missingSurface]
+    expect(
+      narrowMcpPolicy("https://mcp.linear.app/mcp", {
+        version: 0,
+        enabled: true,
+        surfaces,
+        allowedReadTools: [],
+        maxCallsPerRun: 1,
+      }),
+    ).toEqual({ ok: false, error: "invalid_policy" })
+  })
+
+  it.each(MCP_SURFACES)("requires a boolean %s surface field", (invalidSurface) => {
+    expect(
+      narrowMcpPolicy("https://mcp.linear.app/mcp", {
+        version: 0,
+        enabled: true,
+        surfaces: { ...RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF, [invalidSurface]: "yes" },
+        allowedReadTools: [],
+        maxCallsPerRun: 1,
+      }),
+    ).toEqual({ ok: false, error: "invalid_policy" })
+  })
+
+  it("rejects unknown surface fields", () => {
+    expect(
+      narrowMcpPolicy("https://mcp.linear.app/mcp", {
+        version: 0,
+        enabled: true,
+        surfaces: { ...RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF, deployment: false },
+        allowedReadTools: [],
+        maxCallsPerRun: 1,
+      }),
+    ).toEqual({ ok: false, error: "invalid_policy" })
+  })
+
+  it("accepts the legacy two-switch portal shape while keeping every new surface off", () => {
+    expect(
+      narrowMcpPolicy("https://mcp.linear.app/mcp", {
+        version: 0,
+        enabled: true,
+        surfaces: { chat: true, deepResearch: true },
+        allowedReadTools: ["list_comments"],
+        maxCallsPerRun: 1,
+      }),
+    ).toMatchObject({
+      ok: true,
+      policy: {
+        surfaces: { ...ALL_SURFACES_OFF, chat: true, "deep-research": true },
+      },
+    })
   })
 })

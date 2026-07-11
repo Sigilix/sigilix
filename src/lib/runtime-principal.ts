@@ -26,6 +26,18 @@ export function runtimeSessionScope(record: Pick<SessionRecord, "githubUserId" |
   return null
 }
 
+/** Stable human subject carried through MCP OAuth callback state. Unlike the
+ * vault scope, this prefers the provider-agnostic user identity so a refreshed
+ * browser session can complete the same flow without depending on a cookie id. */
+export function runtimeSessionSubject(record: Pick<SessionRecord, "githubUserId" | "userId">): string | null {
+  const userId = record.userId?.trim()
+  if (userId && userId.length <= 128 && /^[A-Za-z0-9_.:-]+$/.test(userId)) return userId
+  if (Number.isSafeInteger(record.githubUserId) && (record.githubUserId ?? 0) > 0) {
+    return String(record.githubUserId)
+  }
+  return null
+}
+
 /**
  * Durable runtime namespaces must identify one real portal seat or one real
  * installation. DeepResearchDO receives the creator as opaque persisted state,

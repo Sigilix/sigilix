@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   writeFile: vi.fn(),
   rm: vi.fn(),
   emitFileEdit: vi.fn(),
+  createAgentMcpBridge: vi.fn(),
+  closeAgentMcpBridge: vi.fn(),
 }));
 
 vi.mock("node:child_process", () => ({
@@ -22,6 +24,7 @@ vi.mock("node:fs", () => ({
 }));
 
 vi.mock("./events.js", () => ({ emitFileEdit: mocks.emitFileEdit }));
+vi.mock("./mcp-bridge.js", () => ({ createAgentMcpBridge: mocks.createAgentMcpBridge }));
 
 import {
   buildOpencodeConfig,
@@ -130,6 +133,23 @@ describe("buildOpencodeConfig", () => {
     const cfg = buildOpencodeConfig({ id: "z-ai/glm-5.2", key: "k" }, "/p");
     const provider = (cfg.provider as Record<string, { options: { baseURL: string } }>).runner;
     expect(provider.options.baseURL).toBe("https://openrouter.ai/api/v1");
+  });
+
+  it("wires only a loopback MCP endpoint and exact MCP permission — never a capability", () => {
+    const rawCapability = "c".repeat(64);
+    const cfg = buildOpencodeConfig(MODEL, "", "http://127.0.0.1:4567/");
+    const mcp = cfg.mcp as Record<string, Record<string, unknown>>;
+    const permission = cfg.permission as Record<string, string>;
+
+    expect(mcp.sigilix).toEqual({
+      type: "remote",
+      url: "http://127.0.0.1:4567/",
+      enabled: true,
+      oauth: false,
+      timeout: 12_000,
+    });
+    expect(permission["sigilix_mcp_*"]).toBe("allow");
+    expect(JSON.stringify(cfg)).not.toContain(rawCapability);
   });
 });
 
@@ -266,6 +286,11 @@ describe("runCliAgent", () => {
     mocks.mkdtemp.mockResolvedValue("/tmp/sigilix-cfg-x");
     mocks.writeFile.mockResolvedValue(undefined);
     mocks.rm.mockResolvedValue(undefined);
+    mocks.closeAgentMcpBridge.mockResolvedValue(undefined);
+    mocks.createAgentMcpBridge.mockResolvedValue({
+      endpoint: "http://127.0.0.1:4567/",
+      close: mocks.closeAgentMcpBridge,
+    });
   });
 
   it("happy path: parses events, detects changes via git, returns done", async () => {
@@ -313,6 +338,47 @@ describe("runCliAgent", () => {
 
     const spawnOpts = mocks.spawn.mock.calls[0]?.[2] as { stdio?: unknown };
     expect(spawnOpts.stdio).toEqual(["ignore", "pipe", "pipe"]);
+  });
+
+  it("keeps the tenant MCP capability out of child config, env, and argv, then closes the bridge", async () => {
+    const capability = "d".repeat(64);
+    mocks.spawn.mockReturnValue(fakeChild('{"type":"step_finish"}', 0));
+    mocks.execFile.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+
+    await runCliAgent(
+      makeArgs({ mcp: { endpoint: "https://api.sigilix.ai/internal/agent-runs/r/mcp", capability } }),
+    );
+
+    expect(mocks.createAgentMcpBridge).toHaveBeenCalledWith({
+      endpoint: "https://api.sigilix.ai/internal/agent-runs/r/mcp",
+      capability,
+    });
+    const writtenConfig = mocks.writeFile.mock.calls[0]?.[1] as string;
+    const spawnArgs = mocks.spawn.mock.calls[0] ?? [];
+    expect(writtenConfig).toContain("http://127.0.0.1:4567/");
+    expect(writtenConfig).not.toContain(capability);
+    expect(JSON.stringify(spawnArgs)).not.toContain(capability);
+    expect(mocks.closeAgentMcpBridge).toHaveBeenCalledOnce();
+  });
+
+  it("fails soft when the loopback MCP bridge cannot start", async () => {
+    mocks.createAgentMcpBridge.mockRejectedValueOnce(new Error("loopback unavailable"));
+    mocks.spawn.mockReturnValue(fakeChild('{"type":"step_finish"}', 0));
+    mocks.execFile.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+
+    const result = await runCliAgent(
+      makeArgs({
+        mcp: {
+          endpoint: "https://api.sigilix.ai/internal/agent-runs/r/mcp",
+          capability: "d".repeat(64),
+        },
+      }),
+    );
+
+    expect(result.stoppedReason).toBe("done");
+    const writtenConfig = mocks.writeFile.mock.calls[0]?.[1] as string;
+    expect(writtenConfig).not.toContain('"mcp"');
+    expect(mocks.spawn).toHaveBeenCalledOnce();
   });
 
   it("streams a diff-pane event for each completed in-repo edit, skipping out-of-repo", async () => {

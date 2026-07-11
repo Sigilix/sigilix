@@ -382,6 +382,19 @@ describe("runTask", () => {
     expect(result.error).toContain("***");
   });
 
+  it("redacts every MCP capability from surfaced errors", async () => {
+    const capability = "d".repeat(64);
+    mocks.cloneRepo.mockRejectedValueOnce(new Error(`unexpected MCP header ${capability}`));
+
+    const result = await runTask(
+      makePacket({ mcp: { endpoint: "https://api.sigilix.ai/internal/agent-runs/r/mcp", capability } }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).not.toContain(capability);
+    expect(result.error).toContain("***");
+  });
+
   it("returns status 'error' (does NOT throw) when mkdtemp fails, and does NOT call rm", async () => {
     mocks.mkdtemp.mockRejectedValueOnce(new Error("EACCES: permission denied, mkdtemp"));
 
@@ -437,6 +450,15 @@ describe("runTask", () => {
     expect(mocks.runCliAgent).not.toHaveBeenCalled();
   });
 
+  it("threads the same opaque MCP endpoint into the minimal engine", async () => {
+    mocks.runEditLoop.mockResolvedValue({ changed: false, modelCalls: 1, tokens: 10, stoppedReason: "done" });
+    const mcp = { endpoint: "https://api.sigilix.ai/internal/agent-runs/r/mcp", capability: "e".repeat(64) };
+
+    await runTask(makePacket({ engine: "minimal", mcp }));
+
+    expect(mocks.runEditLoop).toHaveBeenCalledWith(expect.objectContaining({ mcp }));
+  });
+
   it('engine "full" runs the CLI agent, NOT the minimal loop, and forwards sigilix grounding', async () => {
     mocks.runCliAgent.mockResolvedValue({ changed: true, modelCalls: 3, tokens: 0, stoppedReason: "done" });
     mocks.openPullRequest.mockResolvedValue({ url: "https://github.com/acme/my-service/pull/7", number: 7 });
@@ -448,6 +470,15 @@ describe("runTask", () => {
     expect(mocks.runEditLoop).not.toHaveBeenCalled();
     expect(mocks.runCliAgent.mock.calls[0]![0]).toMatchObject({ sigilix });
     expect(result.status).toBe("opened");
+  });
+
+  it("threads the same opaque MCP endpoint into the full engine", async () => {
+    mocks.runCliAgent.mockResolvedValue({ changed: false, modelCalls: 1, tokens: 0, stoppedReason: "done" });
+    const mcp = { endpoint: "https://api.sigilix.ai/internal/agent-runs/r/mcp", capability: "f".repeat(64) };
+
+    await runTask(makePacket({ engine: "full", mcp }));
+
+    expect(mocks.runCliAgent).toHaveBeenCalledWith(expect.objectContaining({ mcp }));
   });
 
   it('engine "full": a non-"done" stop (timeout) does NOT open a PR even with changes', async () => {

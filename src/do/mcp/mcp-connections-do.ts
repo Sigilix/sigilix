@@ -634,7 +634,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     }
   }
 
-  private async handleBrokerCatalog(request: Request, fixedSurface?: "chat" | "deep-research"): Promise<Response> {
+  private async handleBrokerCatalog(request: Request, fixedSurface?: McpRuntimeSurface): Promise<Response> {
     const body = await readRuntimeJsonBody(request, MAX_RUNTIME_BODY_BYTES)
     if (body instanceof Response) return body
     const surface = fixedSurface ?? body.surface
@@ -665,7 +665,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     return json(result.body, result.status)
   }
 
-  private async handleBrokerInvoke(request: Request, fixedSurface?: "chat" | "deep-research"): Promise<Response> {
+  private async handleBrokerInvoke(request: Request, fixedSurface?: McpRuntimeSurface): Promise<Response> {
     const body = await readRuntimeJsonBody(request, MAX_RUNTIME_BODY_BYTES)
     if (body instanceof Response) return body
     if (this.tenantInstallationId === null) return json({ error: "tenant_scope_required" }, 403)

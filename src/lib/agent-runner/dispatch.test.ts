@@ -16,19 +16,23 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 // ── mocks must be declared before the module-under-test is imported ──────────
 vi.mock("@/src/shared/adapters/github/github-app", () => ({
   getInstallationToken: vi.fn(),
+  resolveRepoInstallationId: vi.fn(),
 }))
 vi.mock("@cloudflare/containers", () => ({
   getContainer: vi.fn(),
 }))
 
 import { dispatchAgentRun, getAgentRunStatus, type AgentRunTaskInput } from "@/src/lib/agent-runner/dispatch"
-import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
+import { getInstallationToken, resolveRepoInstallationId } from "@/src/shared/adapters/github/github-app"
 import { getContainer } from "@cloudflare/containers"
 import type { Env } from "@/src/shared/types/env"
 import type { AgentRunRecord } from "@/src/do/agent-runner-container"
+import { sha256Hex } from "@/src/lib/auth-bearer"
+import type { AgentMcpCapabilityRecord } from "@/src/do/agent-mcp-capability"
 
 // ── typed mock handles ────────────────────────────────────────────────────────
 const mockGetInstallationToken = vi.mocked(getInstallationToken)
+const mockResolveRepoInstallationId = vi.mocked(resolveRepoInstallationId)
 
 // getContainer is mocked via vi.mock — treat it as a generic spy.
 // We avoid inferring its generic return type (DurableObjectStub<Container>)
@@ -52,6 +56,7 @@ interface ContainerStub {
 // ── constants ─────────────────────────────────────────────────────────────────
 const STUB_TOKEN = "ghs_stub_installation_token_for_test_12345"
 const STUB_RECORD: AgentRunRecord = { runId: "run-abc", status: "started" }
+const MCP_RUN_ID = "11111111-1111-4111-8111-111111111111"
 
 const SAMPLE_INPUT: AgentRunTaskInput = {
   runId: "run-abc",
@@ -103,6 +108,7 @@ describe("dispatchAgentRun", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockResolveRepoInstallationId.mockResolvedValue(99)
     spyLog = vi.spyOn(console, "log").mockImplementation(() => undefined)
     spyWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     spyError = vi.spyOn(console, "error").mockImplementation(() => undefined)
@@ -156,6 +162,140 @@ describe("dispatchAgentRun", () => {
       privateKey: "fake-pem-key",
       installationId: 99,
     })
+  })
+
+  it("fails closed before token mint when GitHub resolves the repo to another installation", async () => {
+    mockResolveRepoInstallationId.mockResolvedValue(100)
+
+    const result = await dispatchAgentRun(makeEnv("on"), SAMPLE_INPUT)
+
+    expect(result).toMatchObject({ runId: "run-abc", dispatched: false })
+    expect(result.reason).toBe("dispatch-failed: repository installation authorization failed")
+    expect(mockGetInstallationToken).not.toHaveBeenCalled()
+    expect(mockGetContainer).not.toHaveBeenCalled()
+  })
+
+  it("mints a hash-at-rest MCP capability after authorization, sends only opaque endpoint+bearer, and revokes in finally", async () => {
+    const stub = makeStub()
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+    let persisted: AgentMcpCapabilityRecord | undefined
+    const revoke = vi.fn(() => Promise.resolve())
+    const capabilityStub = {
+      initialize: vi.fn((record: AgentMcpCapabilityRecord) => {
+        persisted = structuredClone(record)
+        return Promise.resolve(true)
+      }),
+      revoke,
+    }
+    const mcpStub = {
+      fetch: vi.fn(() =>
+        Promise.resolve(
+          Response.json({
+            tools: [
+              {
+                serverId: "grant-1",
+                vendor: "linear",
+                name: "list_comments",
+                inputSchema: { type: "object" },
+              },
+            ],
+            // A degraded provider must not erase the healthy provider's exact
+            // read grant from this run's capability.
+            partial: true,
+          }),
+        ),
+      ),
+    }
+    const env = makeEnv("on", {
+      SIGILIX_AGENT_MCP_ENDPOINT: "https://api.sigilix.ai",
+      MCP_CONNECTIONS: { idFromName: vi.fn((name: string) => name), get: vi.fn(() => mcpStub) },
+      AGENT_MCP_CAPABILITY: { idFromName: vi.fn((name: string) => name), get: vi.fn(() => capabilityStub) },
+    })
+
+    await dispatchAgentRun(env, { ...SAMPLE_INPUT, runId: MCP_RUN_ID })
+
+    const request = stub.fetch.mock.calls[0]![0]!
+    const body = (await request.json()) as { mcp: { endpoint: string; capability: string } }
+    expect(body.mcp.endpoint).toBe(`https://api.sigilix.ai/internal/agent-runs/${MCP_RUN_ID}/mcp`)
+    expect(body.mcp.capability).toMatch(/^[a-f0-9]{64}$/)
+    expect(persisted).toMatchObject({
+      runId: MCP_RUN_ID,
+      installationId: 99,
+      owner: "Sigilix",
+      repo: "sigilix",
+      surface: "agent",
+      tools: [{ localName: "mcp_0", grantId: "grant-1", toolName: "list_comments" }],
+    })
+    expect(persisted?.capabilityHash).toBe(await sha256Hex(body.mcp.capability))
+    expect(JSON.stringify(persisted)).not.toContain(body.mcp.capability)
+    expect(revoke).toHaveBeenCalledOnce()
+    const allOutput = [...spyLog.mock.calls, ...spyWarn.mock.calls, ...spyError.mock.calls]
+      .flat()
+      .map(String)
+      .join("\n")
+    expect(allOutput).not.toContain(body.mcp.capability)
+  })
+
+  it("revokes the MCP capability in finally when the container dispatch fails", async () => {
+    const stub = makeStub(() => Promise.reject(new Error("Container unreachable")))
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+    const revoke = vi.fn(() => Promise.resolve())
+    const capabilityStub = { initialize: vi.fn(() => Promise.resolve(true)), revoke }
+    const mcpStub = {
+      fetch: vi.fn(() =>
+        Promise.resolve(
+          Response.json({
+            tools: [
+              {
+                serverId: "grant-1",
+                vendor: "linear",
+                name: "list_comments",
+                inputSchema: { type: "object" },
+              },
+            ],
+            partial: false,
+          }),
+        ),
+      ),
+    }
+    const env = makeEnv("on", {
+      SIGILIX_AGENT_MCP_ENDPOINT: "https://api.sigilix.ai",
+      MCP_CONNECTIONS: { idFromName: vi.fn((name: string) => name), get: vi.fn(() => mcpStub) },
+      AGENT_MCP_CAPABILITY: { idFromName: vi.fn((name: string) => name), get: vi.fn(() => capabilityStub) },
+    })
+
+    const result = await dispatchAgentRun(env, { ...SAMPLE_INPUT, runId: MCP_RUN_ID })
+
+    expect(result).toMatchObject({ dispatched: false })
+    expect(capabilityStub.initialize).toHaveBeenCalledOnce()
+    expect(revoke).toHaveBeenCalledOnce()
+  })
+
+  it("omits MCP without touching the broker for a non-UUID run id or a sub-30-second run", async () => {
+    const stub = makeStub()
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+    const mcpFetch = vi.fn()
+    const env = makeEnv("on", {
+      SIGILIX_AGENT_MCP_ENDPOINT: "https://api.sigilix.ai",
+      MCP_CONNECTIONS: { idFromName: vi.fn(), get: vi.fn(() => ({ fetch: mcpFetch })) },
+      AGENT_MCP_CAPABILITY: { idFromName: vi.fn(), get: vi.fn() },
+    })
+
+    await dispatchAgentRun(env, SAMPLE_INPUT)
+    await dispatchAgentRun(env, {
+      ...SAMPLE_INPUT,
+      runId: MCP_RUN_ID,
+      caps: { ...SAMPLE_INPUT.caps, timeoutMs: 29_999 },
+    })
+
+    for (const call of stub.fetch.mock.calls) {
+      const body = (await call[0]!.json()) as Record<string, unknown>
+      expect(body.mcp).toBeUndefined()
+    }
+    expect(mcpFetch).not.toHaveBeenCalled()
   })
 
   it('mode "on" → calls getContainer with (binding, runId) and invokes fetch with the task packet', async () => {

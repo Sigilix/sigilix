@@ -84,6 +84,8 @@ describe("runtime app registry", () => {
     expect(isToolCompatibleWithRuntimeApp("linear", "sentry", "list_comments")).toBe(false)
     expect(isToolCompatibleWithRuntimeApp("github", "linear", "list_comments")).toBe(false)
     expect(isToolCompatibleWithRuntimeApp("unknown", "linear", "list_comments")).toBe(false)
+    expect(isToolCompatibleWithRuntimeApp("grafana", "grafana", "query_prometheus")).toBe(true)
+    expect(isToolCompatibleWithRuntimeApp("launchdarkly", "launchdarkly", "get-feature-flag")).toBe(true)
   })
 
   it("publishes stable human-safe rejection copy for every public error code", () => {
@@ -121,6 +123,12 @@ describe("parseLeadingRuntimeAppMention", () => {
       appId: "github",
       mention: "@gh",
       task: "inspect this pull request",
+    })
+    expect(parseLeadingRuntimeAppMention("@LD show the checkout flag")).toEqual({
+      kind: "resolved",
+      appId: "launchdarkly",
+      mention: "@LD",
+      task: "show the checkout flag",
     })
   })
 

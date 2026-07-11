@@ -51,6 +51,7 @@ import {
 } from "@/src/lib/agent-memory"
 import { handleResearchCreate, handleResearchStream, handleResearchCancel } from "@/src/do/deep-research/routes"
 import { tryHandleMcpRoute } from "@/src/do/mcp/routes"
+import { tryHandleSkillRoute } from "@/src/lib/skills-route"
 import { handleTestSuppressionsMetricsRoute } from "@/src/lib/metrics-test-suppressions-route"
 import { handleRunnerEvidenceMetricsRoute } from "@/src/lib/metrics-runner-evidence-route"
 import { handleRunnerToolsMetricsRoute } from "@/src/lib/metrics-runner-tools-route"
@@ -537,6 +538,8 @@ export default {
       }
     }
 
+    const skillResponse = await tryHandleSkillRoute(request, env, ctx, url)
+    if (skillResponse) return skillResponse
     const mcpResponse = await tryHandleMcpRoute(request, env, ctx, url)
     if (mcpResponse) return mcpResponse
     if (url.pathname.startsWith("/v1/cli/")) return tryHandleCliLoginRoute(request, env, ctx, url) // sig-cli-login

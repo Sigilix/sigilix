@@ -20,6 +20,10 @@ const MIGRATION_0004 = readFileSync(
   new URL("../../../migrations/0004_create_usage_events.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_0011 = readFileSync(
+  new URL("../../../migrations/0011_add_tenant_subscription_status.sql", import.meta.url),
+  "utf8",
+)
 
 function makeKv(seed: Record<string, string> = {}): KVNamespace {
   const store = new Map(Object.entries(seed))
@@ -290,6 +294,50 @@ describe("handleResearchCreate — session org repo grounding", () => {
     expect(startBody).not.toHaveProperty("mcpTenantScope")
   })
 
+  it("never uses the metering-only account link as skill authorization", async () => {
+    const db = makeD1()
+    await db.exec(MIGRATION_0001)
+    await db.exec(MIGRATION_0003)
+    await db.exec(MIGRATION_0004)
+    await db.exec(MIGRATION_0011)
+    await db
+      .prepare(
+        "INSERT INTO account_tenant (github_user_id, installation_id, role, created_at) VALUES ('42', 99, 'member', 't')",
+      )
+      .run()
+    const kv = makeKv()
+    await createSession({
+      kv,
+      sessionId: "session-1",
+      login: "former-member",
+      githubUserId: 42,
+      accessToken: "github-user-token",
+      encryptionKeyB64url: ENC_KEY,
+    })
+    const githubFetch = vi.fn(async () => new Response("unexpected", { status: 500 }))
+    vi.stubGlobal("fetch", githubFetch)
+    let startBody: Record<string, unknown> | null = null
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+      SIGILIX_USAGE_METER_MODE: "off",
+      DEEP_RESEARCH: deepResearchNamespace((body) => {
+        startBody = body
+      }),
+    } as unknown as Env
+
+    const response = await handleResearchCreate(
+      request({ question: "what is the capital of France?", mode: "chat" }),
+      env,
+      ctx,
+    )
+
+    expect(response.status).toBe(200)
+    expect(githubFetch).not.toHaveBeenCalled()
+    expect(startBody).not.toHaveProperty("skillInstallationId")
+  })
+
   it("binds session MCP access to a freshly verified installation selector", async () => {
     const kv = makeKv()
     await createSession({
@@ -321,7 +369,11 @@ describe("handleResearchCreate — session org repo grounding", () => {
     )
 
     expect(response.status).toBe(200)
-    expect(startBody).toMatchObject({ creator: "session:42", mcpTenantScope: "tenant:134811639" })
+    expect(startBody).toMatchObject({
+      creator: "session:42",
+      mcpTenantScope: "tenant:134811639",
+    })
+    expect(startBody).not.toHaveProperty("skillInstallationId")
     expect(githubFetch).toHaveBeenCalledTimes(1)
   })
 
@@ -382,6 +434,7 @@ describe("handleResearchCreate — session org repo grounding", () => {
       repo: "repo-a",
       hasIndexedRepo: true,
     })
+    expect(startBody).not.toHaveProperty("skillInstallationId")
   })
 
   it.each([
@@ -418,6 +471,7 @@ describe("handleResearchCreate — session org repo grounding", () => {
 
     expect(response.status).toBe(200)
     expect(startBody).not.toHaveProperty("mcpTenantScope")
+    expect(startBody).not.toHaveProperty("skillInstallationId")
   })
 
   it("never falls back from a failed live scope to a matching indexed owner in deep mode", async () => {
@@ -508,5 +562,6 @@ describe("handleResearchCreate — session org repo grounding", () => {
       hasIndexedRepo: true,
       mcpTenantScope: "tenant:134811639",
     })
+    expect(startBody).not.toHaveProperty("skillInstallationId")
   })
 })

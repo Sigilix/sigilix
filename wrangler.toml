@@ -564,6 +564,10 @@ SIGILIX_TRAINING_RETENTION_MODE = "off"
 # the other feature flags; do NOT also `wrangler secret put` the same name.
 SIGILIX_ENTITLEMENTS_MODE = "enforce"
 
+# SIG-561: governed guidance-only skills. Exact org policy remains default-off
+# in D1; this master switch is the immediate all-tenant incident rollback.
+SIGILIX_SKILLS_MODE = "on"
+
 # SIG-138 code/dependency graph (Greptile-parity). Both default OFF.
 #   SIGILIX_GRAPH_INDEX     "off" | "shadow" | "on"  — graph WRITER in the
 #                            indexer (extract + RepoGraphDO upsert/commit).

@@ -29,6 +29,7 @@ import { describeMcpEvidence, selectMcpEvidence, withMcpEvidence, type ResearchM
 import type { SearchQueryResult } from "./search"
 import type { FetchPageResult } from "./fetch-guard"
 import { resolveRuntimeApp, type RuntimeAppId } from "@/src/shared/domain/runtime-app-registry"
+import { applySkillGuidance, renderSkillProvenanceNote, type ResolvedSkillContext } from "@/src/features/skills"
 import type {
   QuestionCategory,
   RepoGrounding,
@@ -67,6 +68,11 @@ export interface EngineDeps {
   mcp?: ResearchMcpRuntime
   /** Server-validated explicit app selector. It is routing metadata, never model text. */
   appId?: RuntimeAppId
+  /** Resolve the exact organization guidance snapshot immediately before the
+   *  final no-tools model call. Deferring the policy read makes a mid-run admin
+   *  revoke effective before instruction injection. The MCP selector never
+   *  receives this text. */
+  resolveSkillContext?: () => Promise<ResolvedSkillContext | undefined>
   search: (query: string) => Promise<SearchQueryResult>
   fetchPage: (url: string) => Promise<FetchPageResult>
   isCancelled: () => boolean
@@ -215,10 +221,12 @@ async function runDirectAnswer(
   if (note) await deps.emit({ type: "note", text: note })
   if (deps.isCancelled()) return cancel(deps)
   await deps.emit({ type: "status", phase: "finalizing", round: 0 })
+  const skillContext = await loadSkillContext(deps)
   const answer = await deps.model(
     "finalReport",
-    toMessages(withMcpEvidence(buildDirectAnswerPrompt(deps.question), mcpEvidence)),
+    toMessages(applySkillGuidance(withMcpEvidence(buildDirectAnswerPrompt(deps.question), mcpEvidence), skillContext)),
   )
+  if (skillContext) await deps.emit({ type: "note", text: renderSkillProvenanceNote(skillContext) })
   // Re-check after the (awaited) model call so a /cancel that lands mid-answer
   // wins the race — emit the cancel note instead of a stale final.
   if (deps.isCancelled()) return cancel(deps)
@@ -254,7 +262,12 @@ async function runRepoGrounded(
     repoContext: grounding.context,
     sources: grounding.sources,
   })
-  const answer = await deps.model("finalReport", toMessages(withMcpEvidence(prompt, mcpEvidence)))
+  const skillContext = await loadSkillContext(deps)
+  const answer = await deps.model(
+    "finalReport",
+    toMessages(applySkillGuidance(withMcpEvidence(prompt, mcpEvidence), skillContext)),
+  )
+  if (skillContext) await deps.emit({ type: "note", text: renderSkillProvenanceNote(skillContext) })
   // Re-check after the awaited model call so a mid-answer /cancel wins the race.
   if (deps.isCancelled()) return cancel(deps)
   await deps.emit({ type: "final", markdown: answer.text, sources: grounding.sources })
@@ -393,9 +406,32 @@ async function runInner(deps: EngineDeps, mcpEvidence?: ResearchMcpEvidence | nu
     sources: sourceList,
     ...(repoContext ? { repoContext } : {}),
   })
-  const report = await deps.model("finalReport", toMessages(withMcpEvidence(reportPrompt, mcpEvidence)))
+  const skillContext = await loadSkillContext(deps)
+  const report = await deps.model(
+    "finalReport",
+    toMessages(applySkillGuidance(withMcpEvidence(reportPrompt, mcpEvidence), skillContext)),
+  )
   track(report.tokens)
+  if (skillContext) await deps.emit({ type: "note", text: renderSkillProvenanceNote(skillContext) })
   await deps.emit({ type: "final", markdown: report.text, sources: sourceList })
+}
+
+/** Skill policy is optional guidance and must fail soft independently of the
+ * answer. Resolve it as late as possible so disconnect/revoke affects an
+ * in-flight research run before the final model call. */
+async function loadSkillContext(deps: EngineDeps): Promise<ResolvedSkillContext | undefined> {
+  if (!deps.resolveSkillContext || deps.isCancelled()) return undefined
+  try {
+    return await deps.resolveSkillContext()
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "runtime-skill-resolution-failed",
+        err: err instanceof Error ? err.name : "unknown",
+      }),
+    )
+    return undefined
+  }
 }
 
 async function gatherMcpEvidence(deps: EngineDeps): Promise<ResearchMcpEvidence | null> {

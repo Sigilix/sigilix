@@ -67,6 +67,7 @@ import { withSubmissionAffordance, buildSuggestionEmissionLogEvents, type Submis
 import { finalize, type EnsembleResult, type FinalizeTelemetry, type ReviewMeta } from "./session"
 import { runInlineOverviewWithRetry, countBySeverity, countByCategory } from "./publish-helpers"
 import { computeProofCounts, formatManageLine } from "@/src/lib/pr-review-status-render"
+import type { PrReviewAppEvidence } from "@/src/features/pr-review-app-evidence"
 
 // SIG-216: the inline-overview budget thresholds — the min remaining budget to
 // attempt the inline render, the max budget to spend on it, and the reserve held
@@ -148,6 +149,9 @@ export interface PublishArgs<Tel extends PublishTelemetry> {
     | { deterministicCheckAnnotations: CheckRunAnnotation[] }
     | Record<string, never>
   deterministicErroredReviewMeta: () => ReviewMeta | undefined
+  /** Bounded, additive evidence started before review fan-out. It is consumed
+   * only by the deterministic overview renderer. */
+  connectedAppEvidence?: Promise<readonly PrReviewAppEvidence[]>
 }
 
 export async function publishReviewSubmission<Tel extends PublishTelemetry>(
@@ -195,6 +199,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
     maybePostAstAutoInline,
     deterministicCheckAnnotationMeta,
     deterministicErroredReviewMeta,
+    connectedAppEvidence,
   } = a
   // SIG-318/SIG-507: shared deps for the post-submit persistence tail (persistSubmittedReview),
   // invoked by BOTH the primary inline-anchored and the anchorless-422-fallback success paths.
@@ -226,6 +231,9 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
   // under INLINE_OVERVIEW_MIN_BUDGET_MS. Single retry on transients, bounded by
   // the same Promise.race budget. Best-effort: a failure NEVER blocks the submit.
   if (isPrOverviewEnabled(sigilixConfig)) {
+    const resolvedConnectedAppEvidence = connectedAppEvidence
+      ? await connectedAppEvidence.catch(() => [] as readonly PrReviewAppEvidence[])
+      : []
     const overviewStartMs = Date.now()
     const overviewReviewContext: PrOverviewReviewContext = {
       findingsCount: submissionVerdict.findings.length + renderableUnanchoredForSubmission.length,
@@ -272,6 +280,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
             env,
             skipDedupe: true,
             reviewContext: overviewReviewContext,
+            connectedAppEvidence: resolvedConnectedAppEvidence,
           },
           overviewBudgetMs,
         )

@@ -21,6 +21,7 @@ import { renderPreMergeGatesSection, type GateResult } from "@/src/shared/domain
 import type { SigilixConfig } from "@/src/shared/domain/config/types"
 import { OVERVIEW_MARKER } from "./triage-pr-overview-scan"
 import type { PrOverviewReviewContext, PrOverviewVerdict } from "./triage-pr-overview"
+import { renderConnectedAppEvidence, type PrReviewAppEvidence } from "@/src/features/pr-review-app-evidence"
 
 /**
  * SIG-216: render the review-time context for the prompt. Compact —
@@ -64,6 +65,9 @@ interface FormatArgs {
    * the effort badge). Empty array / missing → no section.
    */
   gateResults?: readonly GateResult[]
+  /** Deterministic evidence rendered after quality gates. It never enters the
+   * overview prompt or any review-model context. */
+  connectedAppEvidence?: readonly PrReviewAppEvidence[]
   /** Effective committed-wins overview presentation configuration. */
   overviewConfig?: SigilixConfig["overview"]
 }
@@ -78,6 +82,7 @@ export function formatOverviewComment({
   isFirstRun,
   warmup = "none",
   gateResults = [],
+  connectedAppEvidence = [],
   overviewConfig,
 }: FormatArgs): string {
   const lines: string[] = [OVERVIEW_MARKER, ""]
@@ -117,6 +122,12 @@ export function formatOverviewComment({
   const gatesSection = renderPreMergeGatesSection(gateResults)
   if (gatesSection !== null) {
     lines.push(gatesSection)
+    lines.push("")
+  }
+
+  const connectedAppSection = renderConnectedAppEvidence(connectedAppEvidence)
+  if (connectedAppSection !== null) {
+    lines.push(connectedAppSection)
     lines.push("")
   }
 

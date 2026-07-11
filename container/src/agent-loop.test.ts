@@ -134,6 +134,84 @@ describe("runEditLoop", () => {
     expect(captured[0]).toContain("foo bar context");
   });
 
+  it("loads an approved MCP tool, sends its untrusted result back to the model, and continues", async () => {
+    const modelBodies: Array<Record<string, unknown>> = [];
+    let modelCall = 0;
+    vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit): Promise<Response> => {
+      if (String(url).includes("/internal/agent-runs/")) {
+        const rpc = JSON.parse(String(init?.body)) as { method: string };
+        if (rpc.method === "tools/list") {
+          return Response.json({
+            jsonrpc: "2.0",
+            id: "catalog",
+            result: {
+              tools: [
+                {
+                  name: "mcp_0",
+                  description: "Linear read-only comments",
+                  inputSchema: { type: "object" },
+                },
+              ],
+            },
+          });
+        }
+        return Response.json({
+          jsonrpc: "2.0",
+          id: "invoke",
+          result: {
+            content: [
+              {
+                type: "text",
+                text: "BEGIN_UNTRUSTED_MCP_DATA\nquoted_text=\"context\"\nEND_UNTRUSTED_MCP_DATA",
+              },
+            ],
+          },
+        });
+      }
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      modelBodies.push(body);
+      modelCall += 1;
+      return Response.json(modelCall === 1 ? toolCallResponse("mcp-call", "mcp_0", {}) : doneResponse());
+    });
+
+    const result = await runEditLoop(
+      makeArgs({
+        dir: tmpDir,
+        mcp: {
+          endpoint: "https://api.sigilix.ai/internal/agent-runs/r/mcp",
+          capability: "e".repeat(64),
+        },
+      }),
+    );
+
+    expect(result.stoppedReason).toBe("done");
+    expect(JSON.stringify(modelBodies[0])).toContain("mcp_0");
+    expect(JSON.stringify(modelBodies[1])).toContain("BEGIN_UNTRUSTED_MCP_DATA");
+    expect(JSON.stringify(modelBodies)).not.toContain("e".repeat(64));
+  });
+
+  it("fails soft when MCP catalog is unavailable and completes with local tools", async () => {
+    const modelBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit): Promise<Response> => {
+      if (String(url).includes("/internal/agent-runs/")) return new Response("unavailable", { status: 503 });
+      modelBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return Response.json(doneResponse());
+    });
+
+    const result = await runEditLoop(
+      makeArgs({
+        dir: tmpDir,
+        mcp: {
+          endpoint: "https://api.sigilix.ai/internal/agent-runs/r/mcp",
+          capability: "f".repeat(64),
+        },
+      }),
+    );
+
+    expect(result.stoppedReason).toBe("done");
+    expect(JSON.stringify(modelBodies[0])).not.toContain("mcp_0");
+  });
+
   // ── cap-calls ───────────────────────────────────────────────────────────────
 
   it("stops at maxModelCalls when done is never called", async () => {

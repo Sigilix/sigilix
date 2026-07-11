@@ -1416,9 +1416,9 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     expect(await invoke.json()).toEqual({ error: "surface_not_allowed" })
   })
 
-  it("derives chat and deep-research surfaces from dedicated internal paths", async () => {
+  it("derives chat, deep-research, pr-review, and agent surfaces from dedicated internal paths", async () => {
     nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
-    const { owner, tenant } = makePair()
+    const { owner, tenant, env, instances } = makePair()
     await owner.fetch(
       connectRequest({ serverId: "server-private", url: "https://mcp.linear.app/mcp", callbackUrl: "https://cb" }),
     )
@@ -1426,7 +1426,7 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
       policyRequest("server-private", "PUT", {
         version: 0,
         enabled: true,
-        surfaces: { ...ALL_SURFACES_OFF, chat: true, "deep-research": true },
+        surfaces: { ...ALL_SURFACES_OFF, chat: true, "deep-research": true, "pr-review": true, agent: true },
         allowedReadTools: ["list_comments"],
         maxCallsPerRun: 2,
       }),
@@ -1446,7 +1446,7 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
         body: JSON.stringify({
           version: 0,
           enabled: true,
-          surfaces: { ...ALL_SURFACES_OFF, chat: true },
+          surfaces: { ...ALL_SURFACES_OFF, chat: true, "pr-review": true, agent: true },
           allowedReadTools: ["list_comments"],
           maxCallsPerRun: 2,
         }),
@@ -1461,7 +1461,20 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     const deepCatalog = await post(tenant, "/broker/runtime/deep-research/catalog", { surface: "chat" })
     expect(deepCatalog.status).toBe(200)
     expect((await deepCatalog.json()) as { tools: unknown[] }).toEqual({ tools: [], partial: false })
-    expect((await post(tenant, "/broker/runtime/pr-review/catalog", { surface: "chat" })).status).toBe(404)
+    const reviewCatalog = await post(tenant, "/broker/runtime/pr-review/catalog", { surface: "chat" })
+    expect(reviewCatalog.status).toBe(200)
+    expect((await reviewCatalog.json()) as { tools: unknown[] }).toMatchObject({
+      tools: [{ serverId: "grant-public", name: "list_comments" }],
+    })
+    const otherTenant = new McpConnectionsAgent(makeDoState().state, env)
+    instances.set("tenant:43", otherTenant)
+    const isolatedCatalog = await post(otherTenant, "/broker/runtime/pr-review/catalog", {})
+    expect(await isolatedCatalog.json()).toEqual({ tools: [], partial: false })
+    const agentCatalog = await post(tenant, "/broker/runtime/agent/catalog", { surface: "chat" })
+    expect(agentCatalog.status).toBe(200)
+    expect((await agentCatalog.json()) as { tools: unknown[] }).toMatchObject({
+      tools: [{ serverId: "grant-public", name: "list_comments" }],
+    })
 
     const invoke = await post(tenant, "/broker/runtime/chat/invoke", {
       surface: "agent",
@@ -1472,6 +1485,52 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     })
     expect(invoke.status).toBe(200)
     expect(callToolSpy).toHaveBeenCalledTimes(1)
+
+    const reviewInvoke = await post(tenant, "/broker/runtime/pr-review/invoke", {
+      surface: "agent",
+      runId: "run-review",
+      serverId: "grant-public",
+      toolName: "list_comments",
+      arguments: {},
+    })
+    expect(reviewInvoke.status).toBe(200)
+    expect(callToolSpy).toHaveBeenCalledTimes(2)
+
+    const agentInvoke = await post(tenant, "/broker/runtime/agent/invoke", {
+      surface: "chat",
+      runId: "run-agent",
+      serverId: "grant-public",
+      toolName: "list_comments",
+      arguments: {},
+    })
+    expect(agentInvoke.status).toBe(200)
+    expect(callToolSpy).toHaveBeenCalledTimes(3)
+
+    const policyOff = await tenant.fetch(
+      new Request("https://mcp-connections.do/broker/servers/grant-public/policy", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          version: 1,
+          enabled: false,
+          surfaces: ALL_SURFACES_OFF,
+          allowedReadTools: [],
+          maxCallsPerRun: 0,
+        }),
+      }),
+    )
+    expect(policyOff.status).toBe(200)
+    expect(
+      (
+        await post(tenant, "/broker/runtime/pr-review/invoke", {
+          runId: "run-review-policy-off",
+          serverId: "grant-public",
+          toolName: "list_comments",
+          arguments: {},
+        })
+      ).status,
+    ).toBe(403)
+    expect(callToolSpy).toHaveBeenCalledTimes(3)
 
     const revoke = await tenant.fetch(
       new Request("https://mcp-connections.do/broker/servers/grant-public", { method: "DELETE" }),
@@ -1485,7 +1544,7 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
       arguments: {},
     })
     expect(deniedAfterRevoke.status).toBe(403)
-    expect(callToolSpy).toHaveBeenCalledTimes(1)
+    expect(callToolSpy).toHaveBeenCalledTimes(3)
   })
 
   it("routes only an active tenant grant to its user vault and rewrites the private server id", async () => {
@@ -1859,9 +1918,81 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     await Promise.resolve()
     expect(revoked).toBe(false)
     finish()
-    expect((await invoke).status).toBe(200)
+    // Revocation changes the grant state immediately, then waits for the
+    // admitted provider read. Its result is discarded by the post-call policy
+    // check before any caller can consume stale authorization.
+    expect((await invoke).status).toBe(403)
     expect((await revoke).status).toBe(200)
     expect(revoked).toBe(true)
+    expect(
+      tenantSql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM sigilix_mcp_memory_v1").toArray()[0]?.count,
+    ).toBe(0)
+  })
+
+  it("does not let mid-call policy broadening retroactively authorize memory indexing", async () => {
+    nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+    let finish!: () => void
+    callToolImpl = () =>
+      new Promise((resolve) => {
+        finish = () => resolve({ content: [{ type: "text", text: "pre-consent result" }] })
+      })
+    const { owner, tenant, tenantSql } = makePair()
+    await enableCliGrant({
+      owner,
+      tenant,
+      ownerScope: "session:111",
+      serverId: "linear-private",
+      grantId: "linear-public",
+      url: "https://mcp.linear.app/mcp",
+      tools: ["list_comments"],
+    })
+
+    const invoke = post(tenant, "/broker/runtime/invoke", {
+      surface: "cli",
+      runId: "run-before-memory-consent",
+      serverId: "linear-public",
+      toolName: "list_comments",
+      arguments: {},
+    })
+    await vi.waitFor(() => expect(callToolSpy).toHaveBeenCalledTimes(1))
+
+    expect(
+      (
+        await owner.fetch(
+          policyRequest("linear-private", "PUT", {
+            version: 1,
+            enabled: true,
+            surfaces: { ...ALL_SURFACES_OFF, cli: true, "memory-index": true },
+            allowedReadTools: ["list_comments"],
+            maxCallsPerRun: 2,
+          }),
+        )
+      ).status,
+    ).toBe(200)
+    expect(
+      (
+        await tenant.fetch(
+          new Request("https://mcp-connections.do/broker/servers/linear-public/policy", {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              version: 1,
+              enabled: true,
+              surfaces: { ...ALL_SURFACES_OFF, cli: true, "memory-index": true },
+              allowedReadTools: ["list_comments"],
+              maxCallsPerRun: 2,
+            }),
+          }),
+        )
+      ).status,
+    ).toBe(200)
+
+    finish()
+    const response = await invoke
+    expect(response.status).toBe(200)
+    const value = (await response.json()) as Record<string, unknown>
+    expect(value).toMatchObject({ result: { content: [{ type: "text", text: "pre-consent result" }] } })
+    expect(value).not.toHaveProperty("memory")
     expect(
       tenantSql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM sigilix_mcp_memory_v1").toArray()[0]?.count,
     ).toBe(0)

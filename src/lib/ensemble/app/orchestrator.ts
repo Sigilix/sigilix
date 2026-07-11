@@ -41,7 +41,7 @@ import { settleShadowBakeoff, type ShadowBakeoffState, type ProdSpecialistSnapsh
 import { runSpecialistsAndSynthesize } from "./specialists"
 import { maybeScheduleMultiBatchShadow } from "./multibatch-shadow-scheduler"
 import { buildCostProjectionLineup } from "@/src/lib/ensemble/adapters/model-provider"
-import { fetchDiffAndConfig, packAndRoute } from "./context/fetch-and-pack"
+import { fetchDiffAndConfig, packAndRoute, startPrReviewConnectedAppEvidence } from "./context/fetch-and-pack"
 import { gatherRetrievalEvidence } from "./context/gather-evidence"
 import { gatherGraphEvidence } from "./context/gather-graph"
 import { assembleSpecialistPrompts } from "./context/assemble-prompts"
@@ -60,7 +60,6 @@ import { finalize, type ReviewMeta } from "./session"
 import type { EnsembleHandlerArgs, EnsembleTelemetry, EnsembleResult } from "./orchestrator-types"
 import { buildClient, verifyReviewPersisted } from "@/src/lib/ensemble/adapters/review-sink"
 import type { GitHubClient } from "@/src/shared/adapters/github"
-
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
 // SIG-318 / SIG-366: the two EXPORTED inline-overview budget thresholds
@@ -281,6 +280,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       // a noop-merge skip would help with anyway.
     }
 
+    const connectedAppEvidence = startPrReviewConnectedAppEvidence(args, client, meta.base?.sha ?? "")
     args.statusReporter?.report(retrievalStatusUpdate())
     // SIG-318 (PR 12g-1): the diff + open-PRs fetch, the incremental-select marker
     // read, the per-repo sigilix.json load, the AI-instruction-ingest flag, and the
@@ -931,6 +931,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
         maybePostAstAutoInline,
         deterministicCheckAnnotationMeta,
         deterministicErroredReviewMeta,
+        connectedAppEvidence,
       }),
       {
         env,

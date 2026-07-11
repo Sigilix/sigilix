@@ -52,6 +52,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { EditLoopArgs, EditLoopResult, StoppedReason } from "./agent-loop.js";
+import { emitFileEdit } from "./events.js";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -229,6 +230,34 @@ export function parseCliEvents(stdout: string): { modelCalls: number; errored: b
   return { modelCalls, errored };
 }
 
+/** opencode's file-mutating tools (it collapses write/apply_patch into "edit"). */
+const EDIT_TOOLS = new Set(["edit", "write", "apply_patch"]);
+
+/**
+ * If a single NDJSON line is a COMPLETED file-edit tool call, return the absolute
+ * filePath it wrote; otherwise null. Used to stream live diff-pane events as the
+ * full engine works (mirrors the minimal loop's per-edit emit). Pure + robust to
+ * non-JSON / partial lines. Shape (verified against the real binary):
+ *   {type:"tool_use", part:{type:"tool", tool:"edit",
+ *     state:{status:"completed", input:{filePath:"/work/…"}}}}
+ */
+export function parseEditFilePath(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  let ev: { type?: unknown; part?: { type?: unknown; tool?: unknown; state?: { status?: unknown; input?: { filePath?: unknown } } } };
+  try {
+    ev = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  const part = ev.part;
+  if (ev.type !== "tool_use" || part?.type !== "tool") return null;
+  if (typeof part.tool !== "string" || !EDIT_TOOLS.has(part.tool)) return null;
+  if (part.state?.status !== "completed") return null;
+  const fp = part.state?.input?.filePath;
+  return typeof fp === "string" && fp.length > 0 ? fp : null;
+}
+
 /**
  * Build the `opencode run` argv. Deliberately NEVER passes
  * `--dangerously-skip-permissions`: the run relies entirely on the config's
@@ -252,16 +281,37 @@ interface SpawnResult {
 function spawnCli(
   bin: string,
   cliArgs: string[],
-  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
+  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; onLine?: (line: string) => void },
 ): Promise<SpawnResult> {
   return new Promise((resolve) => {
     let stdout = "";
+    let lineBuf = "";
     let timedOut = false;
     let settled = false;
+    // Feed each complete NDJSON line to onLine as it arrives (live diff-pane
+    // streaming), buffering any trailing partial line across data chunks.
+    const pumpLines = (chunk: string, flush = false): void => {
+      if (!opts.onLine) return;
+      lineBuf += chunk;
+      let nl: number;
+      while ((nl = lineBuf.indexOf("\n")) >= 0) {
+        opts.onLine(lineBuf.slice(0, nl));
+        lineBuf = lineBuf.slice(nl + 1);
+      }
+      // Share STDOUT_CAP's memory ceiling: drop a runaway unterminated line so the
+      // streaming path can't balloon memory the way the capped `stdout` can't.
+      // A >cap single line is never a valid NDJSON edit event anyway.
+      if (lineBuf.length > STDOUT_CAP) lineBuf = "";
+      if (flush && lineBuf.length > 0) {
+        opts.onLine(lineBuf);
+        lineBuf = "";
+      }
+    };
     const finish = (r: SpawnResult): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      pumpLines("", true); // flush any final unterminated line
       resolve(r);
     };
 
@@ -282,8 +332,10 @@ function spawnCli(
     }, opts.timeoutMs);
 
     child.stdout?.on("data", (d: Buffer) => {
+      const s = d.toString();
       // Size-cap the buffer so a runaway-verbose run can't balloon memory.
-      if (stdout.length < STDOUT_CAP) stdout += d.toString();
+      if (stdout.length < STDOUT_CAP) stdout += s;
+      pumpLines(s);
     });
     // stderr may carry the model body on failure — drained but NOT captured/logged.
     child.stderr?.on("data", () => {});
@@ -338,11 +390,33 @@ export async function runCliAgent(args: CliAgentArgs): Promise<EditLoopResult> {
     // (via the SIGKILL below). caps.maxModelCalls / maxTokens are NOT yet enforced and
     // tokens is reported as 0 — Part 2 wires opencode's own step/token budget + parses
     // usage from the event stream so the wider engine has a call/cost ceiling.
+    // Stream each completed file edit to the live diff pane as the agent works
+    // (mirrors the minimal loop). Serialize the emits — each runs `git add/diff`,
+    // so a chain avoids racing our OWN index writes — and skip anything outside
+    // the repo. KNOWN GAPS (live-pane only; the final PR commit still captures
+    // everything): a multi-file `apply_patch` reports one filePath, and rename/
+    // delete tools aren't in EDIT_TOOLS, so those files may not stream live. The
+    // `git add --intent-to-add` in emitFileEdit also shares the repo index with
+    // opencode's own git snapshots during the run — benign for the final commit
+    // (git.ts commits with `add -A` after this returns), but a fully race-free
+    // no-index diff is a follow-up in the shared emitFileEdit.
+    let emitChain: Promise<void> = Promise.resolve();
+    const onLine = (line: string): void => {
+      const abs = parseEditFilePath(line);
+      if (abs === null || !path.isAbsolute(abs)) return; // opencode emits absolute; skip if not
+      const rel = path.relative(dir, abs);
+      // Skip anything outside the repo (== the dir itself, or a `..`-escaping path).
+      if (rel === "" || rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) return;
+      emitChain = emitChain.then(() => emitFileEdit(args.events, dir, rel)).catch(() => {});
+    };
+
     const { stdout, code, timedOut } = await spawnCli(CLI_BIN, cliArgs, {
       cwd: dir,
       env,
       timeoutMs: caps.timeoutMs,
+      onLine,
     });
+    await emitChain; // flush any in-flight edit events before returning
 
     const parsed = parseCliEvents(stdout);
     modelCalls = parsed.modelCalls;

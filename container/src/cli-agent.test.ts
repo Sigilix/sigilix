@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   mkdtemp: vi.fn(),
   writeFile: vi.fn(),
   rm: vi.fn(),
+  emitFileEdit: vi.fn(),
 }));
 
 vi.mock("node:child_process", () => ({
@@ -20,12 +21,15 @@ vi.mock("node:fs", () => ({
   promises: { mkdtemp: mocks.mkdtemp, writeFile: mocks.writeFile, rm: mocks.rm },
 }));
 
+vi.mock("./events.js", () => ({ emitFileEdit: mocks.emitFileEdit }));
+
 import {
   buildOpencodeConfig,
   buildCliEnv,
   buildPrompt,
   buildCliArgs,
   parseCliEvents,
+  parseEditFilePath,
   runCliAgent,
   type CliAgentArgs,
 } from "./cli-agent.js";
@@ -57,6 +61,23 @@ function fakeChild(stdout: string, code: number) {
   // Emit asynchronously so listeners attach first.
   setTimeout(() => {
     if (stdout) child.stdout.emit("data", Buffer.from(stdout));
+    child.emit("close", code);
+  }, 0);
+  return child;
+}
+
+/** Like fakeChild but emits several stdout chunks (to exercise line buffering). */
+function fakeChildChunks(chunks: string[], code: number) {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = vi.fn();
+  setTimeout(() => {
+    for (const c of chunks) child.stdout.emit("data", Buffer.from(c));
     child.emit("close", code);
   }, 0);
   return child;
@@ -204,6 +225,30 @@ describe("parseCliEvents", () => {
   });
 });
 
+// ── parseEditFilePath ─────────────────────────────────────────────────────────
+
+describe("parseEditFilePath", () => {
+  const line = (o: unknown) => JSON.stringify(o);
+  const editEvt = (tool: string, status: string, filePath?: string) =>
+    line({ type: "tool_use", part: { type: "tool", tool, state: { status, input: filePath ? { filePath } : {} } } });
+
+  it("returns the filePath for a completed edit/write/apply_patch tool call", () => {
+    expect(parseEditFilePath(editEvt("edit", "completed", "/work/a.ts"))).toBe("/work/a.ts");
+    expect(parseEditFilePath(editEvt("write", "completed", "/work/b.ts"))).toBe("/work/b.ts");
+    expect(parseEditFilePath(editEvt("apply_patch", "completed", "/work/c.ts"))).toBe("/work/c.ts");
+  });
+
+  it("returns null for non-edit tools, incomplete states, and non-tool events", () => {
+    expect(parseEditFilePath(editEvt("read", "completed", "/work/a.ts"))).toBeNull(); // read isn't a mutation
+    expect(parseEditFilePath(editEvt("edit", "error", "/work/a.ts"))).toBeNull(); // denied/failed
+    expect(parseEditFilePath(editEvt("edit", "running", "/work/a.ts"))).toBeNull(); // not done yet
+    expect(parseEditFilePath(editEvt("edit", "completed"))).toBeNull(); // no filePath
+    expect(parseEditFilePath(line({ type: "step_finish" }))).toBeNull();
+    expect(parseEditFilePath("not json")).toBeNull();
+    expect(parseEditFilePath("")).toBeNull();
+  });
+});
+
 // ── runCliAgent ───────────────────────────────────────────────────────────────
 
 describe("runCliAgent", () => {
@@ -241,6 +286,62 @@ describe("runCliAgent", () => {
     // The real key is set only in the child process env passed to spawn.
     const spawnEnv = (mocks.spawn.mock.calls[0]?.[2] as { env: NodeJS.ProcessEnv }).env;
     expect(spawnEnv.SIGILIX_MODEL_KEY).toBe("sk-secret-key");
+  });
+
+  it("streams a diff-pane event for each completed in-repo edit, skipping out-of-repo", async () => {
+    const events = { url: "https://api.sigilix.ai/internal/agent-runs/r/events", secret: "s" };
+    const edit = (filePath: string) =>
+      JSON.stringify({ type: "tool_use", part: { type: "tool", tool: "edit", state: { status: "completed", input: { filePath } } } });
+    // in-repo edit + an out-of-repo write + a noise line, split across chunks.
+    mocks.spawn.mockReturnValue(
+      fakeChild([edit("/tmp/clone/foo.ts"), edit("/etc/passwd"), '{"type":"step_finish"}'].join("\n"), 0),
+    );
+    mocks.execFile.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+    mocks.emitFileEdit.mockResolvedValue(undefined);
+
+    await runCliAgent(makeArgs({ events }));
+
+    // Only the in-repo edit is emitted, with the repo-relative path.
+    expect(mocks.emitFileEdit).toHaveBeenCalledTimes(1);
+    expect(mocks.emitFileEdit).toHaveBeenCalledWith(events, "/tmp/clone", "foo.ts");
+  });
+
+  it("reassembles an edit line split across chunks and flushes a final unterminated edit", async () => {
+    const events = { url: "https://api.sigilix.ai/internal/agent-runs/r/events", secret: "s" };
+    const edit = (filePath: string) =>
+      JSON.stringify({ type: "tool_use", part: { type: "tool", tool: "edit", state: { status: "completed", input: { filePath } } } });
+    const first = edit("/tmp/clone/foo.ts");
+    const mid = Math.floor(first.length / 2);
+    // chunk 1 = first half of foo's edit line (no newline); chunk 2 = its second
+    // half + newline + a SECOND edit line with NO trailing newline (flush path).
+    mocks.spawn.mockReturnValue(
+      fakeChildChunks([first.slice(0, mid), first.slice(mid) + "\n" + edit("/tmp/clone/bar.ts")], 0),
+    );
+    mocks.execFile.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+    mocks.emitFileEdit.mockResolvedValue(undefined);
+
+    await runCliAgent(makeArgs({ events }));
+
+    expect(mocks.emitFileEdit).toHaveBeenCalledTimes(2);
+    expect(mocks.emitFileEdit).toHaveBeenCalledWith(events, "/tmp/clone", "foo.ts"); // reassembled across chunks
+    expect(mocks.emitFileEdit).toHaveBeenCalledWith(events, "/tmp/clone", "bar.ts"); // final unterminated → flushed
+  });
+
+  it("keeps emitting after an emitFileEdit failure — the chain recovers", async () => {
+    const events = { url: "https://api.sigilix.ai/internal/agent-runs/r/events", secret: "s" };
+    const edit = (filePath: string) =>
+      JSON.stringify({ type: "tool_use", part: { type: "tool", tool: "edit", state: { status: "completed", input: { filePath } } } });
+    mocks.spawn.mockReturnValue(
+      fakeChild([edit("/tmp/clone/foo.ts"), edit("/tmp/clone/bar.ts"), '{"type":"step_finish"}'].join("\n"), 0),
+    );
+    mocks.execFile.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+    // The FIRST emit rejects; the chain's `.catch` must not stall it — the second still fires.
+    mocks.emitFileEdit.mockRejectedValueOnce(new Error("boom")).mockResolvedValue(undefined);
+
+    await runCliAgent(makeArgs({ events }));
+
+    expect(mocks.emitFileEdit).toHaveBeenCalledTimes(2);
+    expect(mocks.emitFileEdit).toHaveBeenCalledWith(events, "/tmp/clone", "bar.ts"); // emitted despite the earlier failure
   });
 
   it("no-change: clean tree → changed:false (no spurious PR)", async () => {

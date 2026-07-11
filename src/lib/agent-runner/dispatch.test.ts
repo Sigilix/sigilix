@@ -118,21 +118,21 @@ describe("dispatchAgentRun", () => {
 
   it('mode "off" → dispatched:false; getInstallationToken NOT called; getContainer NOT called', async () => {
     const result = await dispatchAgentRun(makeEnv("off"), SAMPLE_INPUT)
-    expect(result).toEqual({ runId: "run-abc", dispatched: false })
+    expect(result).toEqual({ runId: "run-abc", dispatched: false, reason: "runner-dark: mode=off" })
     expect(mockGetInstallationToken).not.toHaveBeenCalled()
     expect(mockGetContainer).not.toHaveBeenCalled()
   })
 
   it("mode unset → dispatched:false; getInstallationToken NOT called; getContainer NOT called", async () => {
     const result = await dispatchAgentRun(makeEnv(undefined), SAMPLE_INPUT)
-    expect(result).toEqual({ runId: "run-abc", dispatched: false })
+    expect(result).toEqual({ runId: "run-abc", dispatched: false, reason: "runner-dark: mode=unset" })
     expect(mockGetInstallationToken).not.toHaveBeenCalled()
     expect(mockGetContainer).not.toHaveBeenCalled()
   })
 
   it('mode "ON" (wrong case) → dispatched:false; dark guarantee', async () => {
     const result = await dispatchAgentRun(makeEnv("ON"), SAMPLE_INPUT)
-    expect(result).toEqual({ runId: "run-abc", dispatched: false })
+    expect(result).toEqual({ runId: "run-abc", dispatched: false, reason: "runner-dark: mode=ON" })
     expect(mockGetInstallationToken).not.toHaveBeenCalled()
   })
 
@@ -360,7 +360,9 @@ describe("dispatchAgentRun", () => {
     mockGetInstallationToken.mockRejectedValue(new Error("GitHub API unavailable"))
 
     const result = await dispatchAgentRun(makeEnv("on"), SAMPLE_INPUT)
-    expect(result).toEqual({ runId: "run-abc", dispatched: false })
+    // The error path surfaces WHY it failed (the diagnostic reason), not just a bare false.
+    expect(result).toMatchObject({ runId: "run-abc", dispatched: false })
+    expect(result.reason).toBe("dispatch-failed: GitHub API unavailable")
     expect(mockGetContainer).not.toHaveBeenCalled()
   })
 
@@ -370,7 +372,8 @@ describe("dispatchAgentRun", () => {
     mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
 
     const result = await dispatchAgentRun(makeEnv("on"), SAMPLE_INPUT)
-    expect(result).toEqual({ runId: "run-abc", dispatched: false })
+    expect(result).toMatchObject({ runId: "run-abc", dispatched: false })
+    expect(result.reason).toBe("dispatch-failed: Container unreachable")
   })
 
   it("container fetch returns non-ok (5xx) → dispatched:false, no throw-out", async () => {
@@ -379,7 +382,8 @@ describe("dispatchAgentRun", () => {
     mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
 
     const result = await dispatchAgentRun(makeEnv("on"), SAMPLE_INPUT)
-    expect(result).toEqual({ runId: "run-abc", dispatched: false })
+    expect(result).toMatchObject({ runId: "run-abc", dispatched: false })
+    expect(result.reason).toMatch(/^dispatch-failed:/)
   })
 
   it("dispatch failure logs agent-runner-dispatch-failed (without token or key)", async () => {

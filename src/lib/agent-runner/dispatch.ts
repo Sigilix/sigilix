@@ -191,7 +191,7 @@ function agentRunnerStub(env: Env, runId: string) {
 export async function dispatchAgentRun(
   env: Env,
   input: AgentRunTaskInput,
-): Promise<{ runId: string; dispatched: boolean; outcome?: AgentRunOutcome }> {
+): Promise<{ runId: string; dispatched: boolean; outcome?: AgentRunOutcome; reason?: string }> {
   const { runId } = input
 
   // ── Dark gate ───────────────────────────────────────────────────────────────
@@ -199,7 +199,7 @@ export async function dispatchAgentRun(
     console.log(
       JSON.stringify({ event: "agent-runner-skipped", runId, mode: env.OPENCLAW_AGENT_RUNNER_MODE ?? "unset" }),
     )
-    return { runId, dispatched: false }
+    return { runId, dispatched: false, reason: `runner-dark: mode=${env.OPENCLAW_AGENT_RUNNER_MODE ?? "unset"}` }
   }
 
   // ── Mint + dispatch (fail-safe) ──────────────────────────────────────────────
@@ -340,7 +340,7 @@ export async function dispatchAgentRun(
         // installationToken and model.key intentionally excluded
       }),
     )
-    return { runId, dispatched: false }
+    return { runId, dispatched: false, reason: `dispatch-failed: ${err instanceof Error ? err.message : String(err)}` }
   }
 }
 

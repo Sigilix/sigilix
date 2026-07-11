@@ -1416,9 +1416,9 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     expect(await invoke.json()).toEqual({ error: "surface_not_allowed" })
   })
 
-  it("derives chat, deep-research, and agent surfaces from dedicated internal paths", async () => {
+  it("derives chat, deep-research, pr-review, and agent surfaces from dedicated internal paths", async () => {
     nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
-    const { owner, tenant } = makePair()
+    const { owner, tenant, env, instances } = makePair()
     await owner.fetch(
       connectRequest({ serverId: "server-private", url: "https://mcp.linear.app/mcp", callbackUrl: "https://cb" }),
     )
@@ -1426,7 +1426,7 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
       policyRequest("server-private", "PUT", {
         version: 0,
         enabled: true,
-        surfaces: { ...ALL_SURFACES_OFF, chat: true, "deep-research": true, agent: true },
+        surfaces: { ...ALL_SURFACES_OFF, chat: true, "deep-research": true, "pr-review": true, agent: true },
         allowedReadTools: ["list_comments"],
         maxCallsPerRun: 2,
       }),
@@ -1446,7 +1446,7 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
         body: JSON.stringify({
           version: 0,
           enabled: true,
-          surfaces: { ...ALL_SURFACES_OFF, chat: true, agent: true },
+          surfaces: { ...ALL_SURFACES_OFF, chat: true, "pr-review": true, agent: true },
           allowedReadTools: ["list_comments"],
           maxCallsPerRun: 2,
         }),
@@ -1461,12 +1461,20 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     const deepCatalog = await post(tenant, "/broker/runtime/deep-research/catalog", { surface: "chat" })
     expect(deepCatalog.status).toBe(200)
     expect((await deepCatalog.json()) as { tools: unknown[] }).toEqual({ tools: [], partial: false })
+    const reviewCatalog = await post(tenant, "/broker/runtime/pr-review/catalog", { surface: "chat" })
+    expect(reviewCatalog.status).toBe(200)
+    expect((await reviewCatalog.json()) as { tools: unknown[] }).toMatchObject({
+      tools: [{ serverId: "grant-public", name: "list_comments" }],
+    })
+    const otherTenant = new McpConnectionsAgent(makeDoState().state, env)
+    instances.set("tenant:43", otherTenant)
+    const isolatedCatalog = await post(otherTenant, "/broker/runtime/pr-review/catalog", {})
+    expect(await isolatedCatalog.json()).toEqual({ tools: [], partial: false })
     const agentCatalog = await post(tenant, "/broker/runtime/agent/catalog", { surface: "chat" })
     expect(agentCatalog.status).toBe(200)
     expect((await agentCatalog.json()) as { tools: unknown[] }).toMatchObject({
       tools: [{ serverId: "grant-public", name: "list_comments" }],
     })
-    expect((await post(tenant, "/broker/runtime/pr-review/catalog", { surface: "chat" })).status).toBe(404)
 
     const invoke = await post(tenant, "/broker/runtime/chat/invoke", {
       surface: "agent",
@@ -1478,6 +1486,16 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     expect(invoke.status).toBe(200)
     expect(callToolSpy).toHaveBeenCalledTimes(1)
 
+    const reviewInvoke = await post(tenant, "/broker/runtime/pr-review/invoke", {
+      surface: "agent",
+      runId: "run-review",
+      serverId: "grant-public",
+      toolName: "list_comments",
+      arguments: {},
+    })
+    expect(reviewInvoke.status).toBe(200)
+    expect(callToolSpy).toHaveBeenCalledTimes(2)
+
     const agentInvoke = await post(tenant, "/broker/runtime/agent/invoke", {
       surface: "chat",
       runId: "run-agent",
@@ -1486,7 +1504,33 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
       arguments: {},
     })
     expect(agentInvoke.status).toBe(200)
-    expect(callToolSpy).toHaveBeenCalledTimes(2)
+    expect(callToolSpy).toHaveBeenCalledTimes(3)
+
+    const policyOff = await tenant.fetch(
+      new Request("https://mcp-connections.do/broker/servers/grant-public/policy", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          version: 1,
+          enabled: false,
+          surfaces: ALL_SURFACES_OFF,
+          allowedReadTools: [],
+          maxCallsPerRun: 0,
+        }),
+      }),
+    )
+    expect(policyOff.status).toBe(200)
+    expect(
+      (
+        await post(tenant, "/broker/runtime/pr-review/invoke", {
+          runId: "run-review-policy-off",
+          serverId: "grant-public",
+          toolName: "list_comments",
+          arguments: {},
+        })
+      ).status,
+    ).toBe(403)
+    expect(callToolSpy).toHaveBeenCalledTimes(3)
 
     const revoke = await tenant.fetch(
       new Request("https://mcp-connections.do/broker/servers/grant-public", { method: "DELETE" }),
@@ -1500,7 +1544,7 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
       arguments: {},
     })
     expect(deniedAfterRevoke.status).toBe(403)
-    expect(callToolSpy).toHaveBeenCalledTimes(2)
+    expect(callToolSpy).toHaveBeenCalledTimes(3)
   })
 
   it("routes only an active tenant grant to its user vault and rewrites the private server id", async () => {

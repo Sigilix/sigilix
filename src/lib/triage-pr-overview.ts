@@ -25,10 +25,12 @@ import type { Env } from "@/src/shared/types/env"
 // / `buildPrompt` call and re-exports every previously-exported symbol that
 // moved so importers + tests stay unchanged.
 import { mergeCachedAndFreshRows, parseOverviewResponse, scopedDiffFromMisses } from "./triage-pr-overview-parse"
+import { excludePrAuthor } from "./triage-pr-overview-reviewers"
 import { formatOverviewComment, renderReviewContextBlock, truncate } from "./triage-pr-overview-format"
 import { deleteLegacyWarmupSticky, findExistingOverviewComment, scanComments } from "./triage-pr-overview-scan"
 import { graftReviewStatusBlock } from "./pr-review-status-render"
 import { buildClient } from "./triage-pr-overview-client"
+import type { PrReviewAppEvidence } from "@/src/features/pr-review-app-evidence"
 
 // SIG-376: re-export every symbol relocated into the leaves so external
 // importers (`./index`, `./pr-overview-stub`, `./ensemble/app/publish`) and
@@ -134,6 +136,9 @@ export interface PrOverviewArgs {
    * legacy queue-dispatched overview runs).
    */
   reviewContext?: PrOverviewReviewContext
+  /** Deterministic connected-app evidence for the sticky renderer only. It is
+   * intentionally excluded from the overview model prompt. */
+  connectedAppEvidence?: readonly PrReviewAppEvidence[]
   /**
    * SIG-216 fix-up: bypass the per-(PR, headSha) KV dedupe lock
    * WITHOUT bypassing the stale-head guards. Used by the inline-from-
@@ -171,6 +176,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
     env,
     force,
     reviewContext,
+    connectedAppEvidence,
     skipDedupe,
     abortSignal,
     githubClient,
@@ -606,6 +612,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
       // pass — the formatter checks for an empty array internally and
       // skips the section.
       gateResults,
+      ...(connectedAppEvidence !== undefined ? { connectedAppEvidence } : {}),
       overviewConfig: effectiveSigilixConfig.overview,
     })
 
@@ -940,13 +947,6 @@ async function graftExistingStatusBlock(
     )
     return null
   }
-}
-
-function excludePrAuthor(reviewers: readonly string[] | undefined, prAuthor: string | null): string[] | undefined {
-  if (!reviewers || reviewers.length === 0 || !prAuthor) return reviewers ? [...reviewers] : undefined
-  const author = prAuthor.toLowerCase()
-  const filtered = reviewers.filter((reviewer) => reviewer.trim().replace(/^@/u, "").toLowerCase() !== author)
-  return filtered.length > 0 ? filtered : undefined
 }
 
 export interface PromptCtx {

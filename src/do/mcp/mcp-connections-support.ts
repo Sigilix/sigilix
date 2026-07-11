@@ -67,13 +67,14 @@ export interface McpRuntimeToolDescriptor {
 }
 
 export interface ResearchBrokerRuntimeRoute {
-  surface: "chat" | "deep-research" | "agent"
+  surface: "chat" | "deep-research" | "pr-review" | "agent"
   action: "catalog" | "invoke"
 }
 
-/** Dedicated DO-internal research routes bind the surface in the URL. */
+/** Dedicated DO-internal routes bind non-CLI surfaces in the URL so public
+ * callers cannot choose a more privileged runtime surface in JSON. */
 export function parseResearchBrokerRuntimePath(pathname: string): ResearchBrokerRuntimeRoute | null {
-  const match = /^\/broker\/runtime\/(chat|deep-research|agent)\/(catalog|invoke)$/.exec(pathname)
+  const match = /^\/broker\/runtime\/(chat|deep-research|pr-review|agent)\/(catalog|invoke)$/.exec(pathname)
   if (!match?.[1] || !match[2]) return null
   return {
     surface: match[1] as ResearchBrokerRuntimeRoute["surface"],
@@ -233,6 +234,19 @@ export function safeToolName(value: string): boolean {
 
 export function safeRuntimeId(value: string): boolean {
   return /^[A-Za-z0-9_.:-]{1,128}$/.test(value)
+}
+
+export function emitMcpRuntimeInvokeFailure(vendor: string, tool: string, timedOut: boolean): void {
+  console.error(
+    JSON.stringify({
+      event: "mcp-runtime-invoke-failed",
+      adapter: "tenant-mcp-runtime",
+      vendor,
+      tool,
+      outcome: timedOut ? "timeout" : "failed",
+      count: 0,
+    }),
+  )
 }
 
 export function parseSafeId(value: unknown): string | null {

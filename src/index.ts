@@ -979,6 +979,11 @@ export { ProviderCooldownDO } from "@/src/do/provider-cooldown"
 // AgentRunnerContainer) + [[durable_objects.bindings]] (AGENT_RUNNER) +
 // the sig-545-agent-runner-v1 new_sqlite_classes migration in wrangler.toml.
 export { AgentRunnerContainer } from "@/src/do/agent-runner-container"
+// REQUIRED whenever AgentRunnerContainer sets allowedHosts/deniedHosts: the CF
+// containers lib routes intercepted egress through ctx.exports.ContainerProxy.
+// Without this export the interception setup fails and the container 500s on boot
+// (the real cause of the #858/#867/#868 egress saga). No wrangler binding needed.
+export { ContainerProxy } from "@cloudflare/containers"
 
 // SIG-144 (Linear unification slice 1): LinearTokenBroker — owns the Linear agent
 // token lifecycle + serializes refresh across isolates. Registered via the

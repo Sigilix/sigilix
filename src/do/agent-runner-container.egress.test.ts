@@ -62,12 +62,13 @@ function makeDO(): AgentRunnerContainer {
 }
 
 describe("AgentRunnerContainer egress policy — class wiring", () => {
-  it("applies deny-by-default egress on the container instance", () => {
+  // ⚠️ TEMPORARILY REVERTED (see the DO): enableInternet=false + allowedHosts broke
+  // container boot in prod ("container responded 500"). The instance is back on the
+  // base network so the LIVE runner works. The consts are kept for a corrected
+  // denylist-only re-add (verified with a live boot test) before the full engine.
+  it("is on the base network after the egress revert (no deny-by-default override)", () => {
     const runner = makeDO()
-    // enableInternet MUST be false — a revert to true silently reopens egress.
-    expect(runner.enableInternet).toBe(false)
-    // The instance must use the reviewed allowlist / denylist, not some other set.
-    expect([...(runner.allowedHosts ?? [])].sort()).toEqual([...EXPECTED_ALLOWED].sort())
-    expect(runner.deniedHosts).toContain("169.254.169.254")
+    expect(runner.enableInternet).toBe(true)
+    expect(runner.allowedHosts).toBeUndefined()
   })
 })

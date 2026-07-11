@@ -115,12 +115,16 @@ export class AgentRunnerContainer extends Container<Env> {
   // One-shot runs should not idle; sleep quickly after the job completes.
   override sleepAfter = "2m"
 
-  // Egress isolation (phase-2 gate B): deny-by-default outbound. With
-  // enableInternet=false the container reaches ONLY allowedHosts (everything
-  // else → HTTP 520); deniedHosts blocks the metadata endpoint unconditionally.
-  override enableInternet = false
-  override allowedHosts = [...AGENT_RUNNER_ALLOWED_HOSTS]
-  override deniedHosts = [...AGENT_RUNNER_DENIED_HOSTS]
+  // Egress isolation (phase-2 gate B) — TEMPORARILY REVERTED to base network.
+  // Setting enableInternet=false + allowedHosts (PR #858) broke the container in
+  // prod: dispatch returns "container responded 500" for BOTH engines / any repo,
+  // i.e. the container never boots (the CF platform's boot-time outbound is not
+  // governed by allowedHosts, so deny-by-default starved boot). This restores the
+  // pre-#858 known-good network so the LIVE minimal make-PR runner works again.
+  // The allowlist/denylist consts are kept for a corrected re-add (denylist-only,
+  // keeping enableInternet=true, verified with a live boot test) BEFORE the full
+  // engine is ever enabled — the minimal loop is bounded and needs no egress gate.
+  override enableInternet = true
 
   // -------------------------------------------------------------------------
   // Run-record helpers — thin SQLite accessors over the DO's durable storage.

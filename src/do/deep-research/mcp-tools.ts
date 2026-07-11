@@ -1,5 +1,4 @@
 import { areBoundedMcpArguments } from "@/src/do/mcp/runtime-data"
-import type { McpSurface } from "@/src/do/mcp/runtime-policy"
 import type { ChatMessage, ChatToolDef, ToolCall } from "@/src/shared/ports/model"
 import type { ResearchModelFn } from "./model"
 import type { ResearchMcpRuntime, ResearchMcpTool } from "./mcp-runtime"
@@ -20,7 +19,6 @@ export interface ResearchMcpEvidence {
 
 interface SelectMcpEvidenceArgs {
   question: string
-  surface: McpSurface
   model: ResearchModelFn
   runtime: ResearchMcpRuntime
 }
@@ -32,7 +30,7 @@ interface SelectMcpEvidenceArgs {
  * iterative ReAct loop and tool output is never fed back as executable input.
  */
 export async function selectMcpEvidence(args: SelectMcpEvidenceArgs): Promise<ResearchMcpEvidence | null> {
-  const catalog = await args.runtime.catalog(args.surface)
+  const catalog = await args.runtime.catalog()
   if (catalog.length === 0) return null
 
   const bindings = catalog.map((tool, index) => ({ localName: `sigilix_mcp_${index}`, tool }))
@@ -73,7 +71,6 @@ export async function selectMcpEvidence(args: SelectMcpEvidenceArgs): Promise<Re
   const results = await Promise.all(
     selected.map(async ({ tool, arguments: callArguments }) => {
       const result = await args.runtime.invoke({
-        surface: args.surface,
         serverId: tool.serverId,
         toolName: tool.name,
         arguments: callArguments,

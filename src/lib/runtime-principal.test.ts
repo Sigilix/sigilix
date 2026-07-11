@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { isStableRuntimeScope, runtimeSessionScope } from "./runtime-principal"
+import { isStableRuntimeScope, isTenantRuntimeScope, runtimeSessionScope } from "./runtime-principal"
 
 describe("runtimeSessionScope", () => {
   it("keeps the established GitHub namespace when both stable ids exist", () => {
@@ -28,5 +28,15 @@ describe("isStableRuntimeScope", () => {
     expect(isStableRuntimeScope("tenant:-1")).toBe(false)
     expect(isStableRuntimeScope("tenant:0")).toBe(false)
     expect(isStableRuntimeScope("anonymous")).toBe(false)
+  })
+})
+
+describe("isTenantRuntimeScope", () => {
+  it("accepts only positive installation namespaces", () => {
+    expect(isTenantRuntimeScope("tenant:123")).toBe(true)
+    expect(isTenantRuntimeScope("session:123")).toBe(false)
+    expect(isTenantRuntimeScope("tenant:0")).toBe(false)
+    expect(isTenantRuntimeScope("tenant:-1")).toBe(false)
+    expect(isTenantRuntimeScope("tenant:1.5")).toBe(false)
   })
 })

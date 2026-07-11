@@ -61,8 +61,8 @@ export interface EngineDeps {
   mode?: ResearchMode
   emit: (event: ResearchEvent) => Promise<void> | void
   model: ResearchModelFn
-  /** Authenticated creator-scoped read-only MCP runtime. Omitted for anonymous
-   *  or otherwise unstable identities. */
+  /** Verified installation-scoped read-only MCP runtime. Omitted when the
+   *  caller has no positively authorized tenant selector. */
   mcp?: ResearchMcpRuntime
   search: (query: string) => Promise<SearchQueryResult>
   fetchPage: (url: string) => Promise<FetchPageResult>
@@ -363,7 +363,6 @@ async function gatherMcpEvidence(deps: EngineDeps): Promise<ResearchMcpEvidence 
   try {
     return await selectMcpEvidence({
       question: deps.question,
-      surface: deps.mode === "chat" ? "chat" : "deep-research",
       model: deps.model,
       runtime: deps.mcp,
     })

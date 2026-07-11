@@ -26,6 +26,7 @@ import { gatherRepoGrounding, type GatherRepoGroundingArgs } from "./repo-ground
 import { isCodebaseQuestion, isTrivialMessage } from "./text-utils"
 import type { RepoGrounding, ResearchEffort, ResearchEvent, ResearchMode, ResearchTier } from "./types"
 import { buildResearchMcpRuntime } from "./mcp-runtime"
+import { isTenantRuntimeScope } from "@/src/lib/runtime-principal"
 
 const META_KEY = "meta"
 const EVENT_PREFIX = "evt:"
@@ -42,6 +43,8 @@ interface RunMeta {
   /** The opaque creator identity that owns this run (session subject / api
    *  tenant / installation id). Only this identity may stream or cancel it. */
   creator: string
+  /** Tenant-owned MCP broker scope, separate from the run's session owner. */
+  mcpTenantScope?: string
   model: ResearchTier
   effort: ResearchEffort
   /** sig-chat-conversational-mode: the run mode (Deep Research toggle). */
@@ -72,6 +75,7 @@ export class DeepResearchDO extends DurableObject<Env> {
   private driveDone: Promise<void> | null = null
   private hooks: ResearchTestHooks | undefined
   private creator = ""
+  private mcpTenantScope = ""
   private model: ResearchTier = "astraeus"
   private effort: ResearchEffort = "medium"
   private mode: ResearchMode = "deep"
@@ -108,6 +112,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       effort?: unknown
       mode?: unknown
       creator?: unknown
+      mcpTenantScope?: unknown
       owner?: unknown
       repo?: unknown
       hasIndexedRepo?: unknown
@@ -128,6 +133,8 @@ export class DeepResearchDO extends DurableObject<Env> {
     // API-key caller (or an older portal) that omits it keeps full research.
     this.mode = parseMode(body.mode) ?? "deep"
     this.creator = typeof body.creator === "string" ? body.creator : ""
+    this.mcpTenantScope =
+      typeof body.mcpTenantScope === "string" && isTenantRuntimeScope(body.mcpTenantScope) ? body.mcpTenantScope : ""
     // sig-deep-research-repo-grounding: the repo target (resolved in the route from
     // the caller's identity) + whether they have any indexed repo. Absent ⇒ no
     // codebase grounding for this run.
@@ -143,6 +150,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       done: false,
       cancelled: false,
       creator: this.creator,
+      ...(this.mcpTenantScope ? { mcpTenantScope: this.mcpTenantScope } : {}),
       model: this.model,
       effort: this.effort,
       mode: this.mode,
@@ -196,7 +204,12 @@ export class DeepResearchDO extends DurableObject<Env> {
       if (Number.isFinite(r.tokens) && r.tokens > 0) tokensAccum += r.tokens
       return r
     }
-    const mcp = buildResearchMcpRuntime(this.env, this.creator, runId)
+    const mcp = buildResearchMcpRuntime(
+      this.env,
+      this.mcpTenantScope,
+      runId,
+      this.mode === "chat" ? "chat" : "deep-research",
+    )
 
     const deps: EngineDeps = {
       question,
@@ -277,6 +290,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       done: false,
       cancelled: false,
       creator: this.creator,
+      ...(this.mcpTenantScope ? { mcpTenantScope: this.mcpTenantScope } : {}),
       model: this.model,
       effort: this.effort,
       mode: this.mode,

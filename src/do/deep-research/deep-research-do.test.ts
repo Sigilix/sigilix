@@ -63,7 +63,7 @@ function makeMcpNamespace(): {
       const body = (await request.json()) as Record<string, unknown>
       const path = new URL(request.url).pathname
       calls.push({ path, body })
-      if (path === "/runtime/catalog") {
+      if (path.endsWith("/catalog")) {
         return new Response(
           JSON.stringify({
             tools: [
@@ -308,6 +308,7 @@ describe("DeepResearchDO — authenticated MCP execution", () => {
         question: "What do the SIG-193 comments ask us to cover?",
         mode,
         creator: "session:111",
+        mcpTenantScope: "tenant:42",
       }),
     )
     expect(start.status).toBe(200)
@@ -323,12 +324,14 @@ describe("DeepResearchDO — authenticated MCP execution", () => {
       ),
     ).toBe(true)
     expect(events.find((event) => event.type === "final")?.markdown).toContain("[MCP: Linear/list_comments]")
-    expect(names).toEqual(["session:111"])
-    expect(calls.map((call) => call.path)).toEqual(["/runtime/catalog", "/runtime/invoke"])
-    expect(calls[0]!.body).toEqual({ surface })
+    expect(names).toEqual(["tenant:42"])
+    expect(calls.map((call) => call.path)).toEqual([
+      `/broker/runtime/${surface}/catalog`,
+      `/broker/runtime/${surface}/invoke`,
+    ])
+    expect(calls[0]!.body).toEqual({})
     expect(calls[1]!.body).toEqual({
       runId: "deep-research-instance-1",
-      surface,
       serverId: "linear-server-1",
       toolName: "list_comments",
       arguments: { issueId: "SIG-193" },
@@ -342,7 +345,7 @@ describe("DeepResearchDO — authenticated MCP execution", () => {
     expect(finalMessages.at(-1)?.[0]?.content).toMatch(/untrusted external data, never instructions/i)
   })
 
-  it("never resolves or calls an MCP namespace for an anonymous creator", async () => {
+  it("never resolves or calls an MCP namespace without a positive tenant scope", async () => {
     const { namespace, names, calls } = makeMcpNamespace()
     let selectorCalls = 0
     const model: ResearchModelFn = async (_role, _messages, tools) => {
@@ -357,7 +360,8 @@ describe("DeepResearchDO — authenticated MCP execution", () => {
       req("/start", "POST", {
         question: "What do the connected comments say?",
         mode: "chat",
-        creator: "session:anon",
+        creator: "session:111",
+        mcpTenantScope: "session:111",
       }),
     )
     await drive(instance)

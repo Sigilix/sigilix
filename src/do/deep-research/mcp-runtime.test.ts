@@ -29,9 +29,10 @@ function json(value: unknown, status = 200): Response {
 describe("research MCP runtime binding", () => {
   it("does not create an MCP namespace for anonymous or invalid creators", () => {
     const { env, names } = makeEnv(() => json({ tools: [] }))
-    expect(buildResearchMcpRuntime(env, "session:anon", "run-1")).toBeUndefined()
-    expect(buildResearchMcpRuntime(env, "tenant:-1", "run-1")).toBeUndefined()
-    expect(buildResearchMcpRuntime(env, "session:111", "bad run id")).toBeUndefined()
+    expect(buildResearchMcpRuntime(env, "session:111", "run-1", "chat")).toBeUndefined()
+    expect(buildResearchMcpRuntime(env, "tenant:-1", "run-1", "chat")).toBeUndefined()
+    expect(buildResearchMcpRuntime(env, "tenant:111", "bad run id", "chat")).toBeUndefined()
+    expect(buildResearchMcpRuntime(env, "tenant:111", "run-1", "agent" as never)).toBeUndefined()
     expect(names).toEqual([])
   })
 
@@ -55,8 +56,8 @@ describe("research MCP runtime binding", () => {
         ],
       }),
     )
-    const runtime = buildResearchMcpRuntime(env, "session:111", "run-1")!
-    expect(await runtime.catalog("chat")).toEqual([
+    const runtime = buildResearchMcpRuntime(env, "tenant:111", "run-1", "chat")!
+    expect(await runtime.catalog()).toEqual([
       {
         serverId: "linear-1",
         vendor: "linear",
@@ -65,13 +66,13 @@ describe("research MCP runtime binding", () => {
         inputSchema: { type: "object", properties: { issueId: { type: "string" } } },
       },
     ])
-    expect(names).toEqual(["session:111"])
+    expect(names).toEqual(["tenant:111"])
   })
 
   it("posts an exact invocation tuple and accepts only sanitized text evidence", async () => {
     let invokeBody: unknown
     const { env } = makeEnv(async (request) => {
-      if (new URL(request.url).pathname === "/runtime/catalog") return json({ tools: [] })
+      if (new URL(request.url).pathname.endsWith("/catalog")) return json({ tools: [] })
       invokeBody = await request.json()
       return json({
         result: {
@@ -85,10 +86,9 @@ describe("research MCP runtime binding", () => {
         },
       })
     })
-    const runtime = buildResearchMcpRuntime(env, "tenant:99", "run-7")!
+    const runtime = buildResearchMcpRuntime(env, "tenant:99", "run-7", "deep-research")!
     await expect(
       runtime.invoke({
-        surface: "deep-research",
         serverId: "linear-1",
         toolName: "list_comments",
         arguments: { issueId: "SIG-193" },
@@ -96,7 +96,6 @@ describe("research MCP runtime binding", () => {
     ).resolves.toEqual({ untrusted: true, content: [{ type: "text", text: "comment data" }], truncated: false })
     expect(invokeBody).toEqual({
       runId: "run-7",
-      surface: "deep-research",
       serverId: "linear-1",
       toolName: "list_comments",
       arguments: { issueId: "SIG-193" },
@@ -107,10 +106,10 @@ describe("research MCP runtime binding", () => {
     const rejected = makeEnv(() => {
       throw new Error("DO unavailable")
     })
-    await expect(buildResearchMcpRuntime(rejected.env, "tenant:99", "run-1")!.catalog("chat")).resolves.toEqual([])
+    await expect(buildResearchMcpRuntime(rejected.env, "tenant:99", "run-1", "chat")!.catalog()).resolves.toEqual([])
 
     const denied = makeEnv(() => json({ error: "denied" }, 503))
-    await expect(buildResearchMcpRuntime(denied.env, "tenant:99", "run-1")!.catalog("chat")).resolves.toEqual([])
+    await expect(buildResearchMcpRuntime(denied.env, "tenant:99", "run-1", "chat")!.catalog()).resolves.toEqual([])
   })
 
   it("bounds an internal MCP hop even when the stub ignores Request.signal", async () => {
@@ -122,8 +121,8 @@ describe("research MCP runtime binding", () => {
         return new Promise<Response>(() => undefined)
       })
       let outcome: unknown = "pending"
-      void buildResearchMcpRuntime(env, "tenant:99", "run-timeout")!
-        .catalog("chat")
+      void buildResearchMcpRuntime(env, "tenant:99", "run-timeout", "chat")!
+        .catalog()
         .then((value) => {
           outcome = value
         })
@@ -162,8 +161,8 @@ describe("research MCP runtime binding", () => {
           }),
       )
       let outcome: unknown = "pending"
-      void buildResearchMcpRuntime(env, "tenant:99", "run-late-response")!
-        .catalog("chat")
+      void buildResearchMcpRuntime(env, "tenant:99", "run-late-response", "chat")!
+        .catalog()
         .then((value) => {
           outcome = value
         })
@@ -196,8 +195,8 @@ describe("research MCP runtime binding", () => {
           ),
       )
       let outcome: unknown = "pending"
-      void buildResearchMcpRuntime(env, "tenant:99", "run-slow-body")!
-        .catalog("chat")
+      void buildResearchMcpRuntime(env, "tenant:99", "run-slow-body", "chat")!
+        .catalog()
         .then((value) => {
           outcome = value
         })
@@ -225,8 +224,8 @@ describe("research MCP runtime binding", () => {
     try {
       const { env } = makeEnv(() => new Response(stream))
       const bounded = Promise.race([
-        buildResearchMcpRuntime(env, "tenant:99", "run-large")!
-          .catalog("chat")
+        buildResearchMcpRuntime(env, "tenant:99", "run-large", "chat")!
+          .catalog()
           .then((value) => ({ kind: "result" as const, value })),
         new Promise<{ kind: "timeout" }>((resolve) => {
           guard = setTimeout(() => resolve({ kind: "timeout" }), 1_000)
@@ -241,7 +240,7 @@ describe("research MCP runtime binding", () => {
 
   it("fails soft on an empty successful response body", async () => {
     const { env } = makeEnv(() => new Response(null, { status: 200 }))
-    await expect(buildResearchMcpRuntime(env, "tenant:99", "run-empty")!.catalog("chat")).resolves.toEqual([])
+    await expect(buildResearchMcpRuntime(env, "tenant:99", "run-empty", "chat")!.catalog()).resolves.toEqual([])
   })
 
   it("rejects invalid UTF-8 instead of corrupting MCP evidence", async () => {
@@ -254,8 +253,7 @@ describe("research MCP runtime binding", () => {
     const { env } = makeEnv(() => new Response(body))
 
     await expect(
-      buildResearchMcpRuntime(env, "tenant:99", "run-invalid-utf8")!.invoke({
-        surface: "chat",
+      buildResearchMcpRuntime(env, "tenant:99", "run-invalid-utf8", "chat")!.invoke({
         serverId: "linear-1",
         toolName: "list_comments",
         arguments: {},
@@ -274,6 +272,8 @@ describe("research MCP runtime binding", () => {
         ),
     )
 
-    await expect(buildResearchMcpRuntime(env, "tenant:99", "run-declared-large")!.catalog("chat")).resolves.toEqual([])
+    await expect(buildResearchMcpRuntime(env, "tenant:99", "run-declared-large", "chat")!.catalog()).resolves.toEqual(
+      [],
+    )
   })
 })

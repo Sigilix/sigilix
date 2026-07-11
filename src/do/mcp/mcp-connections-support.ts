@@ -65,6 +65,21 @@ export interface McpRuntimeToolDescriptor {
   inputSchema: Record<string, unknown>
 }
 
+export interface ResearchBrokerRuntimeRoute {
+  surface: "chat" | "deep-research"
+  action: "catalog" | "invoke"
+}
+
+/** Dedicated DO-internal research routes bind the surface in the URL. */
+export function parseResearchBrokerRuntimePath(pathname: string): ResearchBrokerRuntimeRoute | null {
+  const match = /^\/broker\/runtime\/(chat|deep-research)\/(catalog|invoke)$/.exec(pathname)
+  if (!match?.[1] || !match[2]) return null
+  return {
+    surface: match[1] as ResearchBrokerRuntimeRoute["surface"],
+    action: match[2] as ResearchBrokerRuntimeRoute["action"],
+  }
+}
+
 export interface McpPolicyEnvelope {
   server: { id: string; name: string; url: string; status: string; vendorId: string }
   policy: {

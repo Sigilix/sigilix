@@ -916,6 +916,78 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     expect(await invoke.json()).toEqual({ error: "surface_not_allowed" })
   })
 
+  it("derives chat and deep-research surfaces from dedicated internal paths", async () => {
+    nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+    const { owner, tenant } = makePair()
+    await owner.fetch(
+      connectRequest({ serverId: "server-private", url: "https://mcp.linear.app/mcp", callbackUrl: "https://cb" }),
+    )
+    await owner.fetch(
+      policyRequest("server-private", "PUT", {
+        version: 0,
+        enabled: true,
+        surfaces: { ...ALL_SURFACES_OFF, chat: true, "deep-research": true },
+        allowedReadTools: ["list_comments"],
+        maxCallsPerRun: 2,
+      }),
+    )
+    await post(tenant, "/grants", {
+      grantId: "grant-public",
+      ownerScope: "session:111",
+      serverId: "server-private",
+      creatorSubject: "github:111",
+      serverUrl: "https://mcp.linear.app/mcp",
+    })
+    await post(tenant, "/grants/grant-public/activate", {})
+    await tenant.fetch(
+      new Request("https://mcp-connections.do/broker/servers/grant-public/policy", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          version: 0,
+          enabled: true,
+          surfaces: { ...ALL_SURFACES_OFF, chat: true },
+          allowedReadTools: ["list_comments"],
+          maxCallsPerRun: 2,
+        }),
+      }),
+    )
+
+    const chatCatalog = await post(tenant, "/broker/runtime/chat/catalog", { surface: "agent" })
+    expect(chatCatalog.status).toBe(200)
+    expect((await chatCatalog.json()) as { tools: unknown[] }).toMatchObject({
+      tools: [{ serverId: "grant-public", name: "list_comments" }],
+    })
+    const deepCatalog = await post(tenant, "/broker/runtime/deep-research/catalog", { surface: "chat" })
+    expect(deepCatalog.status).toBe(200)
+    expect((await deepCatalog.json()) as { tools: unknown[] }).toEqual({ tools: [], partial: false })
+    expect((await post(tenant, "/broker/runtime/pr-review/catalog", { surface: "chat" })).status).toBe(404)
+
+    const invoke = await post(tenant, "/broker/runtime/chat/invoke", {
+      surface: "agent",
+      runId: "run-chat",
+      serverId: "grant-public",
+      toolName: "list_comments",
+      arguments: {},
+    })
+    expect(invoke.status).toBe(200)
+    expect(callToolSpy).toHaveBeenCalledTimes(1)
+
+    const revoke = await tenant.fetch(
+      new Request("https://mcp-connections.do/broker/servers/grant-public", { method: "DELETE" }),
+    )
+    expect(revoke.status).toBe(200)
+    const deniedAfterRevoke = await post(tenant, "/broker/runtime/chat/invoke", {
+      surface: "cli",
+      runId: "run-chat-after-revoke",
+      serverId: "grant-public",
+      toolName: "list_comments",
+      arguments: {},
+    })
+    expect(deniedAfterRevoke.status).toBe(403)
+    expect(callToolSpy).toHaveBeenCalledTimes(1)
+  })
+
   it("routes only an active tenant grant to its user vault and rewrites the private server id", async () => {
     nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
     const { owner, tenant } = makePair()

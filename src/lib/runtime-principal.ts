@@ -40,9 +40,8 @@ export function runtimeSessionSubject(record: Pick<SessionRecord, "githubUserId"
 
 /**
  * Durable runtime namespaces must identify one real portal seat or one real
- * installation. DeepResearchDO receives the creator as opaque persisted state,
- * so it re-validates the shape before using it as an MCP DO name instead of
- * trusting that an internal caller always passed the route-resolved value.
+ * installation. Every consumer re-validates the shape before using it as a DO
+ * name instead of trusting that an internal caller passed a resolved value.
  */
 export function isStableRuntimeScope(scope: string): boolean {
   if (scope.startsWith("session:")) {
@@ -55,6 +54,11 @@ export function isStableRuntimeScope(scope: string): boolean {
       !/[\u0000-\u001f\u007f]/.test(subject)
     )
   }
+  return isTenantRuntimeScope(scope)
+}
+
+/** A tenant MCP runtime always resolves to one real positive installation. */
+export function isTenantRuntimeScope(scope: string): boolean {
   if (!scope.startsWith("tenant:")) return false
   const rawId = scope.slice("tenant:".length)
   if (!/^\d+$/.test(rawId)) return false

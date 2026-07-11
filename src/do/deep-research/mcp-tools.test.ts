@@ -19,7 +19,7 @@ describe("single-pass MCP evidence selection", () => {
     const invoke = vi.fn()
     const runtime: ResearchMcpRuntime = { catalog: async () => [], invoke }
 
-    await expect(selectMcpEvidence({ question: "q", surface: "chat", model, runtime })).resolves.toBeNull()
+    await expect(selectMcpEvidence({ question: "q", model, runtime })).resolves.toBeNull()
     expect(model).not.toHaveBeenCalled()
     expect(invoke).not.toHaveBeenCalled()
   })
@@ -61,7 +61,7 @@ describe("single-pass MCP evidence selection", () => {
       }
     }
 
-    const evidence = await selectMcpEvidence({ question: "show comments", surface: "chat", model, runtime })
+    const evidence = await selectMcpEvidence({ question: "show comments", model, runtime })
     expect(invoke).toHaveBeenCalledTimes(4)
     expect(invoke.mock.calls.map((call) => call[0].serverId)).toEqual(["s1", "s2", "s3", "s4"])
     expect(evidence?.items).toHaveLength(4)
@@ -76,13 +76,13 @@ describe("single-pass MCP evidence selection", () => {
       tokens: 1,
       toolCalls: [{ function: { name: "sigilix_mcp_0", arguments: "[]" } }],
     })
-    expect(await selectMcpEvidence({ question: "q", surface: "chat", model: malformed, runtime })).toBeNull()
+    expect(await selectMcpEvidence({ question: "q", model: malformed, runtime })).toBeNull()
     expect(invoke).not.toHaveBeenCalled()
 
     const failing: ResearchModelFn = async () => {
       throw new Error("provider down")
     }
-    expect(await selectMcpEvidence({ question: "q", surface: "chat", model: failing, runtime })).toBeNull()
+    expect(await selectMcpEvidence({ question: "q", model: failing, runtime })).toBeNull()
     expect(invoke).not.toHaveBeenCalled()
   })
 

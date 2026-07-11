@@ -2,7 +2,7 @@
 // Exercises the real handleResearchCreate path with a stub DEEP_RESEARCH DO and a
 // real D1 shim, asserting the chatbot seat event is recorded + the seat gate fires.
 
-import { describe, it, expect, beforeEach } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
@@ -43,6 +43,8 @@ function makeDeepResearchNs(startOk = true): Env["DEEP_RESEARCH"] {
 }
 
 const ctx = { waitUntil: (p: Promise<unknown>) => void p, passThroughOnException() {} } as unknown as ExecutionContext
+
+afterEach(() => vi.unstubAllGlobals())
 
 function researchReq(cookie: string | null, body: unknown): Request {
   const headers = new Headers({ "content-type": "application/json" })
@@ -127,6 +129,47 @@ describe("handleResearchCreate — chatbot SEAT metering", () => {
       { meter: "chatbot", userKey: "gh:42", installationId: 7, sinceIso: "2000-01-01T00:00:00.000Z" },
     )
     expect(seat).toEqual({ ok: true, count: 1 })
+  })
+
+  it("uses the freshly verified active installation for metering instead of the newest linked org", async () => {
+    await db.exec(M3)
+    await db
+      .prepare(
+        "INSERT INTO account_tenant (github_user_id, installation_id, role, created_at) VALUES" +
+          " ('42', 7, 'member', '2026-01-01T00:00:00.000Z')," +
+          " ('42', 8, 'member', '2026-02-01T00:00:00.000Z')",
+      )
+      .run()
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ installations: [{ id: 7 }, { id: 8 }] }))),
+    )
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+      DEEP_RESEARCH: makeDeepResearchNs(true),
+    } as unknown as Env
+
+    const res = await handleResearchCreate(
+      researchReq("s1", { question: "summarize my Linear comments", mode: "chat", installationId: 7 }),
+      env,
+      ctx,
+    )
+
+    expect(res.status).toBe(200)
+    await expect(
+      readUsageEventCount(
+        { SIGILIX_PLATFORM_DB: db },
+        { meter: "chatbot", userKey: "gh:42", installationId: 7, sinceIso: "2000-01-01T00:00:00.000Z" },
+      ),
+    ).resolves.toEqual({ ok: true, count: 1 })
+    await expect(
+      readUsageEventCount(
+        { SIGILIX_PLATFORM_DB: db },
+        { meter: "chatbot", userKey: "gh:42", installationId: 8, sinceIso: "2000-01-01T00:00:00.000Z" },
+      ),
+    ).resolves.toEqual({ ok: true, count: 0 })
   })
 
   it("enforce + over the seat cap → 429, no run started, no event recorded", async () => {

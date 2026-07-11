@@ -212,6 +212,137 @@ describe("handleResearchCreate — session org repo grounding", () => {
     expect(githubFetch).not.toHaveBeenCalled()
     expect(startBody).not.toHaveProperty("owner")
     expect(startBody).not.toHaveProperty("repo")
+    expect(startBody).not.toHaveProperty("mcpTenantScope")
+  })
+
+  it("binds session MCP access to a freshly verified installation selector", async () => {
+    const kv = makeKv()
+    await createSession({
+      kv,
+      sessionId: "session-1",
+      login: "founder",
+      githubUserId: 42,
+      accessToken: "github-user-token",
+      encryptionKeyB64url: ENC_KEY,
+    })
+    const githubFetch = vi.fn(async (input: RequestInfo | URL) => {
+      expect(input.toString()).toContain("/user/installations?")
+      return new Response(JSON.stringify({ installations: [{ id: 134811639 }] }))
+    })
+    vi.stubGlobal("fetch", githubFetch)
+    let startBody: Record<string, unknown> | null = null
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      DEEP_RESEARCH: deepResearchNamespace((body) => {
+        startBody = body
+      }),
+    } as unknown as Env
+
+    const response = await handleResearchCreate(
+      request({ question: "what is the capital of France?", mode: "chat", installationId: 134811639 }),
+      env,
+      ctx,
+    )
+
+    expect(response.status).toBe(200)
+    expect(startBody).toMatchObject({ creator: "session:42", mcpTenantScope: "tenant:134811639" })
+    expect(githubFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it("pins repository grounding to the same verified installation as MCP", async () => {
+    const kv = makeKv({
+      "repo-index-manifest:org-a/repo-a": "{}",
+      "repo-index-manifest:org-b/repo-b": "{}",
+    })
+    await createSession({
+      kv,
+      sessionId: "session-1",
+      login: "developer",
+      githubUserId: 42,
+      accessToken: "github-user-token",
+      encryptionKeyB64url: ENC_KEY,
+    })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString()
+        if (url.includes("/user/installations?")) {
+          return new Response(JSON.stringify({ installations: [{ id: 7 }, { id: 8 }] }))
+        }
+        if (url.includes("/user/installations/7/repositories?")) {
+          return new Response(JSON.stringify({ repositories: [{ full_name: "org-a/repo-a" }] }))
+        }
+        if (url.includes("/user/installations/8/repositories?")) {
+          return new Response(JSON.stringify({ repositories: [{ full_name: "org-b/repo-b" }] }))
+        }
+        return new Response("unexpected", { status: 404 })
+      }),
+    )
+    let startBody: Record<string, unknown> | null = null
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      DEEP_RESEARCH: deepResearchNamespace((body) => {
+        startBody = body
+      }),
+    } as unknown as Env
+
+    const response = await handleResearchCreate(
+      request({
+        question: "Where is the auth handler implemented?",
+        mode: "chat",
+        installationId: 7,
+        owner: "org-b",
+        repo: "repo-b",
+      }),
+      env,
+      ctx,
+    )
+
+    expect(response.status).toBe(200)
+    expect(startBody).toMatchObject({
+      mcpTenantScope: "tenant:7",
+      owner: "org-a",
+      repo: "repo-a",
+      hasIndexedRepo: true,
+    })
+  })
+
+  it.each([
+    ["not owned", () => new Response(JSON.stringify({ installations: [{ id: 7 }] }))],
+    ["lookup failure", () => new Response("unavailable", { status: 503 })],
+  ])("omits session MCP access when the selected installation is %s", async (_label, reply) => {
+    const kv = makeKv()
+    await createSession({
+      kv,
+      sessionId: "session-1",
+      login: "founder",
+      githubUserId: 42,
+      accessToken: "github-user-token",
+      encryptionKeyB64url: ENC_KEY,
+    })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => reply()),
+    )
+    let startBody: Record<string, unknown> | null = null
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      DEEP_RESEARCH: deepResearchNamespace((body) => {
+        startBody = body
+      }),
+    } as unknown as Env
+
+    const response = await handleResearchCreate(
+      request({ question: "what is the capital of France?", mode: "chat", installationId: 134811639 }),
+      env,
+      ctx,
+    )
+
+    expect(response.status).toBe(200)
+    expect(startBody).not.toHaveProperty("mcpTenantScope")
   })
 
   it("never falls back from a failed live scope to a matching indexed owner in deep mode", async () => {
@@ -250,7 +381,7 @@ describe("handleResearchCreate — session org repo grounding", () => {
     expect(startBody).toMatchObject({ hasIndexedRepo: false })
   })
 
-  it("resolves an installation-bound API key through D1 without a static installation map", async () => {
+  it("pins an installation-bound API key to its authenticated tenant despite a body selector", async () => {
     const token = "sigilix_live_route-test"
     const db = makeD1()
     await db.exec(MIGRATION_0001)
@@ -287,6 +418,7 @@ describe("handleResearchCreate — session org repo grounding", () => {
         {
           question: "Where does the per-tier rate-limit cap get computed, and what are the multipliers?",
           mode: "chat",
+          installationId: 999,
         },
         token,
       ),
@@ -295,6 +427,11 @@ describe("handleResearchCreate — session org repo grounding", () => {
     )
 
     expect(response.status).toBe(200)
-    expect(startBody).toMatchObject({ owner: "Sigilix", repo: "sigilix", hasIndexedRepo: true })
+    expect(startBody).toMatchObject({
+      owner: "Sigilix",
+      repo: "sigilix",
+      hasIndexedRepo: true,
+      mcpTenantScope: "tenant:134811639",
+    })
   })
 })

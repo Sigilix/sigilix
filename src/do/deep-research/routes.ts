@@ -18,6 +18,7 @@ import { LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { getInstallationsForUser } from "@/src/lib/api-key-store"
 import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { listGithubUserInstallationRepos } from "@/src/lib/github-user-repo-scope"
+import { userCanAccessInstallation } from "@/src/shared/adapters/github/user-installation-access"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import {
   appendUsageEvent,
@@ -103,11 +104,98 @@ async function resolveSeatOrgInstallation(
   return installs[0] ?? fallback
 }
 
-/** POST /v1/research — body { question, model?, effort?, mode? } → { id }. */
+/**
+ * POST /v1/research — body { question, model?, effort?, mode?, installationId? } → { id }.
+ * Session callers may select one of their current GitHub App installations;
+ * API-key callers are always pinned to the installation authenticated by the key.
+ */
 export async function handleResearchCreate(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (!hasJsonContentType(request)) return json({ error: "content-type must be application/json" }, 415)
   const auth = await authorize(request, env, ctx)
   if ("response" in auth) return auth.response
+
+  let body: {
+    question?: unknown
+    model?: unknown
+    effort?: unknown
+    mode?: unknown
+    owner?: unknown
+    repo?: unknown
+    installationId?: unknown
+  }
+  try {
+    body = (await request.json()) as typeof body
+  } catch {
+    return json({ error: "invalid json" }, 400)
+  }
+  const question = typeof body.question === "string" ? body.question.trim() : ""
+  if (!question) return json({ error: "missing question" }, 400)
+
+  const model = body.model === undefined ? "astraeus" : parseTier(body.model)
+  if (model === null) return json({ error: "model must be one of: boreas, pyroeis, astraeus" }, 400)
+  const effort = body.effort === undefined ? "medium" : parseEffort(body.effort)
+  if (effort === null) return json({ error: "effort must be one of: low, medium, high" }, 400)
+  const mode = body.mode === undefined ? "deep" : parseMode(body.mode)
+  if (mode === null) return json({ error: "mode must be one of: deep, chat" }, 400)
+
+  const explicitOwner = typeof body.owner === "string" ? body.owner : undefined
+  const explicitRepo = typeof body.repo === "string" ? body.repo : undefined
+  const selectedInstallationId =
+    Number.isSafeInteger(body.installationId) && Number(body.installationId) > 0
+      ? Number(body.installationId)
+      : undefined
+  const needsSessionRepoScope =
+    mode === "deep" || isCodebaseQuestion(question) || (explicitOwner !== undefined && explicitRepo !== undefined)
+  let sessionRepos: Array<{ installationId: number; owner: string; repo: string }> | undefined
+  let sessionAccessToken: string | null = null
+  if (auth.session && (needsSessionRepoScope || selectedInstallationId !== undefined)) {
+    if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) {
+      if (needsSessionRepoScope) {
+        console.error(JSON.stringify({ event: "deep-research-repo-scope-failed", reason: "missing_encryption_key" }))
+        sessionRepos = []
+      }
+      if (selectedInstallationId !== undefined) {
+        console.warn(JSON.stringify({ event: "research-mcp-installation-denied", reason: "missing_encryption_key" }))
+      }
+    } else {
+      try {
+        sessionAccessToken = await getValidGithubToken({
+          env,
+          sessionId: auth.session.sessionId,
+          record: auth.session.record,
+          encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+        })
+      } catch (error) {
+        if (needsSessionRepoScope) {
+          console.error(
+            JSON.stringify({
+              event: "deep-research-repo-scope-failed",
+              reason: "token_failed",
+              err: error instanceof Error ? error.message : String(error),
+            }),
+          )
+          sessionRepos = []
+        }
+        if (selectedInstallationId !== undefined) {
+          console.warn(JSON.stringify({ event: "research-mcp-installation-denied", reason: "token_failed" }))
+        }
+      }
+    }
+  }
+  let verifiedSelectedInstallationId: number | undefined
+  let mcpTenantScope: string | undefined
+  if (!auth.session && Number.isSafeInteger(auth.installationId) && Number(auth.installationId) > 0) {
+    mcpTenantScope = `tenant:${auth.installationId}`
+  }
+  if (auth.session && selectedInstallationId !== undefined && sessionAccessToken) {
+    const access = await userCanAccessInstallation(sessionAccessToken, selectedInstallationId)
+    if (access.ok) {
+      verifiedSelectedInstallationId = selectedInstallationId
+      mcpTenantScope = `tenant:${selectedInstallationId}`
+    } else {
+      console.warn(JSON.stringify({ event: "research-mcp-installation-denied", reason: access.reason }))
+    }
+  }
 
   // SIG-303 SEAT pool (chatbot). GRACE POLICY: checked at the START of a new run,
   // before the DO is spun up — an over-cap seat blocks the NEXT run, never aborts
@@ -121,7 +209,8 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   // round-trip. FAULT DIRECTION (deliberate, matches the PR gate): a fault degrades to
   // free / not-active — the TIGHTEST budget (spend-protective), latent while the meter
   // mode defaults to shadow.
-  const orgInstallationId = await resolveSeatOrgInstallation(env, auth.creator, seat.installationId)
+  const orgInstallationId =
+    verifiedSelectedInstallationId ?? (await resolveSeatOrgInstallation(env, auth.creator, seat.installationId))
   const [tier, subStatus] = await Promise.all([
     resolveInstallationPlan(env, orgInstallationId),
     readTenantSubscriptionStatus(env, orgInstallationId),
@@ -136,63 +225,24 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   })
   if (!meterDecision.allowed) return json({ error: "usage_limit_exceeded", pool: "seat" }, 429)
 
-  let body: { question?: unknown; model?: unknown; effort?: unknown; mode?: unknown; owner?: unknown; repo?: unknown }
-  try {
-    body = (await request.json()) as typeof body
-  } catch {
-    return json({ error: "invalid json" }, 400)
-  }
-  const question = typeof body.question === "string" ? body.question.trim() : ""
-  if (!question) return json({ error: "missing question" }, 400)
-
-  // Validate the tier + effort; unknown values are rejected (not silently defaulted).
-  const model = body.model === undefined ? "astraeus" : parseTier(body.model)
-  if (model === null) return json({ error: "model must be one of: boreas, pyroeis, astraeus" }, 400)
-  const effort = body.effort === undefined ? "medium" : parseEffort(body.effort)
-  if (effort === null) return json({ error: "effort must be one of: low, medium, high" }, 400)
-  // sig-chat-conversational-mode: the portal's Deep Research toggle. Default "deep"
-  // so an API-key caller (or an older portal) that omits it keeps full research.
-  const mode = body.mode === undefined ? "deep" : parseMode(body.mode)
-  if (mode === null) return json({ error: "mode must be one of: deep, chat" }, 400)
-
   // sig-deep-research-repo-grounding: resolve which authorized indexed repo (if
   // any) to ground this run in. Session grounding always uses the user's current,
   // exact GitHub App repo scope; the heavier code retrieval happens in the DO.
-  const explicitOwner = typeof body.owner === "string" ? body.owner : undefined
-  const explicitRepo = typeof body.repo === "string" ? body.repo : undefined
-  let sessionRepos: Array<{ installationId: number; owner: string; repo: string }> | undefined
-  const needsSessionRepoScope =
-    mode === "deep" || isCodebaseQuestion(question) || (explicitOwner !== undefined && explicitRepo !== undefined)
-  if (auth.session && needsSessionRepoScope) {
-    if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) {
-      console.error(JSON.stringify({ event: "deep-research-repo-scope-failed", reason: "missing_encryption_key" }))
-      sessionRepos = []
-    } else {
-      try {
-        const accessToken = await getValidGithubToken({
-          env,
-          sessionId: auth.session.sessionId,
-          record: auth.session.record,
-          encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-        })
-        const scope = await listGithubUserInstallationRepos(accessToken)
-        if (scope.ok) {
-          sessionRepos = scope.repos
-        } else {
-          console.error(JSON.stringify({ event: "deep-research-repo-scope-failed", reason: scope.reason }))
-          sessionRepos = []
-        }
-      } catch (error) {
-        console.error(
-          JSON.stringify({
-            event: "deep-research-repo-scope-failed",
-            reason: "token_failed",
-            err: error instanceof Error ? error.message : String(error),
-          }),
-        )
+  if (auth.session && needsSessionRepoScope && sessionAccessToken) {
+    try {
+      const scope = await listGithubUserInstallationRepos(sessionAccessToken)
+      if (scope.ok) {
+        sessionRepos = scope.repos
+      } else {
+        console.error(JSON.stringify({ event: "deep-research-repo-scope-failed", reason: scope.reason }))
         sessionRepos = []
       }
+    } catch {
+      sessionRepos = []
     }
+  }
+  if (sessionRepos && verifiedSelectedInstallationId !== undefined) {
+    sessionRepos = sessionRepos.filter((repo) => repo.installationId === verifiedSelectedInstallationId)
   }
   let repoTarget: { owner: string; repo: string } | null = null
   let hasIndexedRepo = false
@@ -201,7 +251,10 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
       explicitOwner,
       explicitRepo,
       sessionRepos,
-      installationId: "installationId" in auth ? auth.installationId : undefined,
+      installationId:
+        Number.isSafeInteger(auth.installationId) && Number(auth.installationId) > 0
+          ? Number(auth.installationId)
+          : undefined,
     })
     repoTarget = resolution.target
     hasIndexedRepo = resolution.hasIndexedRepo
@@ -220,6 +273,7 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
       effort,
       mode,
       creator: auth.creator,
+      ...(mcpTenantScope ? { mcpTenantScope } : {}),
       ...(repoTarget ? { owner: repoTarget.owner, repo: repoTarget.repo } : {}),
       hasIndexedRepo,
     }),

@@ -576,15 +576,18 @@ describe("tenant-key MCP runtime", () => {
     expect(idFromNameCalls).toEqual([])
   })
 
-  it("denies every non-CLI surface before resolving a broker DO", async () => {
-    const db = await makeDb()
-    const bearer = await seedApiKey(db, 42)
-    const { namespace, idFromNameCalls } = makeNamespace(() => new Response("not reached", { status: 500 }))
+  it.each(["chat", "deep-research", "pr-review", "agent"])(
+    "denies the %s surface before resolving a broker DO",
+    async (surface) => {
+      const db = await makeDb()
+      const bearer = await seedApiKey(db, 42)
+      const { namespace, idFromNameCalls } = makeNamespace(() => new Response("not reached", { status: 500 }))
 
-    const response = await dispatch(runtimeRequest({ surface: "chat" }, bearer), env(makeKV(), namespace, db))
+      const response = await dispatch(runtimeRequest({ surface }, bearer), env(makeKV(), namespace, db))
 
-    expect(response.status).toBe(403)
-    expect(await response.json()).toEqual({ error: "surface_not_allowed" })
-    expect(idFromNameCalls).toEqual([])
-  })
+      expect(response.status).toBe(403)
+      expect(await response.json()).toEqual({ error: "surface_not_allowed" })
+      expect(idFromNameCalls).toEqual([])
+    },
+  )
 })

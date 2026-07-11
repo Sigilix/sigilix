@@ -1,6 +1,6 @@
 import { sanitizeMcpInputSchema, sanitizeMcpResult, type SanitizedMcpResult } from "@/src/do/mcp/runtime-data"
-import { curatedReadToolForVendor, type McpSurface } from "@/src/do/mcp/runtime-policy"
-import { isStableRuntimeScope } from "@/src/lib/runtime-principal"
+import { curatedReadToolForVendor } from "@/src/do/mcp/runtime-policy"
+import { isTenantRuntimeScope } from "@/src/lib/runtime-principal"
 import type { Env } from "@/src/shared/types/env"
 
 // Every schema is independently capped at 12 KiB by sanitizeMcpInputSchema;
@@ -23,9 +23,8 @@ export interface ResearchMcpTool {
 }
 
 export interface ResearchMcpRuntime {
-  catalog(surface: McpSurface): Promise<ResearchMcpTool[]>
+  catalog(): Promise<ResearchMcpTool[]>
   invoke(args: {
-    surface: McpSurface
     serverId: string
     toolName: string
     arguments: Record<string, unknown>
@@ -33,17 +32,30 @@ export interface ResearchMcpRuntime {
 }
 
 /**
- * Bind research execution to the exact MCP Durable Object that owns the
- * authenticated creator's connections. Invalid/anonymous creators receive no
- * runtime at all, and every transport/protocol failure degrades to no evidence.
+ * Bind research execution to the exact installation-owned MCP broker. A
+ * session identity is never a tenant scope; invalid scopes receive no runtime,
+ * and every transport/protocol failure degrades to no evidence.
  */
-export function buildResearchMcpRuntime(env: Env, creator: string, runId: string): ResearchMcpRuntime | undefined {
-  if (!isStableRuntimeScope(creator) || !env.MCP_CONNECTIONS || !safeRunId(runId)) return undefined
-  const stub = env.MCP_CONNECTIONS.get(env.MCP_CONNECTIONS.idFromName(creator))
+export function buildResearchMcpRuntime(
+  env: Env,
+  tenantScope: string,
+  runId: string,
+  surface: "chat" | "deep-research",
+): ResearchMcpRuntime | undefined {
+  if (
+    !isTenantRuntimeScope(tenantScope) ||
+    !env.MCP_CONNECTIONS ||
+    !safeRunId(runId) ||
+    (surface !== "chat" && surface !== "deep-research")
+  ) {
+    return undefined
+  }
+  const stub = env.MCP_CONNECTIONS.get(env.MCP_CONNECTIONS.idFromName(tenantScope))
+  const basePath = `/broker/runtime/${surface}`
 
   return {
-    async catalog(surface) {
-      const value = await postJson(stub, "/runtime/catalog", { surface })
+    async catalog() {
+      const value = await postJson(stub, `${basePath}/catalog`, {})
       if (!isPlainObject(value) || !Array.isArray(value.tools)) return []
       const tools: ResearchMcpTool[] = []
       const seen = new Set<string>()
@@ -64,9 +76,8 @@ export function buildResearchMcpRuntime(env: Env, creator: string, runId: string
     },
 
     async invoke(args) {
-      const value = await postJson(stub, "/runtime/invoke", {
+      const value = await postJson(stub, `${basePath}/invoke`, {
         runId,
-        surface: args.surface,
         serverId: args.serverId,
         toolName: args.toolName,
         arguments: args.arguments,

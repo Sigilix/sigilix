@@ -37,6 +37,7 @@ import {
   isStoredSurfacePolicy,
   json,
   parseConnectGrantContext,
+  parseResearchBrokerRuntimePath,
   parseSafeId,
   purgeMcpServerState,
   readMcpOAuthCompletion,
@@ -103,7 +104,6 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     })
   }
 
-  /** Route the internal DO requests, mirroring DeepResearchDO's fetch-based API. */
   override async fetch(request: Request): Promise<Response> {
     await this.ensureRestored()
     const url = new URL(request.url)
@@ -116,11 +116,14 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     if (request.method === "POST" && url.pathname === "/runtime/invoke") return this.handleRuntimeInvoke(request)
     if (request.method === "POST" && url.pathname === "/grants") return this.handleGrantCreate(request)
     if (request.method === "GET" && url.pathname === "/broker/list") return this.handleBrokerList()
-    if (request.method === "POST" && url.pathname === "/broker/runtime/catalog") {
+    if (request.method === "POST" && url.pathname === "/broker/runtime/catalog")
       return this.handleBrokerCatalog(request)
-    }
-    if (request.method === "POST" && url.pathname === "/broker/runtime/invoke") {
-      return this.handleBrokerInvoke(request)
+    if (request.method === "POST" && url.pathname === "/broker/runtime/invoke") return this.handleBrokerInvoke(request)
+    const researchRuntime = parseResearchBrokerRuntimePath(url.pathname)
+    if (request.method === "POST" && researchRuntime) {
+      return researchRuntime.action === "catalog"
+        ? this.handleBrokerCatalog(request, researchRuntime.surface)
+        : this.handleBrokerInvoke(request, researchRuntime.surface)
     }
     const grantTransition = /^\/grants\/([^/]+)\/(activate|fail)$/.exec(url.pathname)
     if (request.method === "POST" && grantTransition?.[1] && grantTransition[2]) {
@@ -150,8 +153,6 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     await this.callbackRoutes.alarm()
   }
 
-  /** Restore any previously-persisted server connections (SDK SQLite) exactly
-   *  once per DO wake — required so "persist" survives an eviction/restart. */
   private async ensureRestored(): Promise<void> {
     if (!this.restored) {
       this.restored = this.mcp.restoreConnectionsFromStorage(MCP_CLIENT_NAME).catch((err) => {
@@ -621,11 +622,12 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     }
   }
 
-  private async handleBrokerCatalog(request: Request): Promise<Response> {
+  private async handleBrokerCatalog(request: Request, fixedSurface?: "chat" | "deep-research"): Promise<Response> {
     const body = await this.readRuntimeBody(request)
     if (body instanceof Response) return body
-    if (!isMcpRuntimeSurface(body.surface)) return json({ error: "invalid_surface" }, 400)
-    if (body.surface !== "cli") return json({ error: "surface_not_allowed" }, 403)
+    const surface = fixedSurface ?? body.surface
+    if (!isMcpRuntimeSurface(surface)) return json({ error: "invalid_surface" }, 400)
+    if (!fixedSurface && surface !== "cli") return json({ error: "surface_not_allowed" }, 403)
     const tools: McpRuntimeToolDescriptor[] = []
     let partial = false
     for (const grant of this.grants
@@ -639,11 +641,11 @@ export class McpConnectionsAgent extends DurableObject<Env> {
           continue
         }
         const effective = effectiveBrokerPolicy(grant, ownerEnvelope)
-        if (!mcpSurfaceEnabled(effective, body.surface)) continue
+        if (!mcpSurfaceEnabled(effective, surface)) continue
         const response = await this.ownerStub(grant.ownerScope).fetch("https://mcp-connections.do/runtime/catalog", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ surface: body.surface, serverId: grant.serverId }),
+          body: JSON.stringify({ surface, serverId: grant.serverId }),
         })
         if (!response.ok) {
           partial = true
@@ -666,22 +668,21 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     return json({ tools, partial })
   }
 
-  private async handleBrokerInvoke(request: Request): Promise<Response> {
+  private async handleBrokerInvoke(request: Request, fixedSurface?: "chat" | "deep-research"): Promise<Response> {
     const body = await this.readRuntimeBody(request)
     if (body instanceof Response) return body
     const grantId = parseSafeId(body.serverId)
     const toolName = parseSafeId(body.toolName)
     const runId = parseSafeId(body.runId)
-    if (!isMcpRuntimeSurface(body.surface) || !grantId || !toolName || !runId) {
+    const surface = fixedSurface ?? body.surface
+    if (!isMcpRuntimeSurface(surface) || !grantId || !toolName || !runId) {
       return json({ error: "invalid_request" }, 400)
     }
-    if (body.surface !== "cli") return json({ error: "surface_not_allowed" }, 403)
+    if (!fixedSurface && surface !== "cli") return json({ error: "surface_not_allowed" }, 403)
     if (!areBoundedMcpArguments(body.arguments)) return json({ error: "invalid_arguments" }, 400)
     const grant = this.grants.getActive(grantId)
     if (!grant) return json({ error: "tool_not_allowed" }, 403)
-    // Admit synchronously in the tenant DO before the first await. Revoke
-    // flips the durable grant state, then waits this exact promise set; no call
-    // can slip through the getActive→lease gap after revoke returns.
+    // Register the call before the first await so revoke cannot pass it.
     let release!: () => void
     const admitted = new Promise<void>((resolve) => {
       release = resolve
@@ -693,10 +694,10 @@ export class McpConnectionsAgent extends DurableObject<Env> {
       const ownerEnvelope = await this.readOwnerPolicyEnvelope(grant)
       if (!ownerEnvelope) return json({ error: "broker_unavailable" }, 502)
       const effective = effectiveBrokerPolicy(grant, ownerEnvelope)
-      if (!mcpSurfaceEnabled(effective, body.surface) || !effective.allowedReadTools.includes(toolName)) {
+      if (!mcpSurfaceEnabled(effective, surface) || !effective.allowedReadTools.includes(toolName)) {
         return json({ error: "tool_not_allowed" }, 403)
       }
-      if (!this.reserveRuntimeCall(runId, grantId, body.surface, effective.maxCallsPerRun)) {
+      if (!this.reserveRuntimeCall(runId, grantId, surface, effective.maxCallsPerRun)) {
         return json({ error: "max_calls_per_run_exceeded" }, 429)
       }
       const response = await this.ownerStub(grant.ownerScope).fetch("https://mcp-connections.do/runtime/invoke", {
@@ -704,7 +705,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           runId,
-          surface: body.surface,
+          surface,
           serverId: grant.serverId,
           toolName,
           arguments: body.arguments,

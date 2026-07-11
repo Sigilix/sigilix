@@ -1,50 +1,26 @@
 import { describe, it, expect } from "vitest"
-import {
-  AgentRunnerContainer,
-  AGENT_RUNNER_ALLOWED_HOSTS,
-  AGENT_RUNNER_DENIED_HOSTS,
-} from "@/src/do/agent-runner-container"
+import { AgentRunnerContainer, AGENT_RUNNER_DENIED_HOSTS } from "@/src/do/agent-runner-container"
 import type { Env } from "@/src/shared/types/env"
 
-// Phase-2 gate B: the container's egress allowlist is security-relevant and also
-// governs the LIVE minimal make-PR runner. These tests lock the invariants so an
-// accidental edit (dropping a required host, or allowing something dangerous)
-// fails CI rather than silently breaking live PRs or widening the attack surface.
-
-const EXPECTED_ALLOWED = [
-  "*.githubusercontent.com",
-  "api.github.com",
-  "api.sigilix.ai",
-  "github.com",
-  "ollama.com",
-  "openrouter.ai",
-  "registry.npmjs.org",
-]
+// Phase-2 gate B — DENYLIST-ONLY egress. A deny-by-default allowlist
+// (enableInternet=false + allowedHosts) starves CF container boot (#858 → 500,
+// reverted #867), so we keep enableInternet=true and block only the cloud-metadata
+// IP via deniedHosts. These tests lock that boot-safe shape so a future change
+// can't silently reintroduce the boot-breaking allowlist or drop the metadata block.
 
 describe("AgentRunnerContainer egress policy — constants", () => {
-  it("allows exactly the hosts a run needs — git, model, grounding/events, provider fetch", () => {
-    // Every host the minimal (live) + full engines genuinely reach.
-    for (const host of ["github.com", "api.github.com", "openrouter.ai", "ollama.com", "api.sigilix.ai"]) {
-      expect(AGENT_RUNNER_ALLOWED_HOSTS).toContain(host)
-    }
-  })
-
-  it("is a tight allowlist — no wildcard-everything, no unexpected hosts", () => {
-    // Never a blanket "*" (that would defeat deny-by-default).
-    expect(AGENT_RUNNER_ALLOWED_HOSTS).not.toContain("*")
-    // Lock the exact set so adding a new egress host is a deliberate, reviewed change.
-    expect([...AGENT_RUNNER_ALLOWED_HOSTS].sort()).toEqual([...EXPECTED_ALLOWED].sort())
-  })
-
-  it("denies the cloud-metadata endpoint and never allows it", () => {
+  it("denies the cloud-metadata endpoint (the #1 credential-theft vector)", () => {
     expect(AGENT_RUNNER_DENIED_HOSTS).toContain("169.254.169.254")
-    expect(AGENT_RUNNER_ALLOWED_HOSTS).not.toContain("169.254.169.254")
+  })
+
+  it("is a tight denylist — no wildcards, no allowlist smuggled in", () => {
+    expect(AGENT_RUNNER_DENIED_HOSTS).not.toContain("*")
+    // Lock the exact set so adding/removing a denied host is a deliberate change.
+    expect([...AGENT_RUNNER_DENIED_HOSTS]).toEqual(["169.254.169.254"])
   })
 })
 
-// The constants above are only a boundary if the DO actually applies them. These
-// assert the class WIRING — a refactor that flips enableInternet back to true, or
-// drops the override, must fail here (the constant tests alone would still pass).
+/** Minimal ctx so the DO constructs; we only read its egress class fields. */
 function makeDO(): AgentRunnerContainer {
   const ctx = {
     storage: {
@@ -62,13 +38,13 @@ function makeDO(): AgentRunnerContainer {
 }
 
 describe("AgentRunnerContainer egress policy — class wiring", () => {
-  // ⚠️ TEMPORARILY REVERTED (see the DO): enableInternet=false + allowedHosts broke
-  // container boot in prod ("container responded 500"). The instance is back on the
-  // base network so the LIVE runner works. The consts are kept for a corrected
-  // denylist-only re-add (verified with a live boot test) before the full engine.
-  it("is on the base network after the egress revert (no deny-by-default override)", () => {
+  it("keeps internet enabled (boot-safe) and blocks the metadata IP via deniedHosts", () => {
     const runner = makeDO()
+    // MUST stay true — enableInternet=false starves CF container boot.
     expect(runner.enableInternet).toBe(true)
+    // No allowlist — a deny-by-default allowlist also starves boot.
     expect(runner.allowedHosts).toBeUndefined()
+    // The metadata IP is blocked unconditionally.
+    expect(runner.deniedHosts).toContain("169.254.169.254")
   })
 })

@@ -8,6 +8,7 @@ import {
   type RuntimeAppId,
 } from "@/src/shared/domain/runtime-app-registry"
 import type { Env } from "@/src/shared/types/env"
+import { postBoundedMcpJson } from "@/src/shared/adapters/mcp-runtime-transport"
 
 // Every schema is independently capped at 12 KiB by sanitizeMcpInputSchema;
 // sixteen descriptors therefore bound the selector's schema payload to at
@@ -246,136 +247,38 @@ async function loadCatalogFromValue(value: unknown, appId: RuntimeAppId): Promis
   return tools
 }
 
-interface InternalMcpResponse {
-  ok: boolean
-  status: number
-  value: unknown
-}
-
-async function postJson(stub: DurableObjectStub, path: string, body: unknown): Promise<InternalMcpResponse | null> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), INTERNAL_MCP_TIMEOUT_MS)
-  const startedAt = Date.now()
-  try {
-    const fetchOperation = stub.fetch(
-      new Request(`https://mcp.internal${path}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      }),
-    )
-    // A defensive race also bounds test doubles/transports that ignore the
-    // signal. If such a fetch eventually returns, discard its unread body.
-    void fetchOperation.then(
-      (lateResponse) => {
-        if (controller.signal.aborted) void lateResponse.body?.cancel().catch(() => undefined)
-      },
-      () => undefined,
-    )
-    const response = await raceAbort(fetchOperation, controller.signal)
-    if (!response.ok) {
-      console.warn(
-        JSON.stringify({
-          event: "research-mcp-runtime-rejected",
-          path,
-          status: response.status,
-          durationMs: Date.now() - startedAt,
-        }),
-      )
-    }
-    const text = await readResponseCapped(response, MAX_INTERNAL_RESPONSE_BYTES, controller.signal)
-    if (text === null) return null
-    return { ok: response.ok, status: response.status, value: JSON.parse(text) as unknown }
-  } catch (err) {
+async function postJson(
+  stub: DurableObjectStub,
+  path: string,
+  body: unknown,
+): Promise<{ ok: boolean; status: number; value: unknown } | null> {
+  const result = await postBoundedMcpJson(stub, path, body, {
+    timeoutMs: INTERNAL_MCP_TIMEOUT_MS,
+    maxResponseBytes: MAX_INTERNAL_RESPONSE_BYTES,
+  })
+  if (result.status === null) {
     console.warn(
       JSON.stringify({
         event: "research-mcp-runtime-failed",
         path,
-        err: err instanceof Error ? err.name : "unknown",
-        timedOut: controller.signal.aborted,
-        durationMs: Date.now() - startedAt,
+        err: result.errorName,
+        timedOut: result.timedOut,
+        durationMs: result.durationMs,
       }),
     )
     return null
-  } finally {
-    clearTimeout(timer)
   }
-}
-
-/** Enforce a byte cap while consuming the internal response. The declared
- * length is only a cheap early rejection; the streamed count is authoritative. */
-async function readResponseCapped(response: Response, maxBytes: number, signal: AbortSignal): Promise<string | null> {
-  const declared = response.headers.get("content-length")
-  if (declared !== null) {
-    const declaredBytes = Number(declared)
-    if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
-      void response.body?.cancel().catch(() => undefined)
-      return null
-    }
-  }
-  const reader = response.body?.getReader()
-  if (!reader) return ""
-  const chunks: Uint8Array[] = []
-  let total = 0
-  let complete = false
-  try {
-    for (;;) {
-      const { done, value } = await raceAbort(reader.read(), signal)
-      if (done) {
-        complete = true
-        break
-      }
-      if (!value) continue
-      total += value.byteLength
-      if (total > maxBytes) return null
-      chunks.push(value)
-    }
-  } finally {
-    if (!complete) void reader.cancel().catch(() => undefined)
-    try {
-      reader.releaseLock()
-    } catch {
-      // A timed-out read may remain pending even after cancellation is asked.
-    }
-  }
-  const merged = new Uint8Array(total)
-  let offset = 0
-  for (const chunk of chunks) {
-    merged.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  try {
-    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(merged)
-  } catch {
-    return null
-  }
-}
-
-/** Race an operation against abort while detaching the listener on every exit.
- * The rejection handler also observes a losing operation that settles later. */
-function raceAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const cleanup = () => signal.removeEventListener("abort", abort)
-    const abort = () => {
-      cleanup()
-      reject(Object.assign(new Error("MCP runtime timeout"), { name: "AbortError" }))
-    }
-    void operation.then(
-      (value) => {
-        cleanup()
-        resolve(value)
-      },
-      (err: unknown) => {
-        cleanup()
-        reject(err)
-      },
+  if (!result.ok) {
+    console.warn(
+      JSON.stringify({
+        event: "research-mcp-runtime-rejected",
+        path,
+        status: result.status,
+        durationMs: result.durationMs,
+      }),
     )
-    signal.addEventListener("abort", abort, { once: true })
-    // Covers a signal that was already aborted before listener registration;
-    // duplicate rejection is harmless because Promise settlement is one-shot.
-    if (signal.aborted) abort()
-  })
+  }
+  return result
 }
 
 function safeIdentifier(value: string): boolean {

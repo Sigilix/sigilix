@@ -27,6 +27,7 @@ import {
   claimMcpOAuthProcessing,
   connectJson,
   ensureMcpConnectionsSchema,
+  emitMcpRuntimeInvokeFailure,
   failClosedStoredPolicy,
   grantTransitionStatus,
   isPolicyEnvelope,
@@ -48,6 +49,7 @@ import {
   writeMcpOAuthCompletion,
   type McpPolicyEnvelope,
   type McpRuntimeToolDescriptor,
+  type ResearchBrokerRuntimeRoute,
 } from "./mcp-connections-support"
 import { guardUrl } from "@/src/do/deep-research/fetch-guard"
 import type { Env } from "@/src/shared/types/env"
@@ -62,7 +64,6 @@ export type { McpPolicyEnvelope, McpRuntimeToolDescriptor } from "./mcp-connecti
 
 const MCP_CLIENT_NAME = "sigilix-portal-mcp"
 const MCP_CLIENT_VERSION = "1.0.0"
-
 const MAX_RUNTIME_BODY_BYTES = 16 * 1024
 const RUNTIME_TOOL_TIMEOUT_MS = 10_000
 
@@ -634,7 +635,10 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     }
   }
 
-  private async handleBrokerCatalog(request: Request, fixedSurface?: "chat" | "deep-research"): Promise<Response> {
+  private async handleBrokerCatalog(
+    request: Request,
+    fixedSurface?: ResearchBrokerRuntimeRoute["surface"],
+  ): Promise<Response> {
     const body = await readRuntimeJsonBody(request, MAX_RUNTIME_BODY_BYTES)
     if (body instanceof Response) return body
     const surface = fixedSurface ?? body.surface
@@ -665,7 +669,10 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     return json(result.body, result.status)
   }
 
-  private async handleBrokerInvoke(request: Request, fixedSurface?: "chat" | "deep-research"): Promise<Response> {
+  private async handleBrokerInvoke(
+    request: Request,
+    fixedSurface?: ResearchBrokerRuntimeRoute["surface"],
+  ): Promise<Response> {
     const body = await readRuntimeJsonBody(request, MAX_RUNTIME_BODY_BYTES)
     if (body instanceof Response) return body
     if (this.tenantInstallationId === null) return json({ error: "tenant_scope_required" }, 403)
@@ -781,7 +788,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
       ])
     } catch (_err) {
       const timedOut = controller.signal.aborted
-      console.error(JSON.stringify({ event: "mcp-runtime-invoke-failed", serverId, toolName, timedOut }))
+      emitMcpRuntimeInvokeFailure(policy.vendor, toolName, timedOut)
       return json({ error: timedOut ? "tool_timeout" : "tool_failed" }, timedOut ? 504 : 502)
     } finally {
       clearTimeout(timer)

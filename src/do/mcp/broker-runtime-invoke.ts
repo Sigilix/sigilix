@@ -19,7 +19,7 @@ const BROKER_OWNER_TIMEOUT_MS = 12_000
 interface BrokerRuntimeInvokeArgs {
   body: Record<string, unknown>
   installationId: number
-  fixedSurface?: "chat" | "deep-research"
+  fixedSurface?: Exclude<McpRuntimeSurface, "cli">
   env: Env
   grants: TenantMcpGrantRegistry
   memory: TenantMcpMemoryIndex

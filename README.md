@@ -375,6 +375,42 @@ Use `mcp` to approve a small in-process tool surface for specific specialists. M
 
 Known tool ids are `file_grep`, `docs_fetch`, `observability_lookup`, and `browser_check`. Unknown roles/tools are ignored fail-open. `tools.<id>.enabled: false` disables that tool globally even when a specialist lists it. URL-fetch tools use runtime-owned host allowlists/endpoints, not PR-controlled config; without those runtime settings they return `unavailable` instead of fetching. Tool results always carry an explicit status (`complete`, `empty`, `truncated`, `unavailable`, or `error`); non-`complete` results and `file_grep` `empty` results are not proof that a bug is absent.
 
+### Connected-app PR evidence
+
+Repositories can opt into deterministic connected-app context with a separate
+`sigilix.mcp.json` file on the trusted base branch. Sigilix never reads this
+manifest from the PR head. The closed version-1 contract accepts at most three
+server-owned adapters:
+
+```json
+{
+  "version": 1,
+  "evidence": [
+    {
+      "adapter": "vercel-deployment-status",
+      "serverId": "vercel-grant-id",
+      "teamId": "team_123",
+      "projectId": "prj_123"
+    },
+    {
+      "adapter": "supabase-advisors",
+      "serverId": "supabase-grant-id",
+      "projectId": "project-ref",
+      "advisorType": "security"
+    }
+  ]
+}
+```
+
+The named grant must already be connected and have `pr-review` plus the exact
+read tool enabled in its organization policy. Vercel uses only an exact full
+commit-SHA match from `list_deployments`; Supabase counts only the allowlisted
+levels from `get_advisors`. Provider prose, descriptions, URLs, and remediation
+text are discarded. Results appear only in the sticky overview's
+`Connected app evidence` section; they never enter specialist, synthesizer,
+validation, finding, confidence, or review-event logic. An absent, malformed,
+ambiguous, revoked, disabled, timed-out, or failed source is simply omitted.
+
 ### Path instructions
 
 Use `pathInstructions` when a repo needs different review behavior for different parts of the codebase. This mirrors the path-instruction pattern used by AI review competitors: auth/API paths can be strict about authorization, database paths can focus on migrations and transactions, generated paths can be handled differently via `pathInstructions`, or excluded entirely via `pathFilters`, and tests/docs can get their own expectations.

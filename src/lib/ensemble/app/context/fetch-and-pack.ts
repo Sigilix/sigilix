@@ -82,7 +82,7 @@ import {
 import { parseDiffToReviewablePositions } from "@/src/shared/util/diff-positions"
 import { countLines } from "@/src/lib/ensemble/domain/diff-stats"
 import { buildDispatcherSavingsSummary, emitDispatcherSavingsSummary } from "@/src/lib/ensemble-perf-telemetry"
-
+export { startPrReviewConnectedAppEvidence } from "./connected-app-evidence"
 type ReviewableMap = ReturnType<typeof parseDiffToReviewablePositions>
 type MatchedPathInstructions = ReturnType<typeof resolvePathInstructionsForChangedPaths>
 type CostControlsConfig = ReturnType<typeof resolveCostControlsConfig>

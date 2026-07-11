@@ -50,6 +50,24 @@ export function resolveAgentRunnerEngine(env: Pick<Env, "OPENCLAW_AGENT_RUNNER_E
 }
 
 /**
+ * Resolve the engine for a PORTAL make-PR run — a separate, portal-only gate so
+ * the full CLI agent can be enabled for the portal independently of the
+ * admin/Linear paths. Fail-closed: only the exact string "on" selects "full";
+ * anything else — unset, "ON", unknown — stays on the proven sandboxed minimal
+ * loop.
+ *
+ * ⚠️ Do NOT set this "on" for untrusted portal users until the full engine's
+ * container egress isolation is adversarially pen-tested against a live deploy
+ * (bash rejected, 169.254 + non-allowlisted hosts blocked, secret-exfil fails).
+ * The permission + secret-scoping gates are already merged; egress is CF-platform
+ * -enforced and only verifiable post-deploy.
+ */
+export function resolvePortalEngine(env: Pick<Env, "OPENCLAW_PORTAL_FULL_ENGINE_MODE">): AgentRunnerEngine {
+  if (env.OPENCLAW_PORTAL_FULL_ENGINE_MODE === "on") return "full"
+  return "minimal"
+}
+
+/**
  * Resolve the SIG-545 B3 Linear-assignment trigger mode from the environment.
  *
  * "off" (default/unset/unknown) — assigning a Linear issue to the Sigilix agent

@@ -42,7 +42,7 @@ import {
   getAgentRunEvents,
   getAgentRunStatus,
 } from "@/src/lib/agent-runner/dispatch"
-import { resolveAgentRunnerMode } from "@/src/lib/agent-runner/mode"
+import { resolveAgentRunnerMode, resolvePortalEngine } from "@/src/lib/agent-runner/mode"
 import type { Env } from "@/src/shared/types/env"
 
 const MAX_BRANCH_PAGES = 10
@@ -586,9 +586,10 @@ export async function handleAgentRunCreateRoute(request: Request, env: Env, ctx?
       url: "",
     },
     model: { id: AGENT_MODEL_ID, key: modelKey, baseUrl: AGENT_MODEL_BASE_URL },
-    // Portal runs use the bounded minimal engine (5-tool loop) — the "full" CLI
-    // agent stays reserved for trusted admin/allow-list callers.
-    engine: "minimal",
+    // Portal runs default to the bounded minimal engine (5-tool loop). The full
+    // CLI agent is gated behind SIGILIX_PORTAL_FULL_ENGINE_MODE="on" (default
+    // off) — do NOT flip it on until egress isolation is pen-tested live.
+    engine: resolvePortalEngine(env),
     caps: { maxModelCalls: 12, maxTokens: 800_000, timeoutMs: 600_000 },
   })
 

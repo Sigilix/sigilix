@@ -1437,9 +1437,8 @@ export interface Env {
   //                                    that the container's sigilix-grounding plugin
   //                                    calls for /v1/context + /v1/memory. NOT
   //                                    OPENCLAW_BASE_URL (that's the OAuth/marketing
-  //                                    origin). Unset → grounding is omitted (the
-  //                                    full agent runs blind, graceful). Paired with
-  //                                    OPENCLAW_SIGILIX_API_KEY as the bearer.
+  //                                    origin). Unset → grounding omitted (full agent
+  //                                    runs blind). Bearer: OPENCLAW_SIGILIX_API_KEY.
   //   OPENCLAW_LINEAR_AGENT_RUN_MODE — "off" (default/unset) | "on" (SIG-545 B3).
   //                                    Only the exact string "on" arms the
   //                                    Linear-assignment trigger that dispatches the
@@ -1453,6 +1452,7 @@ export interface Env {
   OPENCLAW_AGENT_RUNNER_MODE?: string
   OPENCLAW_PORTAL_AGENT_RUNNER_MODE?: string
   OPENCLAW_AGENT_RUNNER_ENGINE?: string
+  OPENCLAW_PORTAL_FULL_ENGINE_MODE?: string
   OPENCLAW_AGENT_GROUNDING_ENDPOINT?: string
   //   SIGILIX_AGENT_EVENTS_ENDPOINT  — Worker's OWN public base (e.g. https://api.sigilix.ai);
   //     the runner container POSTs live file-edit events to {base}/internal/agent-runs/:runId/events

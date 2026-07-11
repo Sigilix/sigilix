@@ -4,12 +4,16 @@ import { describe, expect, it } from "vitest"
 import {
   resolveAgentRunnerMode,
   resolveAgentRunnerEngine,
+  resolvePortalEngine,
   resolveLinearAgentRunMode,
 } from "@/src/lib/agent-runner/mode"
 import type { Env } from "@/src/shared/types/env"
 
 const env = (v: string | undefined): Pick<Env, "OPENCLAW_AGENT_RUNNER_MODE"> =>
   ({ OPENCLAW_AGENT_RUNNER_MODE: v }) as unknown as Pick<Env, "OPENCLAW_AGENT_RUNNER_MODE">
+
+const portalEngineEnv = (v: string | undefined): Pick<Env, "OPENCLAW_PORTAL_FULL_ENGINE_MODE"> =>
+  ({ OPENCLAW_PORTAL_FULL_ENGINE_MODE: v }) as unknown as Pick<Env, "OPENCLAW_PORTAL_FULL_ENGINE_MODE">
 
 const engineEnv = (v: string | undefined): Pick<Env, "OPENCLAW_AGENT_RUNNER_ENGINE"> =>
   ({ OPENCLAW_AGENT_RUNNER_ENGINE: v }) as unknown as Pick<Env, "OPENCLAW_AGENT_RUNNER_ENGINE">
@@ -55,6 +59,23 @@ describe("resolveAgentRunnerEngine", () => {
     expect(resolveAgentRunnerEngine(engineEnv("cli"))).toBe("minimal")
     expect(resolveAgentRunnerEngine(engineEnv(""))).toBe("minimal")
     expect(resolveAgentRunnerEngine(engineEnv("minimal"))).toBe("minimal")
+  })
+})
+
+describe("resolvePortalEngine", () => {
+  it('returns "full" only for the exact string "on"', () => {
+    expect(resolvePortalEngine(portalEngineEnv("on"))).toBe("full")
+  })
+
+  it('defaults to "minimal" when unset (the safe default — full engine stays gated)', () => {
+    expect(resolvePortalEngine(portalEngineEnv(undefined))).toBe("minimal")
+  })
+
+  it('returns "minimal" for uppercase "ON" and garbage (case-sensitive, fail-closed)', () => {
+    expect(resolvePortalEngine(portalEngineEnv("ON"))).toBe("minimal")
+    expect(resolvePortalEngine(portalEngineEnv("full"))).toBe("minimal")
+    expect(resolvePortalEngine(portalEngineEnv("true"))).toBe("minimal")
+    expect(resolvePortalEngine(portalEngineEnv(""))).toBe("minimal")
   })
 })
 

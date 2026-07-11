@@ -679,11 +679,11 @@ export interface Env {
   OPENCLAW_RESEARCH_TOKEN_BUDGET?: string // run-level token cap (250000)
   OPENCLAW_RESEARCH_CLEANUP_AFTER_MS?: string // DO cleanup-alarm horizon (3600000)
   // Per-tier heavy-role model override (OpenRouter catalog ids). Deep research
-  // routes tier models through OpenRouter; unset → the OpenRouter defaults in
-  // config.ts (TIER_MODELS). A one-line id flip per tier.
+  // routes tier models through OpenRouter; unset → config.ts TIER_MODELS defaults.
   SIGILIX_DEEPRESEARCH_BOREAS_MODEL?: string
   SIGILIX_DEEPRESEARCH_PYROEIS_MODEL?: string
   SIGILIX_DEEPRESEARCH_ASTRAEUS_MODEL?: string
+  SIGILIX_SKILLS_MODE?: string
   // Per-role model overrides (Astraeus chain for reasoning roles; cheap Boreas
   // tier for classify/extract). Unset → the defaults in config.ts.
   OPENCLAW_RESEARCH_PLANNER_MODEL?: string

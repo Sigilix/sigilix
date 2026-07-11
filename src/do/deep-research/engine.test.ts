@@ -123,6 +123,45 @@ describe("explicit app routing", () => {
 })
 
 describe("happy path", () => {
+  it("resolves governed skill policy only at the final-call boundary so a mid-run revoke wins", async () => {
+    let revoked = false
+    let finalSystem = ""
+    const resolveSkillContext = vi.fn(async () =>
+      revoked
+        ? undefined
+        : {
+            provenance: {
+              id: "security-guidance",
+              name: "Security guidance",
+              instructionVersion: 1,
+              instructionSha256: "a".repeat(64),
+              sourceCommit: "b".repeat(40),
+              sourceSkillFileSha256: "c".repeat(64),
+              policyVersion: 1,
+            },
+            instructionBlock: "<sigilix_organization_skill>reviewed guidance</sigilix_organization_skill>",
+          },
+    )
+    const model: ResearchModelFn = async (role, messages) => {
+      if (role === "stopCheck") {
+        revoked = true
+        return { text: "STOP", tokens: 1 }
+      }
+      if (role === "finalReport") finalSystem = messages[0]?.content ?? ""
+      return makeModel({ stop: "STOP" })(role, messages)
+    }
+    const { deps } = makeDeps({
+      config: baseConfig({ minRounds: 1, maxRounds: 1 }),
+      model,
+      resolveSkillContext,
+    })
+
+    await runResearchLoop(deps)
+
+    expect(resolveSkillContext).toHaveBeenCalledOnce()
+    expect(finalSystem).not.toContain("sigilix_organization_skill")
+  })
+
   it("emits the contract events in order and ends with final then done", async () => {
     const { deps, events } = makeDeps({
       config: baseConfig({ minRounds: 1 }),

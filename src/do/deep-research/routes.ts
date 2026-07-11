@@ -225,6 +225,11 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   // mode defaults to shadow.
   const orgInstallationId =
     verifiedSelectedInstallationId ?? (await resolveSeatOrgInstallation(env, auth.creator, seat.installationId))
+  // Skill policy reuses the same exact tenant runtime scope as MCP. Sessions
+  // receive one only after a fresh GitHub installation-access check; API keys
+  // are already pinned to the installation authenticated by the key. The DO
+  // derives the numeric skill policy subject from this scope, so metering-only
+  // account_tenant attribution can never select organization guidance.
   const [tier, subStatus] = await Promise.all([
     resolveInstallationPlan(env, orgInstallationId),
     readTenantSubscriptionStatus(env, orgInstallationId),

@@ -261,7 +261,13 @@ export async function dispatchAgentRun(
       }),
     )
 
-    if (!response.ok) throw new Error(`container responded ${response.status}`)
+    if (!response.ok) {
+      // Surface the container's error body (server.ts includes a `detail` message,
+      // never a secret) so a container fault is diagnosable via the dispatch reason
+      // instead of an opaque "container responded 500".
+      const body = await response.text().catch(() => "")
+      throw new Error(`container responded ${response.status}${body ? `: ${body.slice(0, 400)}` : ""}`)
+    }
 
     // Parse the container's RunResult and persist it to the DO record so
     // getAgentRunStatus returns the real outcome instead of null forever.

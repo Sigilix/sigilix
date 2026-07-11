@@ -315,14 +315,15 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
 const server = createServer((req, res) => {
   void handleRequest(req, res).catch((err: unknown) => {
-    // Log errors without secrets (no packet values reach here)
-    console.error(
-      "[server] unhandled error:",
-      err instanceof Error ? err.message : String(err),
-    );
+    // Log errors without secrets (no packet values reach here). The message is
+    // ALSO returned in the body so the Worker dispatcher can surface WHY a run
+    // 500'd (the error message only, never a token/key) — otherwise a container
+    // fault is opaque ("container responded 500") with no way to diagnose.
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error("[server] unhandled error:", detail);
     if (!res.headersSent) {
       res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "internal server error" }));
+      res.end(JSON.stringify({ error: "internal server error", detail }));
     }
   });
 });

@@ -53,6 +53,8 @@ const OFFICIAL_ENDPOINTS: readonly OfficialEndpoint[] = [
   { vendor: "vercel", hostname: "mcp.vercel.com", pathname: "/" },
   { vendor: "hubspot", hostname: "mcp.hubspot.com", pathname: "/" },
   { vendor: "intercom", hostname: "mcp.intercom.com", pathname: "/mcp" },
+  { vendor: "grafana", hostname: "mcp.grafana.com", pathname: "/mcp" },
+  { vendor: "launchdarkly", hostname: "mcp.launchdarkly.com", pathname: "/mcp/launchdarkly" },
 ]
 
 /**
@@ -60,7 +62,9 @@ const OFFICIAL_ENDPOINTS: readonly OfficialEndpoint[] = [
  * verified from provider-owned documentation or a checked-in fixture.
  * Remote annotations (`readOnlyHint`) and prose are untrusted and can never
  * promote a tool into this catalog. Adding a tool here is a reviewed server-
- * owned capability change, not a discovery-time inference.
+ * owned capability change, not a discovery-time inference. The implementation
+ * behind an admitted name remains an official-provider trust boundary, so the
+ * connected provider account's least-privilege scopes remain defense in depth.
  */
 const CURATED_READ_TOOLS: Readonly<Record<OfficialMcpVendor, readonly CuratedReadTool[]>> = {
   // Exact names are published in Linear's own MCP changelog. Keep this list
@@ -195,6 +199,14 @@ const CURATED_READ_TOOLS: Readonly<Record<OfficialMcpVendor, readonly CuratedRea
     "search_articles",
     "get_article",
   ]),
+  grafana: reviewedReadTools("Grafana", ["query_prometheus", "query_loki_logs", "list_incidents", "get_incident"]),
+  launchdarkly: reviewedReadTools("LaunchDarkly", [
+    "get-feature-flag",
+    "list-feature-flags",
+    "get-flag-status-across-environments",
+    "get-environments",
+    "get-audit-log-entries",
+  ]),
 }
 
 export interface StoredMcpPolicy {
@@ -202,6 +214,9 @@ export interface StoredMcpPolicy {
   enabled: boolean
   surfaces: McpSurfacePolicy
   allowedReadTools: string[]
+  /** Total admitted provider calls for one run id + server/grant + surface.
+   *  Policy-blocked calls do not reserve capacity; provider failures and
+   *  caller retries do because the outbound attempt already occurred. */
   maxCallsPerRun: number
 }
 

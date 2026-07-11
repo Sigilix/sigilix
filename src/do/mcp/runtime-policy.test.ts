@@ -190,6 +190,22 @@ const VERIFIED_VENDOR_CASES = [
       "get_article",
     ],
   },
+  {
+    vendor: "grafana",
+    url: "https://mcp.grafana.com/mcp",
+    tools: ["query_prometheus", "query_loki_logs", "list_incidents", "get_incident"],
+  },
+  {
+    vendor: "launchdarkly",
+    url: "https://mcp.launchdarkly.com/mcp/launchdarkly",
+    tools: [
+      "get-feature-flag",
+      "list-feature-flags",
+      "get-flag-status-across-environments",
+      "get-environments",
+      "get-audit-log-entries",
+    ],
+  },
 ] as const
 
 describe("MCP server-owned runtime policy", () => {
@@ -215,6 +231,10 @@ describe("MCP server-owned runtime policy", () => {
     expect(vendorPolicyForUrl("https://mcp.atlassian.com/v1/mcp/anything-else")).toBeNull()
     expect(vendorPolicyForUrl("https://mcp.supabase.com/mcp/project/ref")).toBeNull()
     expect(vendorPolicyForUrl("https://mcp.vercel.com/team/acme")).toBeNull()
+    expect(vendorPolicyForUrl("https://mcp.grafana.com.evil.example/mcp")).toBeNull()
+    expect(vendorPolicyForUrl("https://mcp.grafana.com/mcp/extra")).toBeNull()
+    expect(vendorPolicyForUrl("https://mcp.launchdarkly.com/mcp/launchdarkly-v2")).toBeNull()
+    expect(vendorPolicyForUrl("https://mcp.launchdarkly.com/mcp/launchdarkly?scope=write")).toBeNull()
   })
 
   it.each(VERIFIED_VENDOR_CASES)(

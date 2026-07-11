@@ -614,6 +614,82 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
     expect(((await deepResearch.json()) as { tools: unknown[] }).tools).toEqual([])
   })
 
+  it.each([
+    {
+      vendor: "grafana",
+      url: "https://mcp.grafana.com/mcp",
+      name: "Grafana",
+      readTool: "query_prometheus",
+      blockedTool: "create_dashboard",
+      arguments: { query: "sum(rate(http_requests_total[5m]))" },
+    },
+    {
+      vendor: "launchdarkly",
+      url: "https://mcp.launchdarkly.com/mcp/launchdarkly",
+      name: "LaunchDarkly",
+      readTool: "get-feature-flag",
+      blockedTool: "update-feature-flag",
+      arguments: { projectKey: "checkout", featureFlagKey: "new-payment-flow" },
+    },
+  ])(
+    "routes an explicitly enabled $vendor reader while blocking provider writes",
+    async ({ vendor, url, name, readTool, blockedTool, arguments: toolArguments }) => {
+      nextTools = [
+        { name: readTool, inputSchema: { type: "object" } },
+        { name: blockedTool, inputSchema: { type: "object" } },
+      ]
+      const instance = makeInstance()
+      const id = await connectOfficial(instance, url, name)
+
+      const dark = await instance.fetch(runtimeRequest("catalog", { surface: "chat" }))
+      expect(((await dark.json()) as { tools: unknown[] }).tools).toEqual([])
+
+      const update = await instance.fetch(
+        policyRequest(id, "PUT", {
+          version: 0,
+          enabled: true,
+          surfaces: { ...ALL_SURFACES_OFF, chat: true },
+          allowedReadTools: [readTool],
+          maxCallsPerRun: 4,
+        }),
+      )
+      expect(update.status).toBe(200)
+
+      const catalog = await instance.fetch(runtimeRequest("catalog", { surface: "chat" }))
+      expect((await catalog.json()) as { tools: unknown[] }).toMatchObject({
+        tools: [{ serverId: id, vendor, name: readTool }],
+      })
+
+      const allowed = await instance.fetch(
+        runtimeRequest("invoke", {
+          runId: `run-${vendor}`,
+          surface: "chat",
+          serverId: id,
+          toolName: readTool,
+          arguments: toolArguments,
+        }),
+      )
+      expect(allowed.status).toBe(200)
+      expect(callToolSpy).toHaveBeenCalledWith(
+        { serverId: id, name: readTool, arguments: toolArguments },
+        expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 10_000 }),
+      )
+
+      const blocked = await instance.fetch(
+        runtimeRequest("invoke", {
+          runId: `run-${vendor}`,
+          surface: "chat",
+          serverId: id,
+          toolName: blockedTool,
+          arguments: {},
+        }),
+      )
+      expect(blocked.status).toBe(403)
+      expect(await blocked.json()).toEqual({ error: "tool_not_allowed" })
+      expect(callToolSpy).toHaveBeenCalledTimes(1)
+    },
+  )
+
   it("uses optimistic concurrency and only permits policy narrowing", async () => {
     nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
     const instance = makeInstance()

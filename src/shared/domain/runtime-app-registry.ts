@@ -9,6 +9,8 @@ export type OfficialMcpVendor =
   | "vercel"
   | "hubspot"
   | "intercom"
+  | "grafana"
+  | "launchdarkly"
 
 export const RUNTIME_APP_SURFACES = ["chat", "deep-research", "cli"] as const
 export type RuntimeAppSurface = (typeof RUNTIME_APP_SURFACES)[number]
@@ -25,6 +27,8 @@ export const RUNTIME_APP_IDS = [
   "vercel",
   "hubspot",
   "intercom",
+  "grafana",
+  "launchdarkly",
   "github",
 ] as const
 export type RuntimeAppId = (typeof RUNTIME_APP_IDS)[number]
@@ -122,6 +126,8 @@ const RUNTIME_APPS = [
   mcpApp("vercel", "Vercel", "vercel"),
   mcpApp("hubspot", "HubSpot", "hubspot"),
   mcpApp("intercom", "Intercom", "intercom"),
+  mcpApp("grafana", "Grafana", "grafana"),
+  mcpApp("launchdarkly", "LaunchDarkly", "launchdarkly", ["@LD"]),
   // GitHub participates in deterministic mention resolution now so callers
   // can return a clear unavailable state instead of falling back to MCP. It
   // stays dark until the installation-scoped built-in adapter ships.

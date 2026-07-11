@@ -114,6 +114,7 @@ export async function runResearchLoop(deps: EngineDeps): Promise<void> {
         ...deps,
         mcp: {
           catalog: async () => catalog.tools,
+          queryMemory: (query, topK) => runtime.queryMemory(query, topK),
           invoke: (args) => runtime.invoke(args),
         },
       }

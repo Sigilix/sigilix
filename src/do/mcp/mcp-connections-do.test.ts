@@ -153,11 +153,15 @@ const RUNTIME_SURFACES_ON = {
 // stub would make the constructor throw — and it lets the test below assert the
 // table is actually created.
 
-function makeDoState(): { state: DurableObjectState; sql: NodeSqliteStorage; store: Map<string, unknown> } {
+function makeDoState(name?: string): {
+  state: DurableObjectState
+  sql: NodeSqliteStorage
+  store: Map<string, unknown>
+} {
   const store = new Map<string, unknown>()
   const sql = new NodeSqliteStorage()
   const state = {
-    id: { toString: () => "mcp-connections-instance-1" },
+    id: { toString: () => "mcp-connections-instance-1", ...(name ? { name } : {}) },
     storage: {
       sql,
       async get<T>(k: string): Promise<T | undefined> {
@@ -922,9 +926,11 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     owner: InstanceType<typeof McpConnectionsAgent>
     tenant: InstanceType<typeof McpConnectionsAgent>
     ownerSql: NodeSqliteStorage
+    tenantSql: NodeSqliteStorage
     ownerStore: Map<string, unknown>
     env: Env
     instances: Map<string, InstanceType<typeof McpConnectionsAgent>>
+    queueSend: ReturnType<typeof vi.fn>
   } {
     const instances = new Map<string, InstanceType<typeof McpConnectionsAgent>>()
     const namespace = {
@@ -943,13 +949,37 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
           },
         }) as unknown as DurableObjectStub,
     } as unknown as DurableObjectNamespace
-    const env = { MCP_CONNECTIONS: namespace, OPENCLAW_STATE: makeMemoryKv() } as unknown as Env
-    const ownerState = makeDoState()
+    const queueSend = vi.fn(async () => undefined)
+    const env = {
+      MCP_CONNECTIONS: namespace,
+      OPENCLAW_STATE: makeMemoryKv(),
+      AI: {
+        run: async () => ({
+          data: [
+            Array(768)
+              .fill(0)
+              .map((_value, index) => (index === 0 ? 1 : 0)),
+          ],
+        }),
+      },
+      OPENCLAW_JOBS: { send: queueSend },
+    } as unknown as Env
+    const ownerState = makeDoState("session:111")
+    const tenantState = makeDoState("tenant:42")
     const owner = new McpConnectionsAgent(ownerState.state, env)
-    const tenant = new McpConnectionsAgent(makeDoState().state, env)
+    const tenant = new McpConnectionsAgent(tenantState.state, env)
     instances.set("session:111", owner)
     instances.set("tenant:42", tenant)
-    return { owner, tenant, ownerSql: ownerState.sql, ownerStore: ownerState.store, env, instances }
+    return {
+      owner,
+      tenant,
+      ownerSql: ownerState.sql,
+      tenantSql: tenantState.sql,
+      ownerStore: ownerState.store,
+      env,
+      instances,
+      queueSend,
+    }
   }
 
   function makeMemoryKv(): KVNamespace {
@@ -983,13 +1013,14 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     grantId: string
     url: string
     tools: string[]
+    memoryIndex?: boolean
   }): Promise<void> {
     await args.owner.fetch(connectRequest({ serverId: args.serverId, url: args.url, callbackUrl: "https://cb" }))
     await args.owner.fetch(
       policyRequest(args.serverId, "PUT", {
         version: 0,
         enabled: true,
-        surfaces: { ...ALL_SURFACES_OFF, cli: true },
+        surfaces: { ...ALL_SURFACES_OFF, cli: true, "memory-index": args.memoryIndex === true },
         allowedReadTools: args.tools,
         maxCallsPerRun: 2,
       }),
@@ -1009,13 +1040,38 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
         body: JSON.stringify({
           version: 0,
           enabled: true,
-          surfaces: { ...ALL_SURFACES_OFF, cli: true },
+          surfaces: { ...ALL_SURFACES_OFF, cli: true, "memory-index": args.memoryIndex === true },
           allowedReadTools: args.tools,
           maxCallsPerRun: 2,
         }),
       }),
     )
   }
+
+  it("fails broker memory paths closed outside a tenant-named Durable Object", async () => {
+    const { owner } = makePair()
+
+    expect(
+      (
+        await post(owner, "/broker/memory/query", {
+          surface: "cli",
+          query: "forged",
+          topK: 4,
+        })
+      ).status,
+    ).toBe(403)
+    expect(
+      (
+        await post(owner, "/broker/runtime/invoke", {
+          surface: "cli",
+          runId: "forged",
+          serverId: "grant",
+          toolName: "list_comments",
+          arguments: {},
+        })
+      ).status,
+    ).toBe(403)
+  })
 
   it("filters an explicit app before touching another vendor's owner vault", async () => {
     nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
@@ -1489,6 +1545,207 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     ).not.toContain("session:111")
   })
 
+  it("indexes one idempotent tenant-scoped result with complete provenance", async () => {
+    nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+    let providerText = "The migration is blocked on a revoke purge."
+    callToolImpl = async () => ({ content: [{ type: "text", text: providerText }] })
+    const { owner, tenant, tenantSql, queueSend, env } = makePair()
+    await enableCliGrant({
+      owner,
+      tenant,
+      ownerScope: "session:111",
+      serverId: "linear-private",
+      grantId: "linear-public",
+      url: "https://mcp.linear.app/mcp",
+      tools: ["list_comments"],
+      memoryIndex: true,
+    })
+    const invocation = {
+      surface: "cli",
+      installationId: 999,
+      serverId: "linear-public",
+      toolName: "list_comments",
+      arguments: { issueId: "SIG-558" },
+    }
+
+    const first = await post(tenant, "/broker/runtime/invoke", { ...invocation, runId: "run-memory-1" })
+    expect(first.status).toBe(200)
+    const firstBody = (await first.json()) as { memory: Record<string, unknown> }
+    expect(firstBody.memory).toMatchObject({
+      installationId: 42,
+      grantId: "linear-public",
+      provider: "linear",
+      toolName: "list_comments",
+    })
+    expect(firstBody.memory.inputHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(firstBody.memory.sourceAt).toEqual(expect.any(String))
+    expect(firstBody.memory.expiresAt).toEqual(expect.any(String))
+    expect(JSON.stringify(firstBody.memory)).not.toContain("SIG-558")
+    expect(queueSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "mcp-memory-expire",
+        installationId: 42,
+        memoryId: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+      { delaySeconds: 86_400 },
+    )
+
+    providerText = "The revoke purge is complete."
+    const second = await post(tenant, "/broker/runtime/invoke", { ...invocation, runId: "run-memory-2" })
+    expect(second.status).toBe(200)
+    expect(
+      tenantSql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM sigilix_mcp_memory_v1").toArray()[0]?.count,
+    ).toBe(1)
+
+    const query = await post(tenant, "/broker/memory/query", {
+      installationId: 42,
+      surface: "cli",
+      appId: "linear",
+      query: "what happened to the revoke purge?",
+      topK: 4,
+    })
+    expect(query.status).toBe(200)
+    expect(await query.json()).toMatchObject({
+      results: [
+        {
+          installationId: 42,
+          grantId: "linear-public",
+          provider: "linear",
+          toolName: "list_comments",
+          content: "The revoke purge is complete.",
+          score: 1,
+        },
+      ],
+    })
+    const isolatedTenant = new McpConnectionsAgent(makeDoState("tenant:43").state, env)
+    const otherTenant = await post(isolatedTenant, "/broker/memory/query", {
+      surface: "cli",
+      query: "revoke purge",
+      topK: 4,
+    })
+    expect(await otherTenant.json()).toEqual({ results: [] })
+  })
+
+  it("filters indexed evidence to the explicitly selected app", async () => {
+    nextTools = [
+      { name: "list_comments", inputSchema: { type: "object" } },
+      { name: "search_issues", inputSchema: { type: "object" } },
+    ]
+    callToolImpl = async (params) => {
+      const name = (params as { name?: string }).name
+      return { content: [{ type: "text", text: name === "list_comments" ? "linear evidence" : "sentry evidence" }] }
+    }
+    const { owner, tenant, env, instances } = makePair()
+    const sentryOwner = new McpConnectionsAgent(makeDoState().state, env)
+    instances.set("session:222", sentryOwner)
+    await enableCliGrant({
+      owner,
+      tenant,
+      ownerScope: "session:111",
+      serverId: "linear-private",
+      grantId: "linear-public",
+      url: "https://mcp.linear.app/mcp",
+      tools: ["list_comments"],
+      memoryIndex: true,
+    })
+    await enableCliGrant({
+      owner: sentryOwner,
+      tenant,
+      ownerScope: "session:222",
+      serverId: "sentry-private",
+      grantId: "sentry-public",
+      url: "https://mcp.sentry.dev/mcp",
+      tools: ["search_issues"],
+      memoryIndex: true,
+    })
+    for (const invocation of [
+      { serverId: "linear-public", toolName: "list_comments" },
+      { serverId: "sentry-public", toolName: "search_issues" },
+    ]) {
+      expect(
+        (
+          await post(tenant, "/broker/runtime/invoke", {
+            surface: "cli",
+            installationId: 42,
+            runId: `run-${invocation.serverId}`,
+            arguments: {},
+            ...invocation,
+          })
+        ).status,
+      ).toBe(200)
+    }
+
+    const response = await post(tenant, "/broker/memory/query", {
+      installationId: 42,
+      surface: "cli",
+      appId: "linear",
+      query: "evidence",
+      topK: 8,
+    })
+    expect(((await response.json()) as { results: Array<{ provider: string; content: string }> }).results).toEqual([
+      expect.objectContaining({ provider: "linear", content: "linear evidence" }),
+    ])
+  })
+
+  it("blocks retrieval immediately when memory policy is disabled and purges on revoke", async () => {
+    nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+    const { owner, tenant, tenantSql } = makePair()
+    await enableCliGrant({
+      owner,
+      tenant,
+      ownerScope: "session:111",
+      serverId: "linear-private",
+      grantId: "linear-public",
+      url: "https://mcp.linear.app/mcp",
+      tools: ["list_comments"],
+      memoryIndex: true,
+    })
+    await post(tenant, "/broker/runtime/invoke", {
+      surface: "cli",
+      installationId: 42,
+      runId: "run-memory-policy",
+      serverId: "linear-public",
+      toolName: "list_comments",
+      arguments: {},
+    })
+    expect(
+      tenantSql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM sigilix_mcp_memory_v1").toArray()[0]?.count,
+    ).toBe(1)
+
+    const disabled = await tenant.fetch(
+      new Request("https://mcp-connections.do/broker/servers/linear-public/policy", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          version: 1,
+          enabled: true,
+          surfaces: { ...ALL_SURFACES_OFF, cli: true },
+          allowedReadTools: ["list_comments"],
+          maxCallsPerRun: 2,
+        }),
+      }),
+    )
+    expect(disabled.status).toBe(200)
+    expect(
+      await (
+        await post(tenant, "/broker/memory/query", {
+          installationId: 42,
+          surface: "cli",
+          query: "comments",
+          topK: 4,
+        })
+      ).json(),
+    ).toEqual({ results: [] })
+
+    const revoked = await tenant.fetch(
+      new Request("https://mcp-connections.do/broker/servers/linear-public", { method: "DELETE" }),
+    )
+    expect(revoked.status).toBe(200)
+    expect(
+      tenantSql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM sigilix_mcp_memory_v1").toArray()[0]?.count,
+    ).toBe(0)
+  })
+
   it("invokes through the owner vault, then revocation wins before the next call", async () => {
     nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
     const { owner, tenant } = makePair()
@@ -1549,7 +1806,7 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
       new Promise((resolve) => {
         finish = () => resolve({ content: [{ type: "text", text: "done" }] })
       })
-    const { owner, tenant } = makePair()
+    const { owner, tenant, tenantSql } = makePair()
     await owner.fetch(
       connectRequest({ serverId: "server-private", url: "https://mcp.linear.app/mcp", callbackUrl: "https://cb" }),
     )
@@ -1557,7 +1814,7 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
       policyRequest("server-private", "PUT", {
         version: 0,
         enabled: true,
-        surfaces: { ...ALL_SURFACES_OFF, cli: true },
+        surfaces: { ...ALL_SURFACES_OFF, cli: true, "memory-index": true },
         allowedReadTools: ["list_comments"],
         maxCallsPerRun: 2,
       }),
@@ -1577,7 +1834,7 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
         body: JSON.stringify({
           version: 0,
           enabled: true,
-          surfaces: { ...ALL_SURFACES_OFF, cli: true },
+          surfaces: { ...ALL_SURFACES_OFF, cli: true, "memory-index": true },
           allowedReadTools: ["list_comments"],
           maxCallsPerRun: 2,
         }),
@@ -1585,6 +1842,7 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     )
     const invoke = post(tenant, "/broker/runtime/invoke", {
       surface: "cli",
+      installationId: 42,
       runId: "run-in-flight",
       serverId: "grant-public",
       toolName: "list_comments",
@@ -1604,6 +1862,9 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     expect((await invoke).status).toBe(200)
     expect((await revoke).status).toBe(200)
     expect(revoked).toBe(true)
+    expect(
+      tenantSql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM sigilix_mcp_memory_v1").toArray()[0]?.count,
+    ).toBe(0)
   })
 
   it("stores tenant policy independently and intersects it with the owner vault ceiling", async () => {

@@ -638,7 +638,14 @@ describe("tenant-key MCP runtime", () => {
 
     const response = await dispatch(
       runtimeRequest(
-        { surface: "cli", serverId: "grant-1", toolName: "list_issues", runId: "run-1", arguments: {} },
+        {
+          surface: "cli",
+          installationId: 999,
+          serverId: "grant-1",
+          toolName: "list_issues",
+          runId: "run-1",
+          arguments: {},
+        },
         bearer,
         undefined,
         "invoke",
@@ -648,6 +655,47 @@ describe("tenant-key MCP runtime", () => {
 
     expect(response.status).toBe(200)
     expect(new URL(calls[0]!.request.url).pathname).toBe("/broker/runtime/invoke")
+    expect(await calls[0]!.request.json()).toEqual({
+      surface: "cli",
+      serverId: "grant-1",
+      toolName: "list_issues",
+      runId: "run-1",
+      arguments: {},
+    })
+  })
+
+  it("derives tenant and CLI scope for memory queries instead of trusting the caller", async () => {
+    const db = await makeDb()
+    const bearer = await seedApiKey(db, 42)
+    const { namespace, calls } = makeNamespace((_scope, request) => {
+      expect(request.headers.get("authorization")).toBeNull()
+      return new Response(JSON.stringify({ results: [] }))
+    })
+
+    const response = await dispatch(
+      runtimeRequest(
+        {
+          surface: "agent",
+          installationId: 999,
+          query: "what changed?",
+          topK: 3,
+          appId: "linear",
+        },
+        bearer,
+        undefined,
+        "memory/query",
+      ),
+      env(makeKV(), namespace, db),
+    )
+
+    expect(response.status).toBe(200)
+    expect(new URL(calls[0]!.request.url).pathname).toBe("/broker/memory/query")
+    expect(await calls[0]!.request.json()).toEqual({
+      surface: "cli",
+      query: "what changed?",
+      topK: 3,
+      appId: "linear",
+    })
   })
 
   it("denies session and legacy-global callers before resolving a broker DO", async () => {

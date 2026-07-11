@@ -163,6 +163,10 @@ export class NodeSqliteStorage {
 
   exec<T extends AnyRow>(query: string, ...bindings: unknown[]): SqlCursor<T> {
     const q = query.trim()
+    // Cloudflare SqlStorage accepts ArrayBuffer for BLOB values; node:sqlite
+    // accepts typed-array views. Normalize only in this runtime adapter so
+    // production code can use the real Workers contract unchanged.
+    const nodeBindings = bindings.map((value) => (value instanceof ArrayBuffer ? new Uint8Array(value) : value))
 
     // Reject transaction-control keywords — Cloudflare forbids these
     // through sql.exec(); they must go through transactionSync().
@@ -187,13 +191,13 @@ export class NodeSqliteStorage {
       // returns every row.  For RETURNING statements rowsWritten is not
       // directly observable from .all(); we leave it as 0 to match the
       // Cloudflare cursor contract (callers care about the returned rows).
-      const raw = stmt.all(...(bindings as Parameters<typeof stmt.all>)) as object[]
+      const raw = stmt.all(...(nodeBindings as Parameters<typeof stmt.all>)) as object[]
       const rows = raw.map(toPlain) as T[]
       return rowsCursor(rows)
     } else {
       // INSERT / UPDATE / DELETE / CREATE … (single statement, no
       // semicolons — node:sqlite prepare rejects multi-statement).
-      const result = stmt.run(...(bindings as Parameters<typeof stmt.run>))
+      const result = stmt.run(...(nodeBindings as Parameters<typeof stmt.run>))
       return emptyCursor(Number(result.changes)) as SqlCursor<T>
     }
   }

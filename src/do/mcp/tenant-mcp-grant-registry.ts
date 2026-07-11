@@ -51,6 +51,10 @@ CREATE INDEX IF NOT EXISTS sigilix_mcp_tenant_grants_status_created
 const SAFE_ID_RE = /^[A-Za-z0-9_.:-]{1,128}$/
 
 export type TenantMcpGrantStatus = "pending" | "active" | "failed" | "revoked"
+/** Runs inside the grant registry's synchronous SQLite transaction. Returning
+ * anything (including a Promise) is rejected so cleanup can never escape the
+ * transaction or leave a half-revoked grant. Throwing rolls the revoke back. */
+export type SynchronousGrantRevokeCleanup = (grant: TenantMcpGrant) => undefined
 
 export interface TenantMcpGrant {
   grantId: string
@@ -264,21 +268,27 @@ export class TenantMcpGrantRegistry {
    * Immediately revoke any known grant. A repeat is a no-op that preserves the
    * original revocation time; the open-grant unique slot is released inline.
    */
-  revoke(grantId: string): TenantMcpGrant | null {
+  revoke(grantId: string, cleanup?: SynchronousGrantRevokeCleanup): TenantMcpGrant | null {
     assertId("grantId", grantId)
     return this.storage.transactionSync(() => {
       const current = this.readByGrantId(grantId)
-      if (!current || current.status === "revoked") return current
-      const at = this.readNow()
-      this.storage.sql.exec(
-        `UPDATE sigilix_mcp_tenant_grants
-            SET status = 'revoked', updated_at = ?, revoked_at = ?
-          WHERE grant_id = ? AND status <> 'revoked'`,
-        at,
-        at,
-        grantId,
-      )
-      return this.readByGrantId(grantId)
+      if (!current) return null
+      if (current.status !== "revoked") {
+        const at = this.readNow()
+        this.storage.sql.exec(
+          `UPDATE sigilix_mcp_tenant_grants
+              SET status = 'revoked', updated_at = ?, revoked_at = ?
+            WHERE grant_id = ? AND status <> 'revoked'`,
+          at,
+          at,
+          grantId,
+        )
+      }
+      const revoked = this.readByGrantId(grantId)!
+      if (cleanup && cleanup(revoked) !== undefined) {
+        throw new TypeError("revoke cleanup must be synchronous")
+      }
+      return revoked
     })
   }
 
@@ -391,11 +401,7 @@ function isSurfacePolicy(value: unknown): value is StoredMcpPolicy["surfaces"] {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false
   const record = value as Record<string, unknown>
   const keys = ["chat", "deep-research", "cli", "pr-review", "agent", "memory-index"]
-  return (
-    Object.keys(record).length === keys.length &&
-    keys.every((key) => typeof record[key] === "boolean") &&
-    record["memory-index"] === false
-  )
+  return Object.keys(record).length === keys.length && keys.every((key) => typeof record[key] === "boolean")
 }
 
 function assertServerUrl(value: string): void {

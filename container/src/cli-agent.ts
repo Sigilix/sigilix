@@ -186,6 +186,18 @@ export function buildCliEnv(
     OPENCODE_DISABLE_SHARE: "1",
     OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
     OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+    // ⚠️ CRITICAL for the runner to work at all on Linux. opencode starts a file
+    // watcher; on Linux it uses a native inotify binding whose handle keeps the
+    // process event loop ALIVE after the headless `run` completes. The agent does
+    // its edits and emits its final step_finish, but the process then never exits
+    // → we SIGKILL at caps.timeoutMs → stoppedReason "timeout" → server.ts returns
+    // "no-change" and DISCARDS the completed edit (no PR). macOS (fs-events) tears
+    // the watcher down and exits cleanly, so this only bites on the Linux container.
+    // The watcher is dead weight here anyway (one-shot headless run, no TUI/LSP/live
+    // features consume file-change events; edits apply fine without it). Verified in
+    // linux/amd64 docker: WITHOUT this the run hangs the full timeout (rc 137); WITH
+    // it the identical run exits clean in ~7s with the edit applied.
+    OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: "1",
   };
   if (groundingActive) {
     if (args.sigilix?.endpoint) env.SIGILIX_ENDPOINT = args.sigilix.endpoint;

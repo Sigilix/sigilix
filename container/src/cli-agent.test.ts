@@ -145,6 +145,15 @@ describe("buildCliEnv", () => {
     expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("1");
   });
 
+  it("disables the file watcher (Linux inotify handle blocks process exit → runner hang)", () => {
+    // Regression guard: without this the run's inotify watcher keeps the process
+    // alive after the headless run completes, we SIGKILL at the timeout, and the
+    // completed edit is discarded as "no-change". Do not remove — it's what makes
+    // the full engine terminate at all on the Linux container. Verified in docker.
+    const env = buildCliEnv({}, {});
+    expect(env.OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER).toBe("1");
+  });
+
   it("wires grounding vars when provided and omits them otherwise", () => {
     const withG = buildCliEnv({ sigilix: { endpoint: "https://w.dev", apiKey: "sk-g", repoSlug: "o/r" } }, {});
     expect(withG.SIGILIX_ENDPOINT).toBe("https://w.dev");
@@ -286,6 +295,10 @@ describe("runCliAgent", () => {
     // The real key is set only in the child process env passed to spawn.
     const spawnEnv = (mocks.spawn.mock.calls[0]?.[2] as { env: NodeJS.ProcessEnv }).env;
     expect(spawnEnv.SIGILIX_MODEL_KEY).toBe("sk-secret-key");
+    // End-to-end guard (through runCliAgent, not just buildCliEnv): the file-watcher
+    // disable flag must reach the actual spawn — without it the CLI hangs past run
+    // completion on Linux and the completed edit is discarded as "no-change".
+    expect(spawnEnv.OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER).toBe("1");
   });
 
   it("streams a diff-pane event for each completed in-repo edit, skipping out-of-repo", async () => {

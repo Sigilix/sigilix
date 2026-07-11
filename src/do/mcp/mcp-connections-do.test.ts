@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- one shared SDK mock exercises owner, tenant, route, and lease DO interactions */
 // sig-mcp-connections-p1 — McpConnectionsAgent DO tests.
 //
 // Per the task brief, the SDK/transport is MOCKED: `agents/mcp/client`'s
@@ -12,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import type { Env } from "@/src/shared/types/env"
 import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
+import { claimMcpOAuthCallbackRoute, readMcpOAuthCallbackRoute } from "./oauth-callback-routing"
 
 // ── fake MCPClientManager (mocks the SDK/transport, per the task brief) ──
 
@@ -36,12 +38,15 @@ let nextCallbackResult: { serverId?: string; authSuccess: boolean; authError?: s
 let registerServerSpy = vi.fn()
 let removeServerSpy = vi.fn()
 let establishConnectionSpy = vi.fn()
+let handleCallbackSpy = vi.fn()
 let callToolSpy = vi.fn()
 let nextTools: unknown[] = []
 let nextRegisterError: Error | null = null
 let callToolImpl: (params: unknown, options?: { signal?: AbortSignal }) => Promise<unknown> = async () => ({
   content: [{ type: "text", text: "ok" }],
 })
+let handleCallbackImpl: () => Promise<{ serverId?: string; authSuccess: boolean; authError?: string }> = async () =>
+  nextCallbackResult
 
 class FakeMCPClientManager {
   private rows = new Map<string, FakeServerRow>()
@@ -105,7 +110,8 @@ class FakeMCPClientManager {
   }
 
   async handleCallbackRequest(): Promise<{ serverId?: string; authSuccess: boolean; authError?: string }> {
-    return nextCallbackResult
+    handleCallbackSpy()
+    return handleCallbackImpl()
   }
 
   async establishConnection(id: string): Promise<void> {
@@ -120,6 +126,24 @@ vi.mock("agents/mcp/client", () => ({ MCPClientManager: FakeMCPClientManager }))
 // at module scope too, but keeping it explicit here documents the ordering).
 const { McpConnectionsAgent } = await import("./mcp-connections-do")
 
+const ALL_SURFACES_OFF = {
+  chat: false,
+  "deep-research": false,
+  cli: false,
+  "pr-review": false,
+  agent: false,
+  "memory-index": false,
+} as const
+
+const RUNTIME_SURFACES_ON = {
+  chat: true,
+  "deep-research": true,
+  cli: true,
+  "pr-review": true,
+  agent: true,
+  "memory-index": false,
+} as const
+
 // ── fake DO state ──
 // The DO's constructor now runs `ctx.storage.sql.exec(<CREATE TABLE …>)` to
 // create the `cf_agents_mcp_servers` table the SDK's MCPClientManager assumes
@@ -129,7 +153,7 @@ const { McpConnectionsAgent } = await import("./mcp-connections-do")
 // stub would make the constructor throw — and it lets the test below assert the
 // table is actually created.
 
-function makeDoState(): { state: DurableObjectState; sql: NodeSqliteStorage } {
+function makeDoState(): { state: DurableObjectState; sql: NodeSqliteStorage; store: Map<string, unknown> } {
   const store = new Map<string, unknown>()
   const sql = new NodeSqliteStorage()
   const state = {
@@ -145,9 +169,15 @@ function makeDoState(): { state: DurableObjectState; sql: NodeSqliteStorage } {
       async delete(k: string): Promise<boolean> {
         return store.delete(k)
       },
+      transactionSync<T>(closure: () => T): T {
+        return closure()
+      },
+      async setAlarm(timestamp: number): Promise<void> {
+        store.set("alarm", timestamp)
+      },
     },
   } as unknown as DurableObjectState
-  return { state, sql }
+  return { state, sql, store }
 }
 
 function makeInstance() {
@@ -183,12 +213,14 @@ beforeEach(() => {
   registerServerSpy = vi.fn()
   removeServerSpy = vi.fn()
   establishConnectionSpy = vi.fn()
+  handleCallbackSpy = vi.fn()
   callToolSpy = vi.fn()
   nextTools = [
     { name: "tool_a", inputSchema: { type: "object" } },
     { name: "tool_b", inputSchema: { type: "object" } },
   ]
   nextRegisterError = null
+  handleCallbackImpl = async () => nextCallbackResult
   callToolImpl = async () => ({ content: [{ type: "text", text: "ok" }] })
   vi.useRealTimers()
 })
@@ -253,6 +285,31 @@ describe("McpConnectionsAgent — POST /connect", () => {
     expect(removeServerSpy).toHaveBeenCalledTimes(1)
   })
 
+  it("failed granted connect also purges the owner policy ceiling", async () => {
+    nextConnectResult = { state: "failed", error: "server unreachable" }
+    const { state, sql } = makeDoState()
+    const instance = new McpConnectionsAgent(state, {} as Env)
+
+    const response = await instance.fetch(
+      connectRequest({
+        serverId: "server-failed-grant",
+        url: "https://mcp.linear.app/mcp",
+        callbackUrl: "https://api.sigilix.ai/mcp/oauth/callback",
+        grant: {
+          grantId: "grant-failed",
+          ownerScope: "session:111",
+          tenantScope: "tenant:42",
+          stableSubject: "111",
+        },
+      }),
+    )
+
+    expect(response.status).toBe(502)
+    expect(
+      sql.exec("SELECT server_id FROM sigilix_mcp_policies_v2 WHERE server_id = ?", "server-failed-grant").toArray(),
+    ).toEqual([])
+  })
+
   it("does not expose SDK or SQLite detail when registration throws", async () => {
     nextRegisterError = new Error("SQLITE_CONSTRAINT at /internal/sdk/storage.ts:42")
     const instance = makeInstance()
@@ -296,6 +353,16 @@ describe("McpConnectionsAgent — POST /connect", () => {
       connectRequest({ url: "https://user:password@example.com/mcp", callbackUrl: "https://cb" }),
     )
     expect(res.status).toBe(400)
+    expect(registerServerSpy).not.toHaveBeenCalled()
+  })
+
+  it("rejects query-string credentials before registration", async () => {
+    const instance = makeInstance()
+    const res = await instance.fetch(
+      connectRequest({ url: "https://mcp.example.com/mcp?api_key=secret", callbackUrl: "https://cb" }),
+    )
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ status: "error", error: "blocked url: query-or-fragment-not-allowed" })
     expect(registerServerSpy).not.toHaveBeenCalled()
   })
 
@@ -346,10 +413,10 @@ describe("McpConnectionsAgent — SDK storage schema", () => {
     const { state, sql } = makeDoState()
     new McpConnectionsAgent(state, {} as Env)
     expect(
-      sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sigilix_mcp_policies'").toArray(),
+      sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sigilix_mcp_policies_v2'").toArray(),
     ).toHaveLength(1)
     const columns = sql
-      .exec("SELECT name FROM pragma_table_info('sigilix_mcp_policies')")
+      .exec("SELECT name FROM pragma_table_info('sigilix_mcp_policies_v2')")
       .toArray()
       .map((row) => (row as { name: string }).name)
     expect(columns).toEqual(
@@ -357,14 +424,15 @@ describe("McpConnectionsAgent — SDK storage schema", () => {
         "server_id",
         "version",
         "enabled",
-        "chat_enabled",
-        "deep_research_enabled",
+        "surfaces",
         "allowed_read_tools",
         "max_calls_per_run",
       ]),
     )
     expect(
-      sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sigilix_mcp_runtime_calls'").toArray(),
+      sql
+        .exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sigilix_mcp_runtime_calls_v2'")
+        .toArray(),
     ).toHaveLength(1)
   })
 })
@@ -423,28 +491,23 @@ describe("McpConnectionsAgent — GET /list + DELETE /servers/:id", () => {
 })
 
 describe("McpConnectionsAgent — GET /oauth-callback", () => {
-  it("on success, establishes the connection so the server shows ready/tools on the next list", async () => {
-    nextCallbackResult = { serverId: "srv-1", authSuccess: true }
+  it("rejects a callback without a durable granted-route claim", async () => {
     const instance = makeInstance()
     const res = await instance.fetch(new Request("https://mcp-connections.do/oauth-callback?code=abc&state=xyz"))
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as { authSuccess: boolean; serverId: string }
-    expect(body.authSuccess).toBe(true)
-    expect(establishConnectionSpy).toHaveBeenCalledWith("srv-1")
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ authSuccess: false, authError: "callback state invalid" })
+    expect(handleCallbackSpy).not.toHaveBeenCalled()
   })
 
-  it("on failure, propagates authSuccess=false without calling establishConnection", async () => {
-    nextCallbackResult = { serverId: "srv-1", authSuccess: false, authError: "access_denied" }
+  it("does not retain the legacy SDK callback fallthrough even when the provider reports an error", async () => {
     const instance = makeInstance()
     const res = await instance.fetch(
       new Request("https://mcp-connections.do/oauth-callback?error=access_denied&state=xyz"),
     )
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as { authSuccess: boolean; authError: string }
-    expect(body.authSuccess).toBe(false)
-    expect(body.authError).toBe("access_denied")
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ authSuccess: false, authError: "callback state invalid" })
     expect(establishConnectionSpy).not.toHaveBeenCalled()
-    expect(removeServerSpy).toHaveBeenCalledWith("srv-1")
+    expect(removeServerSpy).not.toHaveBeenCalled()
   })
 })
 
@@ -486,7 +549,7 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
         version: number
         enabled: boolean
         readOnly: boolean
-        surfaces: { chat: boolean; deepResearch: boolean }
+        surfaces: typeof ALL_SURFACES_OFF
         allowedReadTools: string[]
         maxCallsPerRun: number
       }
@@ -498,7 +561,7 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
       version: 0,
       enabled: false,
       readOnly: true,
-      surfaces: { chat: false, deepResearch: false },
+      surfaces: ALL_SURFACES_OFF,
       allowedReadTools: [],
       maxCallsPerRun: 0,
     })
@@ -536,7 +599,7 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
       policyRequest(id, "PUT", {
         version: 0,
         enabled: true,
-        surfaces: { chat: true, deepResearch: false },
+        surfaces: { ...ALL_SURFACES_OFF, chat: true },
         allowedReadTools: ["search_issues"],
         maxCallsPerRun: 1,
       }),
@@ -558,7 +621,7 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
     const update = {
       version: 0,
       enabled: true,
-      surfaces: { chat: false, deepResearch: true },
+      surfaces: { ...ALL_SURFACES_OFF, "deep-research": true },
       allowedReadTools: [],
       maxCallsPerRun: 1,
     }
@@ -580,14 +643,14 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
       policyRequest(id, "PUT", {
         version: 0,
         enabled: false,
-        surfaces: { chat: false, deepResearch: false },
+        surfaces: ALL_SURFACES_OFF,
         allowedReadTools: [],
         maxCallsPerRun: 0,
       }),
     )
-    expect(sql.exec("SELECT server_id FROM sigilix_mcp_policies WHERE server_id = ?", id).toArray()).toHaveLength(1)
+    expect(sql.exec("SELECT server_id FROM sigilix_mcp_policies_v2 WHERE server_id = ?", id).toArray()).toHaveLength(1)
     await instance.fetch(new Request(`https://mcp-connections.do/servers/${id}`, { method: "DELETE" }))
-    expect(sql.exec("SELECT server_id FROM sigilix_mcp_policies WHERE server_id = ?", id).toArray()).toHaveLength(0)
+    expect(sql.exec("SELECT server_id FROM sigilix_mcp_policies_v2 WHERE server_id = ?", id).toArray()).toHaveLength(0)
   })
 
   it("rechecks current policy at invoke time so a stale catalog cannot bypass revocation", async () => {
@@ -598,7 +661,7 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
       policyRequest(id, "PUT", {
         version: 0,
         enabled: true,
-        surfaces: { chat: true, deepResearch: true },
+        surfaces: RUNTIME_SURFACES_ON,
         allowedReadTools: ["list_comments"],
         maxCallsPerRun: 4,
       }),
@@ -610,7 +673,7 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
       policyRequest(id, "PUT", {
         version: 1,
         enabled: false,
-        surfaces: { chat: false, deepResearch: false },
+        surfaces: ALL_SURFACES_OFF,
         allowedReadTools: [],
         maxCallsPerRun: 0,
       }),
@@ -635,10 +698,11 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
     const instance = new McpConnectionsAgent(state, {} as Env)
     const id = await connectLinear(instance)
     sql.exec(
-      `INSERT INTO sigilix_mcp_policies
-       (server_id, version, enabled, chat_enabled, deep_research_enabled, allowed_read_tools, max_calls_per_run)
-       VALUES (?, 1, 1, 1, 1, ?, 4)`,
+      `INSERT INTO sigilix_mcp_policies_v2
+       (server_id, version, enabled, surfaces, allowed_read_tools, max_calls_per_run)
+       VALUES (?, 1, 1, ?, ?, 4)`,
       id,
+      JSON.stringify(RUNTIME_SURFACES_ON),
       "not-json",
     )
     const catalog = await instance.fetch(runtimeRequest("catalog", { surface: "chat" }))
@@ -661,7 +725,7 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
       policyRequest(id, "PUT", {
         version: 0,
         enabled: true,
-        surfaces: { chat: true, deepResearch: true },
+        surfaces: RUNTIME_SURFACES_ON,
         allowedReadTools: ["list_comments"],
         maxCallsPerRun: 4,
       }),
@@ -693,7 +757,7 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
       policyRequest(id, "PUT", {
         version: 0,
         enabled: true,
-        surfaces: { chat: true, deepResearch: true },
+        surfaces: RUNTIME_SURFACES_ON,
         allowedReadTools: ["list_comments"],
         maxCallsPerRun: 4,
       }),
@@ -725,7 +789,7 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
       policyRequest(id, "PUT", {
         version: 0,
         enabled: true,
-        surfaces: { chat: true, deepResearch: true },
+        surfaces: RUNTIME_SURFACES_ON,
         allowedReadTools: ["list_comments"],
         maxCallsPerRun: 1,
       }),
@@ -756,7 +820,7 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
       policyRequest(id, "PUT", {
         version: 0,
         enabled: true,
-        surfaces: { chat: true, deepResearch: true },
+        surfaces: RUNTIME_SURFACES_ON,
         allowedReadTools: ["list_comments"],
         maxCallsPerRun: 4,
       }),
@@ -774,6 +838,664 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
     const response = await pending
     expect(response.status).toBe(504)
     expect(await response.json()).toEqual({ error: "tool_timeout" })
+  })
+})
+
+describe("McpConnectionsAgent — tenant grant broker end to end", () => {
+  function makePair(): {
+    owner: InstanceType<typeof McpConnectionsAgent>
+    tenant: InstanceType<typeof McpConnectionsAgent>
+    ownerSql: NodeSqliteStorage
+    ownerStore: Map<string, unknown>
+    env: Env
+    instances: Map<string, InstanceType<typeof McpConnectionsAgent>>
+  } {
+    const instances = new Map<string, InstanceType<typeof McpConnectionsAgent>>()
+    const namespace = {
+      idFromName: (name: string) => ({ toString: () => name }) as unknown as DurableObjectId,
+      get: (id: DurableObjectId) =>
+        ({
+          fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+            const key = id.toString()
+            let instance = instances.get(key)
+            if (!instance && key.startsWith("oauth-route:")) {
+              instance = new McpConnectionsAgent(makeDoState().state, env)
+              instances.set(key, instance)
+            }
+            if (!instance) throw new Error(`missing DO ${id.toString()}`)
+            return instance.fetch(new Request(input, init))
+          },
+        }) as unknown as DurableObjectStub,
+    } as unknown as DurableObjectNamespace
+    const env = { MCP_CONNECTIONS: namespace, OPENCLAW_STATE: makeMemoryKv() } as unknown as Env
+    const ownerState = makeDoState()
+    const owner = new McpConnectionsAgent(ownerState.state, env)
+    const tenant = new McpConnectionsAgent(makeDoState().state, env)
+    instances.set("session:111", owner)
+    instances.set("tenant:42", tenant)
+    return { owner, tenant, ownerSql: ownerState.sql, ownerStore: ownerState.store, env, instances }
+  }
+
+  function makeMemoryKv(): KVNamespace {
+    const store = new Map<string, string>()
+    return {
+      get: async (key: string) => store.get(key) ?? null,
+      put: async (key: string, value: string) => void store.set(key, value),
+      delete: async (key: string) => void store.delete(key),
+    } as unknown as KVNamespace
+  }
+
+  async function post(
+    instance: InstanceType<typeof McpConnectionsAgent>,
+    path: string,
+    body: unknown,
+  ): Promise<Response> {
+    return instance.fetch(
+      new Request(`https://mcp-connections.do${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    )
+  }
+
+  it("enforces the public broker's CLI-only surface inside the tenant DO", async () => {
+    const { tenant } = makePair()
+    const catalog = await post(tenant, "/broker/runtime/catalog", { surface: "chat" })
+    expect(catalog.status).toBe(403)
+    expect(await catalog.json()).toEqual({ error: "surface_not_allowed" })
+
+    const invoke = await post(tenant, "/broker/runtime/invoke", {
+      surface: "agent",
+      runId: "run-1",
+      serverId: "grant-1",
+      toolName: "list_comments",
+      arguments: {},
+    })
+    expect(invoke.status).toBe(403)
+    expect(await invoke.json()).toEqual({ error: "surface_not_allowed" })
+  })
+
+  it("routes only an active tenant grant to its user vault and rewrites the private server id", async () => {
+    nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+    const { owner, tenant } = makePair()
+    const connect = await owner.fetch(
+      connectRequest({
+        serverId: "server-private",
+        url: "https://mcp.linear.app/mcp",
+        callbackUrl: "https://cb",
+      }),
+    )
+    expect(connect.status).toBe(200)
+    await owner.fetch(
+      policyRequest("server-private", "PUT", {
+        version: 0,
+        enabled: true,
+        surfaces: { ...ALL_SURFACES_OFF, cli: true },
+        allowedReadTools: ["list_comments"],
+        maxCallsPerRun: 2,
+      }),
+    )
+    expect(
+      (
+        await post(tenant, "/grants", {
+          grantId: "grant-public",
+          ownerScope: "session:111",
+          serverId: "server-private",
+          creatorSubject: "github:111",
+          serverUrl: "https://mcp.linear.app/mcp",
+        })
+      ).status,
+    ).toBe(201)
+
+    const dark = await post(tenant, "/broker/runtime/catalog", { surface: "cli" })
+    expect(((await dark.json()) as { tools: unknown[] }).tools).toEqual([])
+    await post(tenant, "/grants/grant-public/activate", {})
+    await tenant.fetch(
+      new Request("https://mcp-connections.do/broker/servers/grant-public/policy", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          version: 0,
+          enabled: true,
+          surfaces: { ...ALL_SURFACES_OFF, cli: true },
+          allowedReadTools: ["list_comments"],
+          maxCallsPerRun: 2,
+        }),
+      }),
+    )
+    const catalog = await post(tenant, "/broker/runtime/catalog", { surface: "cli" })
+    expect(await catalog.json()).toMatchObject({
+      tools: [{ serverId: "grant-public", vendor: "linear", name: "list_comments" }],
+    })
+    expect(
+      JSON.stringify(await (await tenant.fetch(new Request("https://mcp-connections.do/broker/list"))).json()),
+    ).not.toContain("session:111")
+  })
+
+  it("invokes through the owner vault, then revocation wins before the next call", async () => {
+    nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+    const { owner, tenant } = makePair()
+    await owner.fetch(
+      connectRequest({ serverId: "server-private", url: "https://mcp.linear.app/mcp", callbackUrl: "https://cb" }),
+    )
+    await owner.fetch(
+      policyRequest("server-private", "PUT", {
+        version: 0,
+        enabled: true,
+        surfaces: { ...ALL_SURFACES_OFF, cli: true },
+        allowedReadTools: ["list_comments"],
+        maxCallsPerRun: 2,
+      }),
+    )
+    await post(tenant, "/grants", {
+      grantId: "grant-public",
+      ownerScope: "session:111",
+      serverId: "server-private",
+      creatorSubject: "github:111",
+      serverUrl: "https://mcp.linear.app/mcp",
+    })
+    await post(tenant, "/grants/grant-public/activate", {})
+    await tenant.fetch(
+      new Request("https://mcp-connections.do/broker/servers/grant-public/policy", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          version: 0,
+          enabled: true,
+          surfaces: { ...ALL_SURFACES_OFF, cli: true },
+          allowedReadTools: ["list_comments"],
+          maxCallsPerRun: 2,
+        }),
+      }),
+    )
+    const invokeBody = {
+      surface: "cli",
+      runId: "run-1",
+      serverId: "grant-public",
+      toolName: "list_comments",
+      arguments: {},
+    }
+    expect((await post(tenant, "/broker/runtime/invoke", invokeBody)).status).toBe(200)
+    expect(callToolSpy).toHaveBeenCalledWith(
+      { serverId: "server-private", name: "list_comments", arguments: {} },
+      expect.anything(),
+    )
+    await tenant.fetch(new Request("https://mcp-connections.do/broker/servers/grant-public", { method: "DELETE" }))
+    expect((await post(tenant, "/broker/runtime/invoke", { ...invokeBody, runId: "run-2" })).status).toBe(403)
+    expect(callToolSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it("waits for every admitted invocation before revoke returns", async () => {
+    nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+    let finish!: () => void
+    callToolImpl = () =>
+      new Promise((resolve) => {
+        finish = () => resolve({ content: [{ type: "text", text: "done" }] })
+      })
+    const { owner, tenant } = makePair()
+    await owner.fetch(
+      connectRequest({ serverId: "server-private", url: "https://mcp.linear.app/mcp", callbackUrl: "https://cb" }),
+    )
+    await owner.fetch(
+      policyRequest("server-private", "PUT", {
+        version: 0,
+        enabled: true,
+        surfaces: { ...ALL_SURFACES_OFF, cli: true },
+        allowedReadTools: ["list_comments"],
+        maxCallsPerRun: 2,
+      }),
+    )
+    await post(tenant, "/grants", {
+      grantId: "grant-public",
+      ownerScope: "session:111",
+      serverId: "server-private",
+      creatorSubject: "github:111",
+      serverUrl: "https://mcp.linear.app/mcp",
+    })
+    await post(tenant, "/grants/grant-public/activate", {})
+    await tenant.fetch(
+      new Request("https://mcp-connections.do/broker/servers/grant-public/policy", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          version: 0,
+          enabled: true,
+          surfaces: { ...ALL_SURFACES_OFF, cli: true },
+          allowedReadTools: ["list_comments"],
+          maxCallsPerRun: 2,
+        }),
+      }),
+    )
+    const invoke = post(tenant, "/broker/runtime/invoke", {
+      surface: "cli",
+      runId: "run-in-flight",
+      serverId: "grant-public",
+      toolName: "list_comments",
+      arguments: {},
+    })
+    await vi.waitFor(() => expect(callToolSpy).toHaveBeenCalledTimes(1))
+    let revoked = false
+    const revoke = tenant
+      .fetch(new Request("https://mcp-connections.do/broker/servers/grant-public", { method: "DELETE" }))
+      .then((response) => {
+        revoked = true
+        return response
+      })
+    await Promise.resolve()
+    expect(revoked).toBe(false)
+    finish()
+    expect((await invoke).status).toBe(200)
+    expect((await revoke).status).toBe(200)
+    expect(revoked).toBe(true)
+  })
+
+  it("stores tenant policy independently and intersects it with the owner vault ceiling", async () => {
+    nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+    const { owner, tenant } = makePair()
+    await owner.fetch(
+      connectRequest({ serverId: "server-private", url: "https://mcp.linear.app/mcp", callbackUrl: "https://cb" }),
+    )
+    await owner.fetch(
+      policyRequest("server-private", "PUT", {
+        version: 0,
+        enabled: true,
+        surfaces: RUNTIME_SURFACES_ON,
+        allowedReadTools: ["list_comments"],
+        maxCallsPerRun: 4,
+      }),
+    )
+    await post(tenant, "/grants", {
+      grantId: "grant-public",
+      ownerScope: "session:111",
+      serverId: "server-private",
+      creatorSubject: "github:111",
+      serverUrl: "https://mcp.linear.app/mcp",
+    })
+    await post(tenant, "/grants/grant-public/activate", {})
+    const tenantPolicy = await tenant.fetch(
+      new Request("https://mcp-connections.do/broker/servers/grant-public/policy", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          version: 0,
+          enabled: true,
+          surfaces: { ...ALL_SURFACES_OFF, cli: true },
+          allowedReadTools: ["list_comments"],
+          maxCallsPerRun: 1,
+        }),
+      }),
+    )
+    expect((await tenantPolicy.json()) as { policy: unknown }).toMatchObject({
+      policy: { version: 1, surfaces: { cli: true, chat: false }, maxCallsPerRun: 1 },
+    })
+    const ownerPolicy = (await (await owner.fetch(policyRequest("server-private", "GET"))).json()) as {
+      policy: { version: number; maxCallsPerRun: number }
+    }
+    expect(ownerPolicy.policy).toMatchObject({ version: 1, maxCallsPerRun: 4 })
+    expect((await post(tenant, "/broker/runtime/catalog", { surface: "chat" })).status).toBe(403)
+    expect(
+      ((await (await post(tenant, "/broker/runtime/catalog", { surface: "cli" })).json()) as { tools: unknown[] })
+        .tools,
+    ).toHaveLength(1)
+
+    await owner.fetch(
+      policyRequest("server-private", "PUT", {
+        version: 1,
+        enabled: false,
+        surfaces: ALL_SURFACES_OFF,
+        allowedReadTools: [],
+        maxCallsPerRun: 0,
+      }),
+    )
+    expect(
+      ((await (await post(tenant, "/broker/runtime/catalog", { surface: "cli" })).json()) as { tools: unknown[] })
+        .tools,
+    ).toEqual([])
+    expect(
+      (await (
+        await tenant.fetch(new Request("https://mcp-connections.do/broker/servers/grant-public/policy"))
+      ).json()) as { policy: unknown },
+    ).toMatchObject({ policy: { enabled: true, surfaces: { cli: true }, maxCallsPerRun: 1 } })
+  })
+
+  it("recovers a token saved before callback completion without replaying the OAuth code", async () => {
+    nextConnectResult = { state: "authenticating", authUrl: "https://provider.example/authorize?state=opaque" }
+    const { owner, tenant, ownerSql, ownerStore, env } = makePair()
+    await post(tenant, "/grants", {
+      grantId: "grant-oauth",
+      ownerScope: "session:111",
+      serverId: "server-oauth",
+      creatorSubject: "github:111",
+      serverUrl: "https://mcp.linear.app/mcp",
+    })
+    await owner.fetch(
+      connectRequest({
+        serverId: "server-oauth",
+        url: "https://mcp.linear.app/mcp",
+        callbackUrl: "https://api.sigilix.ai/mcp/oauth/callback",
+        grant: {
+          grantId: "grant-oauth",
+          ownerScope: "session:111",
+          tenantScope: "tenant:42",
+          stableSubject: "111",
+        },
+      }),
+    )
+    ownerSql.exec(
+      `INSERT OR REPLACE INTO cf_agents_mcp_servers
+       (id, name, server_url, callback_url, client_id, auth_url, server_options)
+       VALUES (?, ?, ?, ?, ?, NULL, NULL)`,
+      "server-oauth",
+      "Linear",
+      "https://mcp.linear.app/mcp",
+      "https://api.sigilix.ai/mcp/oauth/callback",
+      "client-1",
+    )
+    ownerStore.set("/sigilix-portal-mcp/server-oauth/client-1/token", { access_token: "stored" })
+    const callbackUrl = "https://mcp-connections.do/oauth-callback?code=already-used&state=opaque"
+    const claimed = await claimMcpOAuthCallbackRoute({
+      env,
+      callbackUrl,
+      ownerScope: "session:111",
+      stableSubject: "111",
+    })
+    if (!claimed || claimed.outcome !== "claimed") throw new Error("route was not claimed")
+    const callback = new Request(callbackUrl, {
+      headers: {
+        "x-sigilix-mcp-owner-scope": "session:111",
+        "x-sigilix-mcp-stable-subject": "111",
+        "x-sigilix-mcp-claim-id": claimed.route.claimId ?? "",
+      },
+    })
+    expect((await owner.fetch(callback)).status).toBe(200)
+    expect(handleCallbackSpy).not.toHaveBeenCalled()
+    const list = await tenant.fetch(new Request("https://mcp-connections.do/broker/list"))
+    expect(await list.json()).toMatchObject({ servers: [{ id: "grant-oauth", grantStatus: "active" }] })
+  })
+
+  it("retries token-stored tenant activation without replaying the authorization code", async () => {
+    nextConnectResult = { state: "authenticating", authUrl: "https://provider.example/authorize?state=retry" }
+    const { owner, tenant, env } = makePair()
+    await post(tenant, "/grants", {
+      grantId: "grant-retry",
+      ownerScope: "session:111",
+      serverId: "server-retry",
+      creatorSubject: "github:111",
+      serverUrl: "https://mcp.linear.app/mcp",
+    })
+    await owner.fetch(
+      connectRequest({
+        serverId: "server-retry",
+        url: "https://mcp.linear.app/mcp",
+        callbackUrl: "https://api.sigilix.ai/mcp/oauth/callback",
+        grant: {
+          grantId: "grant-retry",
+          ownerScope: "session:111",
+          tenantScope: "tenant:42",
+          stableSubject: "111",
+        },
+      }),
+    )
+    const callbackUrl = "https://mcp-connections.do/oauth-callback?code=once&state=retry"
+    const claimed = await claimMcpOAuthCallbackRoute({
+      env,
+      callbackUrl,
+      ownerScope: "session:111",
+      stableSubject: "111",
+    })
+    if (!claimed || claimed.outcome !== "claimed") throw new Error("route was not claimed")
+    const actualTenantFetch = tenant.fetch.bind(tenant)
+    let activationAttempts = 0
+    vi.spyOn(tenant, "fetch").mockImplementation((request) => {
+      if (new URL(request.url).pathname.endsWith("/activate") && activationAttempts++ === 0) {
+        return Promise.resolve(
+          Response.json({
+            grant: {
+              grantId: "grant-retry",
+              ownerScope: "session:wrong-owner",
+              serverId: "server-retry",
+              status: "active",
+            },
+          }),
+        )
+      }
+      return actualTenantFetch(request)
+    })
+    const callback = () =>
+      new Request(callbackUrl, {
+        headers: {
+          "x-sigilix-mcp-owner-scope": "session:111",
+          "x-sigilix-mcp-stable-subject": "111",
+          "x-sigilix-mcp-claim-id": claimed.route.claimId ?? "",
+        },
+      })
+    const first = await owner.fetch(callback())
+    expect(first.status).toBe(503)
+    expect(await first.json()).toMatchObject({ retryable: true })
+    expect(handleCallbackSpy).toHaveBeenCalledTimes(1)
+
+    const second = await owner.fetch(callback())
+    expect(second.status).toBe(200)
+    expect(await second.json()).toEqual({ authSuccess: true, serverId: "grant-retry" })
+    expect(handleCallbackSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it("admits only one SDK code exchange for concurrent callbacks carrying the same route claim", async () => {
+    nextConnectResult = { state: "authenticating", authUrl: "https://provider.example/authorize?state=concurrent" }
+    let finishExchange!: () => void
+    handleCallbackImpl = () =>
+      new Promise((resolve) => {
+        finishExchange = () => resolve({ serverId: "server-concurrent", authSuccess: true })
+      })
+    const { owner, tenant, env } = makePair()
+    await post(tenant, "/grants", {
+      grantId: "grant-concurrent",
+      ownerScope: "session:111",
+      serverId: "server-concurrent",
+      creatorSubject: "github:111",
+      serverUrl: "https://mcp.linear.app/mcp",
+    })
+    await owner.fetch(
+      connectRequest({
+        serverId: "server-concurrent",
+        url: "https://mcp.linear.app/mcp",
+        callbackUrl: "https://api.sigilix.ai/mcp/oauth/callback",
+        grant: {
+          grantId: "grant-concurrent",
+          ownerScope: "session:111",
+          tenantScope: "tenant:42",
+          stableSubject: "111",
+        },
+      }),
+    )
+    const callbackUrl = "https://mcp-connections.do/oauth-callback?code=once&state=concurrent"
+    const claimed = await claimMcpOAuthCallbackRoute({
+      env,
+      callbackUrl,
+      ownerScope: "session:111",
+      stableSubject: "111",
+    })
+    if (!claimed || claimed.outcome !== "claimed") throw new Error("route was not claimed")
+    const callback = () =>
+      new Request(callbackUrl, {
+        headers: {
+          "x-sigilix-mcp-owner-scope": "session:111",
+          "x-sigilix-mcp-stable-subject": "111",
+          "x-sigilix-mcp-claim-id": claimed.route.claimId ?? "",
+        },
+      })
+    const first = owner.fetch(callback())
+    await vi.waitFor(() => expect(handleCallbackSpy).toHaveBeenCalledTimes(1))
+    const duplicatePromise = owner.fetch(callback())
+    const duplicate = await Promise.race([
+      duplicatePromise,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 25)),
+    ])
+    finishExchange()
+    expect((await first).status).toBe(200)
+    const duplicateResponse = duplicate ?? (await duplicatePromise)
+    expect(duplicateResponse.status).toBe(409)
+    expect(await duplicateResponse.json()).toMatchObject({ retryable: true })
+    expect(handleCallbackSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(["completed", "failed"] as const)(
+    "repairs a %s completion whose route finalization previously failed",
+    async (completionStatus) => {
+      nextConnectResult = {
+        state: "authenticating",
+        authUrl: `https://provider.example/authorize?state=${completionStatus}`,
+      }
+      const { owner, tenant, ownerSql, env, instances } = makePair()
+      await post(tenant, "/grants", {
+        grantId: `grant-${completionStatus}`,
+        ownerScope: "session:111",
+        serverId: `server-${completionStatus}`,
+        creatorSubject: "github:111",
+        serverUrl: "https://mcp.linear.app/mcp",
+      })
+      await owner.fetch(
+        connectRequest({
+          serverId: `server-${completionStatus}`,
+          url: "https://mcp.linear.app/mcp",
+          callbackUrl: "https://api.sigilix.ai/mcp/oauth/callback",
+          grant: {
+            grantId: `grant-${completionStatus}`,
+            ownerScope: "session:111",
+            tenantScope: "tenant:42",
+            stableSubject: "111",
+          },
+        }),
+      )
+      const callbackUrl = `https://mcp-connections.do/oauth-callback?code=once&state=${completionStatus}`
+      const claimed = await claimMcpOAuthCallbackRoute({
+        env,
+        callbackUrl,
+        ownerScope: "session:111",
+        stableSubject: "111",
+      })
+      if (!claimed || claimed.outcome !== "claimed") throw new Error("route was not claimed")
+      ownerSql.exec(
+        `INSERT INTO sigilix_mcp_oauth_completions
+         (state_hash, server_id, grant_id, tenant_scope, status, auth_error, updated_at)
+         VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+        claimed.route.stateHash,
+        claimed.route.serverId,
+        claimed.route.grantId,
+        claimed.route.tenantScope,
+        completionStatus,
+        Date.now(),
+      )
+      const routeInstance = [...instances.entries()].find(([scope]) => scope.startsWith("oauth-route:"))?.[1]
+      if (!routeInstance) throw new Error("route DO missing")
+      const actualRouteFetch = routeInstance.fetch.bind(routeInstance)
+      let failFinalize = true
+      vi.spyOn(routeInstance, "fetch").mockImplementation((request) => {
+        if (new URL(request.url).pathname === "/oauth-route/finalize" && failFinalize) {
+          failFinalize = false
+          return Promise.resolve(new Response(JSON.stringify({ error: "transient" }), { status: 503 }))
+        }
+        return actualRouteFetch(request)
+      })
+      const callback = () =>
+        new Request(callbackUrl, {
+          headers: {
+            "x-sigilix-mcp-owner-scope": "session:111",
+            "x-sigilix-mcp-stable-subject": "111",
+            "x-sigilix-mcp-claim-id": claimed.route.claimId ?? "",
+          },
+        })
+      const first = await owner.fetch(callback())
+      expect(first.status).toBe(503)
+      expect(await first.json()).toMatchObject({ retryable: true })
+
+      const second = await owner.fetch(callback())
+      expect(second.status).toBe(200)
+      expect(await second.json()).toMatchObject(
+        completionStatus === "completed"
+          ? { authSuccess: true, serverId: `grant-${completionStatus}` }
+          : { authSuccess: false, authError: "callback failed" },
+      )
+      expect(
+        await readMcpOAuthCallbackRoute({
+          env,
+          callbackUrl,
+          ownerScope: "session:111",
+          stableSubject: "111",
+          expectedStatus: completionStatus,
+        }),
+      ).toMatchObject({ status: completionStatus })
+    },
+  )
+
+  it("purges a stored credential when grant activation is terminal", async () => {
+    nextConnectResult = { state: "authenticating", authUrl: "https://provider.example/authorize?state=terminal" }
+    const { owner, tenant, ownerSql, ownerStore, env } = makePair()
+    await post(tenant, "/grants", {
+      grantId: "grant-terminal",
+      ownerScope: "session:111",
+      serverId: "server-terminal",
+      creatorSubject: "github:111",
+      serverUrl: "https://mcp.linear.app/mcp",
+    })
+    await owner.fetch(
+      connectRequest({
+        serverId: "server-terminal",
+        url: "https://mcp.linear.app/mcp",
+        callbackUrl: "https://api.sigilix.ai/mcp/oauth/callback",
+        grant: {
+          grantId: "grant-terminal",
+          ownerScope: "session:111",
+          tenantScope: "tenant:42",
+          stableSubject: "111",
+        },
+      }),
+    )
+    ownerSql.exec(
+      `INSERT OR REPLACE INTO cf_agents_mcp_servers
+       (id, name, server_url, callback_url, client_id, auth_url, server_options)
+       VALUES (?, ?, ?, ?, ?, NULL, NULL)`,
+      "server-terminal",
+      "Linear",
+      "https://mcp.linear.app/mcp",
+      "https://api.sigilix.ai/mcp/oauth/callback",
+      "client-terminal",
+    )
+    ownerStore.set("/sigilix-portal-mcp/server-terminal/client-terminal/token", { access_token: "stored" })
+    await tenant.fetch(new Request("https://mcp-connections.do/broker/servers/grant-terminal", { method: "DELETE" }))
+    const callbackUrl = "https://mcp-connections.do/oauth-callback?code=unused&state=terminal"
+    const claimed = await claimMcpOAuthCallbackRoute({
+      env,
+      callbackUrl,
+      ownerScope: "session:111",
+      stableSubject: "111",
+    })
+    if (!claimed || claimed.outcome !== "claimed") throw new Error("route was not claimed")
+    const response = await owner.fetch(
+      new Request(callbackUrl, {
+        headers: {
+          "x-sigilix-mcp-owner-scope": "session:111",
+          "x-sigilix-mcp-stable-subject": "111",
+          "x-sigilix-mcp-claim-id": claimed.route.claimId ?? "",
+        },
+      }),
+    )
+    expect(await response.json()).toEqual({ authSuccess: false, authError: "callback failed" })
+    expect(removeServerSpy).toHaveBeenCalledWith("server-terminal")
+    expect(
+      ownerSql.exec("SELECT server_id FROM sigilix_mcp_policies_v2 WHERE server_id = ?", "server-terminal").toArray(),
+    ).toEqual([])
+    expect(handleCallbackSpy).not.toHaveBeenCalled()
+    expect(
+      await readMcpOAuthCallbackRoute({
+        env,
+        callbackUrl,
+        ownerScope: "session:111",
+        stableSubject: "111",
+        expectedStatus: "failed",
+      }),
+    ).toMatchObject({ status: "failed", grantId: "grant-terminal" })
   })
 })
 

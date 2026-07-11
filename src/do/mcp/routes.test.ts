@@ -13,6 +13,7 @@ import { base64urlEncode, createSession } from "@/src/lib/auth-session"
 import { insertApiKey } from "@/src/lib/api-key-store"
 import { sha256Hex } from "@/src/lib/auth-bearer"
 import type { Env } from "@/src/shared/types/env"
+import { hashMcpOAuthState } from "./oauth-callback-routing"
 
 const SESSION_COOKIE = "__Host-sigilix_session"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(9))
@@ -39,6 +40,27 @@ function makeKV(): KVNamespace {
       store.delete(key)
     },
   } as unknown as KVNamespace
+}
+
+function stubGitHubAdmin(installationId: number): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString()
+      if (url.startsWith("https://api.github.com/user/installations?")) {
+        return new Response(
+          JSON.stringify({
+            total_count: 1,
+            installations: [{ id: installationId, account: { type: "Organization", login: "acme" } }],
+          }),
+        )
+      }
+      if (url.startsWith("https://api.github.com/user/memberships/orgs?")) {
+        return new Response(JSON.stringify([{ role: "admin", state: "active", organization: { login: "acme" } }]))
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    }),
+  )
 }
 
 async function makeDb(): Promise<D1Database> {
@@ -192,6 +214,24 @@ describe("POST /v1/mcp/servers", () => {
     expect(doFetch).not.toHaveBeenCalled()
   })
 
+  it("400s connection URLs carrying query-string credentials before reaching the DO", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111)
+    const environment = baseEnv({
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: await makeDb(),
+    })
+    const doFetch = vi.fn(() => new Response("should not be called", { status: 500 }))
+    const { namespace } = makeMcpNamespace(doFetch)
+    const res = await dispatch(postServers({ url: "https://example.com/mcp?token=secret" }, "sess-1"), {
+      ...environment,
+      MCP_CONNECTIONS: namespace,
+    })
+    expect(res.status).toBe(400)
+    expect(doFetch).not.toHaveBeenCalled()
+  })
+
   it("fails closed for a live session with no stable principal id", async () => {
     const kv = makeKV()
     await seedProviderSession(kv, "sess-unstable")
@@ -250,16 +290,23 @@ describe("POST /v1/mcp/servers", () => {
       OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
       SIGILIX_PLATFORM_DB: await makeDb(),
     })
-    const { namespace } = makeMcpNamespace(
-      () => new Response(JSON.stringify({ status: "connected", id: "srv-1", toolCount: 3 }), { status: 200 }),
-    )
+    let connectBody: Record<string, unknown> | undefined
+    const { namespace } = makeMcpNamespace(async (request) => {
+      connectBody = (await request.json()) as Record<string, unknown>
+      return new Response(JSON.stringify({ status: "connected", id: "srv-1", toolCount: 3 }), { status: 200 })
+    })
     const request = postServers({ url: "https://example.com/mcp", name: "Example" }, "sess-1")
     request.headers.set("origin", PORTAL_ORIGIN)
-    const res = await dispatch(request, { ...env, MCP_CONNECTIONS: namespace })
+    const res = await dispatch(request, {
+      ...env,
+      OPENCLAW_BASE_URL: "https://callbacks.sigilix.ai/configured/path",
+      MCP_CONNECTIONS: namespace,
+    })
     expect(res.status).toBe(200)
     expect(res.headers.get("access-control-allow-origin")).toBe(PORTAL_ORIGIN)
     const body = (await res.json()) as { status: string; toolCount: number }
     expect(body).toMatchObject({ status: "connected", toolCount: 3 })
+    expect(connectBody?.callbackUrl).toBe("https://callbacks.sigilix.ai/mcp/oauth/callback")
   })
 
   it("relays a duplicate-endpoint conflict with the existing server id", async () => {
@@ -570,8 +617,8 @@ describe("OPTIONS preflight", () => {
   })
 })
 
-describe("runtime routes stay internal to the Durable Object", () => {
-  it("does not expose /v1/mcp/runtime/invoke through the public dispatcher", async () => {
+describe("tenant MCP runtime broker", () => {
+  it("exposes invoke only behind installation-bound authentication", async () => {
     const request = new Request("https://api.sigilix.ai/v1/mcp/runtime/invoke", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -583,7 +630,7 @@ describe("runtime routes stay internal to the Durable Object", () => {
       { waitUntil: () => undefined } as unknown as ExecutionContext,
       new URL(request.url),
     )
-    expect(result).toBeNull()
+    expect(result?.status).toBe(401)
   })
 })
 
@@ -594,7 +641,7 @@ describe("GET /mcp/oauth/callback", () => {
     return new Request(`https://api.sigilix.ai/mcp/oauth/callback${search}`, { headers })
   }
 
-  it("redirects to the portal with mcpConnected=1 on a successful callback", async () => {
+  it("rejects a callback when no strongly-consistent route exists instead of falling through", async () => {
     const kv = makeKV()
     await seedSession(kv, "sess-1", "octocat", 111)
     const env = baseEnv({
@@ -607,7 +654,7 @@ describe("GET /mcp/oauth/callback", () => {
     )
     const res = await dispatch(callbackRequest("sess-1"), { ...env, MCP_CONNECTIONS: namespace })
     expect(res.status).toBe(302)
-    expect(res.headers.get("location")).toBe(`${PORTAL_ORIGIN}/?mcpConnected=1#/apps`)
+    expect(res.headers.get("location")).toBe(`${PORTAL_ORIGIN}/?mcpError=oauth_failed#/apps`)
   })
 
   it("redirects with mcpError=oauth_failed when the SDK reports failure", async () => {
@@ -624,6 +671,50 @@ describe("GET /mcp/oauth/callback", () => {
     const res = await dispatch(callbackRequest("sess-1"), { ...env, MCP_CONNECTIONS: namespace })
     expect(res.status).toBe(302)
     expect(res.headers.get("location")).toBe(`${PORTAL_ORIGIN}/?mcpError=oauth_failed#/apps`)
+  })
+
+  it("forwards a processing route with its existing claim so token-stored activation can retry", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111)
+    stubGitHubAdmin(42)
+    const stateHash = await hashMcpOAuthState("xyz")
+    if (!stateHash) throw new Error("state hash missing")
+    const route = {
+      version: 2,
+      stateHash,
+      ownerScope: "session:111",
+      tenantScope: "tenant:42",
+      grantId: "grant-retry",
+      serverId: "server-retry",
+      stableSubject: "111",
+      status: "processing",
+      claimId: "claim-existing",
+      claimExpiresAt: Date.now() + 60_000,
+      createdAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    }
+    let ownerCalls = 0
+    const { namespace } = makeMcpNamespace(async (request) => {
+      const path = new URL(request.url).pathname
+      if (path === "/oauth-route/read") return new Response(JSON.stringify({ route }))
+      if (path === "/oauth-callback") {
+        ownerCalls += 1
+        expect(request.headers.get("x-sigilix-mcp-claim-id")).toBe("claim-existing")
+        return new Response(JSON.stringify({ authSuccess: true, serverId: "grant-retry" }))
+      }
+      throw new Error(`unexpected DO path ${path}`)
+    })
+    const environment = baseEnv({
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: await makeDb(),
+      MCP_CONNECTIONS: namespace,
+    })
+
+    const response = await dispatch(callbackRequest("sess-1"), environment)
+
+    expect(response.headers.get("location")).toBe(`${PORTAL_ORIGIN}/?mcpConnected=1#/apps`)
+    expect(ownerCalls).toBe(1)
   })
 
   it("redirects with mcpError=unauthenticated when there is no session at all (fail-soft, never a raw 401 mid-OAuth)", async () => {

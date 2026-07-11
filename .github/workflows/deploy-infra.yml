@@ -1,0 +1,103 @@
+name: Deploy infra (container / DO / D1)
+
+# WHY THIS EXISTS
+# CF Workers Builds ships worker CODE on every push to main, but it does NOT
+# apply INFRA changes: its builder can't build/push the [[containers]] image and
+# it never applies D1 migrations. So container-image / DO-migration / D1-schema
+# changes always required a manual `npx wrangler deploy` (and a manual
+# `wrangler d1 migrations apply`). That gap is exactly what silently left the
+# full agent-runner on a stale image and, separately, 500'd the Linear webhook on
+# an unapplied D1 migration.
+#
+# This workflow closes it: on a push to main that TOUCHES infra, it runs
+# `wrangler deploy` on ubuntu-latest — which HAS Docker, so it actually builds +
+# pushes + rolls the container image and applies DO migrations — and applies D1
+# migrations when migrations/ changed. It is path-scoped so ordinary code pushes
+# are untouched (those keep flowing through CF Workers Builds).
+#
+# REQUIRES two repo secrets (Settings -> Secrets and variables -> Actions):
+#   CLOUDFLARE_API_TOKEN  — Account: Workers Scripts:Edit + Cloudflare Containers:Edit + D1:Edit
+#   CLOUDFLARE_ACCOUNT_ID — 0de33b492cb79cc9815887aa17502be1
+# Until both exist the run FAILS LOUDLY (wrangler errors on a missing token) —
+# never a silent no-op.
+#
+# SECURITY: runs only on push to main (post-merge, trusted) — never on
+# pull_request, so a fork PR can never reach these secrets. GITHUB_TOKEN is
+# read-only; the deploy authenticates with the CF token alone. Only first-party
+# actions/checkout + actions/setup-node are used (no third-party action gets the
+# secret).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "container/**"
+      - "migrations/**"
+      - "wrangler.toml"
+
+permissions:
+  contents: read
+
+# Never let two infra deploys race the same worker/container image.
+concurrency:
+  group: deploy-infra-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Bound a wedged deploy/docker-push so it can't hold the (non-cancelling)
+    # concurrency queue for the 6h default and block later infra deploys.
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # need the previous commit to tell whether migrations/ changed
+          fetch-depth: 2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # ── D1 migrations FIRST (before deploying code that may need the new schema) ──
+      # Repo rule (CLAUDE.md): apply D1 migrations BEFORE the code that depends on
+      # them. Additive/forward-only migrations are safe for the still-running old
+      # worker; deploying first would open a window (permanent if the migration then
+      # fails) — exactly the failure this workflow exists to prevent. Only run when
+      # migrations/ changed; `apply` is forward-only, no-ops when nothing is pending,
+      # and runs non-interactively in CI.
+      - name: Detect migration changes
+        id: mig
+        # Pass SHAs via env (not inline ${{ }}) — the injection-safe pattern, even
+        # though these are GitHub-controlled commit SHAs on a protected branch.
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$BEFORE" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            # unknown / unfetched base (first push, multi-commit) — be safe; apply is idempotent
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BEFORE" "$SHA" | grep -q '^migrations/'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply D1 migrations (sigilix-platform)
+        if: steps.mig.outputs.changed == 'true'
+        run: npx wrangler d1 migrations apply sigilix-platform --remote
+
+      # ── THEN deploy: worker code + container image + DO migrations ──
+      # wrangler bundles src/index.ts itself (main = src/index.ts). Unlike CF's
+      # builder, ubuntu-latest has Docker, so this builds + pushes + rolls the
+      # container image and applies DO [[migrations]]. --containers-rollout
+      # immediate rolls all instances at once (a one-shot runner has no traffic to
+      # drain). Runs AFTER D1 so new code never sees an un-migrated schema.
+      - name: Deploy worker + container image + DO migrations
+        run: npx wrangler deploy --containers-rollout immediate

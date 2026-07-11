@@ -243,6 +243,14 @@ export async function buildLinearTenantAuthorizeUrl(
     redirect_uri: linearRedirectUri(env, requestUrl),
     scope: DEFAULT_INSTALL_SCOPES,
     actor: "app",
+    // Force the consent screen every time. Without this Linear short-circuits an
+    // already-installed workspace to a "manage/cancel" screen and never issues a
+    // fresh authorization code, so the callback that writes linear_connection
+    // never fires — leaving the registry empty and the portal stuck on "Connect
+    // app". prompt=consent re-issues a code on every reconnect (Linear docs:
+    // "The consent screen is displayed every time, even if all scopes were
+    // previously granted.").
+    prompt: "consent",
     state,
   })
   return `${AUTHORIZE_ENDPOINT}?${params.toString()}`

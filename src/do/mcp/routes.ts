@@ -26,6 +26,13 @@ import { handlePortalPreflight, hasJsonContentType, isAllowedPortalOrigin, withP
 import { guardUrl } from "@/src/do/deep-research/fetch-guard"
 import type { McpConnectResult, McpServerSummary } from "./mcp-connections-do"
 import { requireRuntimePrincipal } from "@/src/lib/runtime-principal"
+import { runtimeSessionSubject } from "@/src/lib/runtime-principal"
+import { authenticateMcpOrgAdmin, tryHandleOrgMcpRoute } from "./org-routes"
+import {
+  claimMcpOAuthCallbackRoute,
+  readMcpOAuthCallbackRoute,
+  type McpOAuthCallbackRoute,
+} from "./oauth-callback-routing"
 import type { Env } from "@/src/shared/types/env"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 
@@ -36,12 +43,20 @@ const MAX_POLICY_BODY_BYTES = 16 * 1024
 
 /** The caller's stable identity + the 401 branch when unauthenticated. Mirrors
  *  deep-research routes.ts's `authorize()` exactly (same dual-auth shape). */
-type CallerAuth = { scope: string; kind: "session" | "tenant" } | { response: Response }
+type CallerAuth =
+  | { scope: string; kind: "session"; stableSubject: string }
+  | { scope: string; kind: "tenant" }
+  | { response: Response }
 
 async function authorize(request: Request, env: Env, ctx: ExecutionContext): Promise<CallerAuth> {
   const auth = await requireRuntimePrincipal(request, env, ctx)
   if ("response" in auth) return auth
-  return { scope: auth.principal.scope, kind: auth.principal.kind }
+  if (auth.principal.kind === "session") {
+    const stableSubject = runtimeSessionSubject(auth.principal.session.record)
+    if (!stableSubject) return { response: json({ error: "stable_identity_required" }, 401) }
+    return { scope: auth.principal.scope, kind: "session", stableSubject }
+  }
+  return { scope: auth.principal.scope, kind: "tenant" }
 }
 
 function resolveStub(env: Env, scope: string): DurableObjectStub {
@@ -71,9 +86,12 @@ export async function handleMcpServersCreate(request: Request, env: Env, ctx: Ex
   if (!guard.ok) return json({ error: `url not allowed: ${guard.reason}` }, 400)
   if (guard.url.protocol !== "https:") return json({ error: "url not allowed: https-required" }, 400)
   if (guard.url.username || guard.url.password) return json({ error: "url not allowed: embedded-credentials" }, 400)
+  if (guard.url.search || guard.url.hash) {
+    return json({ error: "url not allowed: query-or-fragment-not-allowed" }, 400)
+  }
 
   const name = typeof body.name === "string" ? body.name.trim() : ""
-  const callbackUrl = new URL(request.url).origin + OAUTH_CALLBACK_PATH
+  const callbackUrl = trustedOAuthCallbackUrl(env)
 
   const stub = resolveStub(env, auth.scope)
   let response: Response
@@ -220,17 +238,50 @@ export async function handleMcpOAuthCallback(request: Request, env: Env, ctx: Ex
   }
 
   const url = new URL(request.url)
-  const stub = resolveStub(env, auth.scope)
-  try {
-    const response = await stub.fetch(`${DO_BASE}/oauth-callback${url.search}`, { method: "GET" })
-    const result = (await response.json()) as { authSuccess?: boolean; authError?: string }
-    if (result.authSuccess) {
-      return Response.redirect(portalRedirect(env, "connected"), 302)
+  if (auth.kind !== "session") return Response.redirect(portalRedirect(env, "unauthenticated"), 302)
+  const routed = await readCallbackRoute(env, url, auth.scope, auth.stableSubject)
+  if (!routed) return Response.redirect(portalRedirect(env, "oauth_failed"), 302)
+  const installationId = installationIdFromTenantScope(routed.tenantScope)
+  if (installationId === null) return Response.redirect(portalRedirect(env, "oauth_failed"), 302)
+  const admin = await authenticateMcpOrgAdmin(request, env, ctx, installationId)
+  if (!admin.ok || admin.value.ownerScope !== routed.ownerScope || admin.value.stableSubject !== routed.stableSubject) {
+    return Response.redirect(portalRedirect(env, "unauthenticated"), 302)
+  }
+  if (routed.status === "completed") return Response.redirect(portalRedirect(env, "connected"), 302)
+  if (routed.status === "failed") return Response.redirect(portalRedirect(env, "oauth_failed"), 302)
+  let processingRoute = routed
+  if (routed.status === "pending") {
+    const claimed = await claimMcpOAuthCallbackRoute({
+      env,
+      callbackUrl: url,
+      ownerScope: routed.ownerScope,
+      stableSubject: routed.stableSubject,
+    })
+    if (!claimed) return Response.redirect(portalRedirect(env, "oauth_failed"), 302)
+    if (claimed.outcome === "wait") return Response.redirect(portalRedirect(env, "oauth_pending"), 302)
+    if (claimed.outcome === "terminal") {
+      return Response.redirect(
+        portalRedirect(env, claimed.route.status === "completed" ? "connected" : "oauth_failed"),
+        302,
+      )
     }
-    return Response.redirect(portalRedirect(env, "oauth_failed"), 302)
+    processingRoute = claimed.route
+  }
+  try {
+    const response = await resolveStub(env, routed.ownerScope).fetch(`${DO_BASE}/oauth-callback${url.search}`, {
+      method: "GET",
+      headers: {
+        "x-sigilix-mcp-owner-scope": routed.ownerScope,
+        "x-sigilix-mcp-stable-subject": routed.stableSubject,
+        "x-sigilix-mcp-claim-id": processingRoute.claimId ?? "",
+      },
+    })
+    const result = (await response.json()) as { authSuccess?: boolean; retryable?: boolean }
+    if (result.authSuccess) return Response.redirect(portalRedirect(env, "connected"), 302)
+    return Response.redirect(portalRedirect(env, result.retryable ? "oauth_pending" : "oauth_failed"), 302)
   } catch (err) {
-    console.error("mcp-oauth-callback: DO call failed", err instanceof Error ? err.message : err)
-    return Response.redirect(portalRedirect(env, "oauth_failed"), 302)
+    console.error("mcp-oauth-callback: granted DO call failed", err instanceof Error ? err.message : err)
+    return Response.redirect(portalRedirect(env, "oauth_pending"), 302)
   }
 }
 
@@ -241,10 +292,25 @@ export async function handleMcpOAuthCallback(request: Request, env: Env, ctx: Ex
  * chat view — so the status flag goes on the real URL query string (read via
  * `location.search`, stripped client-side) and the hash stays a bare route.
  */
-function portalRedirect(env: Env, status: "connected" | "oauth_failed" | "unauthenticated"): string {
+function portalRedirect(env: Env, status: "connected" | "oauth_failed" | "oauth_pending" | "unauthenticated"): string {
   const portalUrl = safePortalBase(env)
   const param = status === "connected" ? "mcpConnected=1" : `mcpError=${status}`
   return `${portalUrl}/?${param}#/apps`
+}
+
+async function readCallbackRoute(
+  env: Env,
+  callbackUrl: URL,
+  ownerScope: string,
+  stableSubject: string,
+): Promise<McpOAuthCallbackRoute | null> {
+  return readMcpOAuthCallbackRoute({ env, callbackUrl, ownerScope, stableSubject })
+}
+
+function installationIdFromTenantScope(scope: string): number | null {
+  if (!/^tenant:[1-9]\d*$/.test(scope)) return null
+  const installationId = Number(scope.slice("tenant:".length))
+  return Number.isSafeInteger(installationId) && installationId > 0 ? installationId : null
 }
 
 /** The portal origin to redirect back to. Falls back to the default portal
@@ -258,6 +324,17 @@ function safePortalBase(env: Env): string {
     return isAllowedPortalOrigin(origin, env) ? origin : DEFAULT_PORTAL_URL
   } catch {
     return DEFAULT_PORTAL_URL
+  }
+}
+
+function trustedOAuthCallbackUrl(env: Env): string {
+  const configured = env.OPENCLAW_BASE_URL ?? "https://api.sigilix.ai"
+  try {
+    const url = new URL(configured)
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw new Error("invalid")
+    return `${url.origin}${OAUTH_CALLBACK_PATH}`
+  } catch {
+    return `https://api.sigilix.ai${OAUTH_CALLBACK_PATH}`
   }
 }
 
@@ -283,6 +360,8 @@ export async function tryHandleMcpRoute(
   ctx: ExecutionContext,
   url: URL,
 ): Promise<Response | null> {
+  const orgResponse = await tryHandleOrgMcpRoute(request, env, ctx, url)
+  if (orgResponse) return orgResponse
   if (request.method === "OPTIONS" && isMcpServersPath(url.pathname)) {
     return handlePortalPreflight(request, env)
   }

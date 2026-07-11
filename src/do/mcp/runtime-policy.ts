@@ -1,5 +1,20 @@
-export const MCP_SURFACES = ["chat", "deep-research"] as const
+export const MCP_RUNTIME_SURFACES = ["chat", "deep-research", "cli", "pr-review", "agent"] as const
+export type McpRuntimeSurface = (typeof MCP_RUNTIME_SURFACES)[number]
+
+export const MCP_SURFACES = [...MCP_RUNTIME_SURFACES, "memory-index"] as const
 export type McpSurface = (typeof MCP_SURFACES)[number]
+
+/**
+ * `memory-index` is intentionally visible in the policy contract so callers
+ * cannot mistake an absent field for an enabled capability. Its literal
+ * `false` type keeps it structurally unavailable until a provenance-aware
+ * indexer exists.
+ */
+export type McpSurfacePolicy = Readonly<
+  Record<McpRuntimeSurface, boolean> & {
+    "memory-index": false
+  }
+>
 
 export type OfficialMcpVendor =
   | "linear"
@@ -22,8 +37,7 @@ export interface CuratedReadTool {
 
 export interface VendorRuntimePolicy {
   vendor: OfficialMcpVendor
-  chat: boolean
-  deepResearch: boolean
+  surfaces: McpSurfacePolicy
   readTools: readonly CuratedReadTool[]
 }
 
@@ -194,8 +208,7 @@ const CURATED_READ_TOOLS: Readonly<Record<OfficialMcpVendor, readonly CuratedRea
 export interface StoredMcpPolicy {
   version: number
   enabled: boolean
-  chatEnabled: boolean
-  deepResearchEnabled: boolean
+  surfaces: McpSurfacePolicy
   allowedReadTools: string[]
   maxCallsPerRun: number
 }
@@ -203,6 +216,58 @@ export interface StoredMcpPolicy {
 export interface EffectiveMcpPolicy extends StoredMcpPolicy {
   vendor: OfficialMcpVendor | "custom"
   availableReadTools: string[]
+}
+
+/** Maximum reviewed capability held by the private credential vault. Tenant
+ * grants always apply a second, independently-versioned narrowing layer. */
+export function maximumMcpPolicy(rawUrl: string): StoredMcpPolicy {
+  const base = vendorPolicyForUrl(rawUrl)
+  if (!base) {
+    return {
+      version: 1,
+      enabled: false,
+      surfaces: surfacePolicy(),
+      allowedReadTools: [],
+      maxCallsPerRun: 0,
+    }
+  }
+  return {
+    version: 1,
+    enabled: true,
+    surfaces: base.surfaces,
+    allowedReadTools: base.readTools.map((tool) => tool.name),
+    maxCallsPerRun: 4,
+  }
+}
+
+/** Intersection used by the tenant broker. Neither the user-vault ceiling nor
+ * the tenant grant can independently broaden the effective capability. */
+export function intersectMcpPolicies(
+  rawUrl: string,
+  owner: StoredMcpPolicy,
+  grant: StoredMcpPolicy,
+): EffectiveMcpPolicy {
+  const ownerEffective = effectiveMcpPolicy(rawUrl, owner)
+  const grantEffective = effectiveMcpPolicy(rawUrl, grant)
+  const allowed = grantEffective.allowedReadTools.filter((name) => ownerEffective.allowedReadTools.includes(name))
+  return {
+    vendor: ownerEffective.vendor,
+    version: grantEffective.version,
+    enabled: ownerEffective.enabled && grantEffective.enabled,
+    surfaces: surfacePolicy(
+      Object.fromEntries(
+        MCP_RUNTIME_SURFACES.map((surface) => [
+          surface,
+          ownerEffective.surfaces[surface] && grantEffective.surfaces[surface],
+        ]),
+      ) as Record<McpRuntimeSurface, boolean>,
+    ),
+    allowedReadTools: allowed,
+    availableReadTools: ownerEffective.availableReadTools.filter((name) =>
+      grantEffective.availableReadTools.includes(name),
+    ),
+    maxCallsPerRun: Math.min(ownerEffective.maxCallsPerRun, grantEffective.maxCallsPerRun),
+  }
 }
 
 export type NarrowPolicyResult = { ok: true; policy: StoredMcpPolicy } | { ok: false; error: string }
@@ -231,8 +296,13 @@ export function vendorPolicyForUrl(rawUrl: string): VendorRuntimePolicy | null {
   if (!endpoint) return null
   return {
     vendor: endpoint.vendor,
-    chat: true,
-    deepResearch: true,
+    surfaces: surfacePolicy({
+      chat: true,
+      "deep-research": true,
+      cli: true,
+      "pr-review": true,
+      agent: true,
+    }),
     readTools: CURATED_READ_TOOLS[endpoint.vendor],
   }
 }
@@ -244,8 +314,7 @@ export function effectiveMcpPolicy(rawUrl: string, stored?: StoredMcpPolicy): Ef
       vendor: "custom",
       version: stored?.version ?? 0,
       enabled: false,
-      chatEnabled: false,
-      deepResearchEnabled: false,
+      surfaces: surfacePolicy(),
       allowedReadTools: [],
       availableReadTools: [],
       maxCallsPerRun: 0,
@@ -253,12 +322,16 @@ export function effectiveMcpPolicy(rawUrl: string, stored?: StoredMcpPolicy): Ef
   }
   const availableReadTools = base.readTools.map((tool) => tool.name)
   const allowed = stored ? stored.allowedReadTools.filter((name) => availableReadTools.includes(name)) : []
+  const storedSurfaces: Record<string, unknown> = isPlainObject(stored?.surfaces) ? stored.surfaces : {}
   return {
     vendor: base.vendor,
     version: stored?.version ?? 0,
     enabled: stored?.enabled ?? false,
-    chatEnabled: base.chat && (stored?.chatEnabled ?? false),
-    deepResearchEnabled: base.deepResearch && (stored?.deepResearchEnabled ?? false),
+    surfaces: surfacePolicy(
+      Object.fromEntries(
+        MCP_RUNTIME_SURFACES.map((surface) => [surface, base.surfaces[surface] && storedSurfaces[surface] === true]),
+      ) as Record<McpRuntimeSurface, boolean>,
+    ),
     allowedReadTools: allowed,
     availableReadTools,
     maxCallsPerRun: Math.min(stored?.maxCallsPerRun ?? 0, 4),
@@ -274,15 +347,37 @@ export function narrowMcpPolicy(rawUrl: string, value: unknown, currentVersion =
     return { ok: false, error: "invalid_policy" }
   }
   if (value.version !== currentVersion) return { ok: false, error: "stale_version" }
-  if (typeof value.enabled !== "boolean" || !isPlainObject(value.surfaces)) {
+  const rawSurfaces = value.surfaces
+  if (typeof value.enabled !== "boolean" || !isPlainObject(rawSurfaces)) {
     return { ok: false, error: "invalid_policy" }
   }
+  let requestedSurfaces: McpSurfacePolicy
+  const surfaceKeys = Object.keys(rawSurfaces)
   if (
-    Object.keys(value.surfaces).some((key) => key !== "chat" && key !== "deepResearch") ||
-    typeof value.surfaces.chat !== "boolean" ||
-    typeof value.surfaces.deepResearch !== "boolean"
+    surfaceKeys.length === 2 &&
+    surfaceKeys.includes("chat") &&
+    surfaceKeys.includes("deepResearch") &&
+    typeof rawSurfaces.chat === "boolean" &&
+    typeof rawSurfaces.deepResearch === "boolean"
   ) {
-    return { ok: false, error: "invalid_policy" }
+    // Rolling-deploy compatibility for the pre-SIG-556 portal. It can only
+    // carry the two historical switches, so every new surface stays off.
+    requestedSurfaces = surfacePolicy({ chat: rawSurfaces.chat, "deep-research": rawSurfaces.deepResearch })
+  } else {
+    if (
+      surfaceKeys.length !== MCP_SURFACES.length ||
+      surfaceKeys.some((key) => !isMcpSurface(key)) ||
+      MCP_SURFACES.some((surface) => typeof rawSurfaces[surface] !== "boolean")
+    ) {
+      return { ok: false, error: "invalid_policy" }
+    }
+    if (rawSurfaces["memory-index"]) return { ok: false, error: "unsupported_surface" }
+    requestedSurfaces = surfacePolicy(
+      Object.fromEntries(MCP_RUNTIME_SURFACES.map((surface) => [surface, rawSurfaces[surface]])) as Record<
+        McpRuntimeSurface,
+        boolean
+      >,
+    )
   }
   if (!Array.isArray(value.allowedReadTools) || value.allowedReadTools.length > 64) {
     return { ok: false, error: "invalid_policy" }
@@ -294,10 +389,12 @@ export function narrowMcpPolicy(rawUrl: string, value: unknown, currentVersion =
   const unique = [...new Set(names as string[])]
   const available = new Set(base.readTools.map((tool) => tool.name))
   if (unique.some((name) => !available.has(name))) return { ok: false, error: "unsupported_tool" }
+  const maxCallsPerRun = value.maxCallsPerRun
   if (
-    !Number.isSafeInteger(value.maxCallsPerRun) ||
-    (value.maxCallsPerRun as number) < 0 ||
-    (value.maxCallsPerRun as number) > 4
+    typeof maxCallsPerRun !== "number" ||
+    !Number.isSafeInteger(maxCallsPerRun) ||
+    maxCallsPerRun < 0 ||
+    maxCallsPerRun > 4
   ) {
     return { ok: false, error: "invalid_policy" }
   }
@@ -306,10 +403,13 @@ export function narrowMcpPolicy(rawUrl: string, value: unknown, currentVersion =
     policy: {
       version: currentVersion + 1,
       enabled: value.enabled,
-      chatEnabled: base.chat && value.surfaces.chat,
-      deepResearchEnabled: base.deepResearch && value.surfaces.deepResearch,
+      surfaces: surfacePolicy(
+        Object.fromEntries(
+          MCP_RUNTIME_SURFACES.map((surface) => [surface, base.surfaces[surface] && requestedSurfaces[surface]]),
+        ) as Record<McpRuntimeSurface, boolean>,
+      ),
       allowedReadTools: unique,
-      maxCallsPerRun: value.maxCallsPerRun as number,
+      maxCallsPerRun,
     },
   }
 }
@@ -327,7 +427,15 @@ export function curatedReadToolForVendor(vendor: string, name: string): CuratedR
 }
 
 export function isMcpSurface(value: unknown): value is McpSurface {
-  return value === "chat" || value === "deep-research"
+  return typeof value === "string" && (MCP_SURFACES as readonly string[]).includes(value)
+}
+
+export function isMcpRuntimeSurface(value: unknown): value is McpRuntimeSurface {
+  return typeof value === "string" && (MCP_RUNTIME_SURFACES as readonly string[]).includes(value)
+}
+
+export function mcpSurfaceEnabled(policy: EffectiveMcpPolicy, surface: McpSurface): boolean {
+  return surface !== "memory-index" && policy.enabled && policy.surfaces[surface] === true
 }
 
 function normalizePath(pathname: string): string {
@@ -341,6 +449,17 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function isOfficialVendor(value: string): value is OfficialMcpVendor {
   return Object.hasOwn(CURATED_READ_TOOLS, value)
+}
+
+function surfacePolicy(enabled: Partial<Record<McpRuntimeSurface, boolean>> = {}): McpSurfacePolicy {
+  return {
+    chat: enabled.chat ?? false,
+    "deep-research": enabled["deep-research"] ?? false,
+    cli: enabled.cli ?? false,
+    "pr-review": enabled["pr-review"] ?? false,
+    agent: enabled.agent ?? false,
+    "memory-index": false,
+  }
 }
 
 function reviewedReadTools(vendor: string, names: readonly string[]): readonly CuratedReadTool[] {

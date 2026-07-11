@@ -20,6 +20,7 @@ import { runEditLoop } from "./agent-loop.js";
 import type { StoppedReason } from "./agent-loop.js";
 import { runCliAgent } from "./cli-agent.js";
 import { openPullRequest } from "./github-pr.js";
+import type { AgentMcpConfig } from "./mcp-client.js";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -79,6 +80,8 @@ export interface TaskPacket {
     url: string;
     secret: string;
   };
+  /** Opaque run-bound read capability + exact Worker machine endpoint. */
+  mcp?: AgentMcpConfig;
 }
 
 export interface RunResult {
@@ -152,6 +155,7 @@ export async function runTask(packet: TaskPacket): Promise<RunResult> {
       ...(grounding !== undefined ? { grounding } : {}),
       // Live-events sink (portal diff pane); only the minimal loop reads it.
       ...(packet.events !== undefined ? { events: packet.events } : {}),
+      ...(packet.mcp !== undefined ? { mcp: packet.mcp } : {}),
       model,
       caps,
     };
@@ -247,7 +251,13 @@ export async function runTask(packet: TaskPacket): Promise<RunResult> {
   } catch (err) {
     const rawMsg = err instanceof Error ? err.message : String(err);
     // Redact all secrets from any surfaced error message.
-    const safeMsg = redactSecrets(rawMsg, [repo.installationToken, model.key]);
+    const safeMsg = redactSecrets(rawMsg, [
+      repo.installationToken,
+      model.key,
+      packet.events?.secret ?? "",
+      packet.sigilix?.apiKey ?? "",
+      packet.mcp?.capability ?? "",
+    ]);
 
     return {
       runId,

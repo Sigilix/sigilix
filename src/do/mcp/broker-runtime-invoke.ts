@@ -19,7 +19,7 @@ const BROKER_OWNER_TIMEOUT_MS = 12_000
 interface BrokerRuntimeInvokeArgs {
   body: Record<string, unknown>
   installationId: number
-  fixedSurface?: "chat" | "deep-research"
+  fixedSurface?: McpRuntimeSurface
   env: Env
   grants: TenantMcpGrantRegistry
   memory: TenantMcpMemoryIndex
@@ -99,6 +99,30 @@ export async function handleBrokerRuntimeInvoke(args: BrokerRuntimeInvokeArgs): 
     const text = await response.text()
     if (!response.ok) return new Response(text, { status: response.status, headers: JSON_HEADERS })
 
+    // Provider bytes remain inside the broker until the grant and owner ceiling
+    // are re-read. Revocation or policy narrowing during the provider call must
+    // discard the stale result before it reaches a runtime surface or memory.
+    const postGrant = args.grants.getActive(grantId)
+    if (
+      !postGrant ||
+      postGrant.ownerScope !== currentGrant.ownerScope ||
+      postGrant.serverId !== currentGrant.serverId
+    ) {
+      return denied(selector.kind)
+    }
+    if (selector.kind === "resolved" && !runtimeAppMatchesEndpoint(selector.app, postGrant.serverUrl)) {
+      return json({ error: "app_unavailable" }, 409)
+    }
+    const postOwner = await args.readOwnerPolicy(postGrant)
+    if (!postOwner) return json({ error: "broker_unavailable" }, 502)
+    const postPolicy = effectiveBrokerPolicy(postGrant, postOwner)
+    if (!mcpSurfaceEnabled(postPolicy, surface) || !postPolicy.allowedReadTools.includes(toolName)) {
+      return denied(selector.kind)
+    }
+    if (selector.kind === "resolved" && !runtimeAppAllowsTool(selector.app, postPolicy.vendor, toolName)) {
+      return json({ error: "app_unavailable" }, 409)
+    }
+
     const value = parseObject(text)
     const result = value ? sanitizeMcpResult(value.result) : null
     if (!value || !result) {
@@ -110,6 +134,9 @@ export async function handleBrokerRuntimeInvoke(args: BrokerRuntimeInvokeArgs): 
       grants: args.grants,
       memory: args.memory,
       readOwnerPolicy: args.readOwnerPolicy,
+      // Indexing requires the pre-call memory consent as well as the live
+      // checks performed inside indexMcpResult. A policy broadened while the
+      // provider was running cannot retroactively authorize persistence.
       grant: currentGrant,
       policy: effective,
       toolName,

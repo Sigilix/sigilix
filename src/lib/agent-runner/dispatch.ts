@@ -14,8 +14,9 @@
 // Spec: docs/superpowers/specs/2026-06-27-b1-cf-container-task-to-pr-design.md
 
 import { getContainer } from "@cloudflare/containers"
-import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
+import { getInstallationToken, resolveRepoInstallationId } from "@/src/shared/adapters/github/github-app"
 import { resolveAgentRunnerMode, type AgentRunnerEngine } from "@/src/lib/agent-runner/mode"
+import { mintAgentMcpCapability, revokeAgentMcpCapability, type AgentMcpTaskCapability } from "./mcp-capability"
 import { retainTrainingRecord } from "@/src/lib/training-retention/retain-training"
 import type { AgentRunnerContainer, AgentRunRecord, RunEvent } from "@/src/do/agent-runner-container"
 import type { Env } from "@/src/shared/types/env"
@@ -126,6 +127,10 @@ interface TaskPacket {
     url: string
     secret: string
   }
+  /** Short-lived tenant MCP read capability. The provider credential remains
+   *  in the Worker-owned vault; the container receives only this opaque bearer
+   *  and the exact Worker machine endpoint. */
+  mcp?: AgentMcpTaskCapability
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
@@ -193,6 +198,7 @@ export async function dispatchAgentRun(
   input: AgentRunTaskInput,
 ): Promise<{ runId: string; dispatched: boolean; outcome?: AgentRunOutcome; reason?: string }> {
   const { runId } = input
+  let mcpCapability: AgentMcpTaskCapability | undefined
 
   // ── Dark gate ───────────────────────────────────────────────────────────────
   if (resolveAgentRunnerMode(env) !== "on") {
@@ -204,6 +210,19 @@ export async function dispatchAgentRun(
 
   // ── Mint + dispatch (fail-safe) ──────────────────────────────────────────────
   try {
+    // Reconcile the caller-provided installation against GitHub's authoritative
+    // repo installation before minting either the clone token or tenant MCP
+    // capability. A stale/mismatched mapping fails closed.
+    const resolvedInstallationId = await resolveRepoInstallationId(
+      env.GITHUB_APP_ID!,
+      env.GITHUB_PRIVATE_KEY!,
+      input.owner,
+      input.repo,
+    )
+    if (resolvedInstallationId !== input.installationId) {
+      throw new Error("repository installation authorization failed")
+    }
+
     // Mint a short-lived GitHub App installation token scoped to the repo.
     // NEVER included in any log statement below.
     const installationToken = await getInstallationToken({
@@ -235,6 +254,18 @@ export async function dispatchAgentRun(
       }
     }
 
+    // MCP remains fail-soft: no approved agent tools, a broker fault, or an
+    // unset endpoint simply omits the block and the coding run continues with
+    // its local tools. This happens only after exact repo/install authorization.
+    mcpCapability = await mintAgentMcpCapability({
+      env,
+      runId,
+      installationId: input.installationId,
+      owner: input.owner,
+      repo: input.repo,
+      timeoutMs: input.caps.timeoutMs,
+    })
+
     const packet: TaskPacket = {
       runId,
       repo: {
@@ -249,6 +280,7 @@ export async function dispatchAgentRun(
       engine: input.engine ?? "minimal",
       ...(groundingConfig !== undefined ? { sigilix: groundingConfig } : {}),
       ...(eventsConfig !== undefined ? { events: eventsConfig } : {}),
+      ...(mcpCapability !== undefined ? { mcp: mcpCapability } : {}),
       caps: input.caps,
     }
 
@@ -347,6 +379,8 @@ export async function dispatchAgentRun(
       }),
     )
     return { runId, dispatched: false, reason: `dispatch-failed: ${err instanceof Error ? err.message : String(err)}` }
+  } finally {
+    if (mcpCapability) await revokeAgentMcpCapability(env, runId)
   }
 }
 

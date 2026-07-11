@@ -74,6 +74,7 @@ import {
 } from "@/src/lib/admin-index-route"
 import { handleAdminLinearRetrievalProbeRoute } from "@/src/lib/admin-linear-retrieval-probe-route"
 import { handleAdminAgentRunRoute, handleAdminAgentStatusRoute } from "@/src/lib/agent-runner/admin-agent-run-route"
+import { tryHandleAgentMcpMachineRoute } from "@/src/lib/agent-runner/mcp-capability-route"
 import { runIndexReconciliation } from "@/src/lib/index-reconciliation"
 import { runMemoryDecayPass } from "@/src/lib/memory-decay"
 import { handleReviewStatusRoute } from "@/src/do/status-route"
@@ -505,6 +506,8 @@ export default {
     }
     // The runner container's live-event ingest — machine-authed (per-run secret),
     // no session, no CORS; must be handled before the session/CORS blocks below.
+    const agentMcpResponse = await tryHandleAgentMcpMachineRoute(request, env, url)
+    if (agentMcpResponse) return agentMcpResponse
     const eventIngestResponse = tryHandleAgentEventIngestRoute(request, env, url)
     if (eventIngestResponse) return eventIngestResponse
     const agentPortalResponse = await tryHandleAgentPortalRoute(request, env, ctx, url)
@@ -979,6 +982,9 @@ export { ProviderCooldownDO } from "@/src/do/provider-cooldown"
 // AgentRunnerContainer) + [[durable_objects.bindings]] (AGENT_RUNNER) +
 // the sig-545-agent-runner-v1 new_sqlite_classes migration in wrangler.toml.
 export { AgentRunnerContainer } from "@/src/do/agent-runner-container"
+
+// SIG-566: per-run, expiring tenant MCP capability and global budget state.
+export { AgentMcpCapabilityDO } from "@/src/do/agent-mcp-capability"
 
 // SIG-144 (Linear unification slice 1): LinearTokenBroker — owns the Linear agent
 // token lifecycle + serializes refresh across isolates. Registered via the

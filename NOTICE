@@ -41,3 +41,20 @@ Tongyi DeepResearch is licensed under the Apache License, Version 2.0. The full
 license text is delivered with this repository in the LICENSE-APACHE file (as
 required by Apache-2.0 §4(a)); it is also available at
 https://www.apache.org/licenses/LICENSE-2.0
+
+────────────────────────────────────────────────────────────────────────────
+Governed skill guidance (SIG-561)
+────────────────────────────────────────────────────────────────────────────
+
+The static catalog in src/features/skills/ contains Sigilix-authored, reviewed
+guidance derived from these pinned open-source skill packages:
+
+  - OpenAI security-best-practices and security-threat-model, Apache-2.0.
+  - Cloudflare workers-best-practices and durable-objects, Apache-2.0.
+  - Supabase supabase-postgres-best-practices, Copyright (c) 2026 Supabase,
+    MIT License.
+
+No upstream package code or shell commands execute in Sigilix. The complete
+source pins, content hashes, attribution links, review record, and threat model
+are in docs/THIRD_PARTY_SKILLS.md. Apache-2.0 is in LICENSE-APACHE; the Supabase
+MIT notice is in LICENSE-MIT-SUPABASE.

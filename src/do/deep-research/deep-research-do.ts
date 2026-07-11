@@ -28,6 +28,7 @@ import type { RepoGrounding, ResearchEffort, ResearchEvent, ResearchMode, Resear
 import { buildResearchMcpRuntime } from "./mcp-runtime"
 import { isTenantRuntimeScope } from "@/src/lib/runtime-principal"
 import { resolveRuntimeApp, type RuntimeAppId } from "@/src/shared/domain/runtime-app-registry"
+import { resolveRuntimeSkill, type ResolvedSkillContext } from "@/src/features/skills"
 
 const META_KEY = "meta"
 const EVENT_PREFIX = "evt:"
@@ -140,6 +141,7 @@ export class DeepResearchDO extends DurableObject<Env> {
     this.creator = typeof body.creator === "string" ? body.creator : ""
     this.mcpTenantScope =
       typeof body.mcpTenantScope === "string" && isTenantRuntimeScope(body.mcpTenantScope) ? body.mcpTenantScope : ""
+    const skillInstallationId = installationIdFromTenantScope(this.mcpTenantScope)
     const app = body.appId === undefined ? null : resolveRuntimeApp(body.appId)
     if (body.appId !== undefined && !app) return json({ error: "invalid_app" }, 400)
     this.appId = app?.id
@@ -170,16 +172,33 @@ export class DeepResearchDO extends DurableObject<Env> {
     await this.ctx.storage.put(META_KEY, meta)
     await this.armCleanupAlarm()
 
-    this.driveDone = this.drive(question)
+    this.driveDone = this.drive(question, skillInstallationId)
     // Keep the DO alive while the loop runs, without blocking /stream.
     this.ctx.waitUntil?.(this.driveDone)
     return json({ ok: true })
   }
 
-  private async drive(question: string): Promise<void> {
+  private async drive(question: string, skillInstallationId: number): Promise<void> {
     const config = resolveResearchConfig(this.env, { model: this.model, effort: this.effort })
     const runId = this.ctx.id.toString()
     const tenant = this.creator || "anonymous"
+
+    // Resolve policy at the final-answer boundary, not at run start. A deep
+    // research run can spend minutes gathering sources; deferring this read
+    // ensures an admin revoke that lands during research takes effect before
+    // any governed instructions enter a model call.
+    const resolveSkillContext =
+      skillInstallationId > 0 && !isTrivialMessage(question)
+        ? async (): Promise<ResolvedSkillContext | undefined> => {
+            const resolved = await resolveRuntimeSkill(this.env, {
+              installationId: skillInstallationId,
+              surface: this.mode === "chat" ? "chat" : "deep-research",
+              task: question,
+              runId,
+            })
+            return resolved.status === "resolved" ? resolved.context : undefined
+          }
+        : undefined
 
     // sig-deep-research-repo-grounding: gather codebase grounding for the resolved
     // repo (if any) BEFORE the loop, reusing the PR-review retrieval seam. Soft-
@@ -233,6 +252,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       model: meteredModel,
       ...(mcp ? { mcp } : {}),
       ...(this.appId ? { appId: this.appId } : {}),
+      ...(resolveSkillContext ? { resolveSkillContext } : {}),
       search: this.hooks?.search ?? ((query) => searchWeb({ query, env: this.env, runId, tenant })),
       fetchPage: this.hooks?.fetchPage ?? ((pageUrl) => fetchPage({ url: pageUrl, runId, tenant })),
       isCancelled: () => this.cancelled,
@@ -408,6 +428,11 @@ export class DeepResearchDO extends DurableObject<Env> {
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+}
+
+function installationIdFromTenantScope(scope: string): number {
+  if (!isTenantRuntimeScope(scope)) return 0
+  return Number(scope.slice("tenant:".length))
 }
 
 /** Parse the `type` out of a persisted `data: {json}\n\n` frame, or null. */

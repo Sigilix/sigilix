@@ -51,6 +51,7 @@ import {
 } from "@/src/lib/agent-memory"
 import { handleResearchCreate, handleResearchStream, handleResearchCancel } from "@/src/do/deep-research/routes"
 import { tryHandleMcpRoute } from "@/src/do/mcp/routes"
+import { tryHandleSkillRoute } from "@/src/lib/skills-route"
 import { handleTestSuppressionsMetricsRoute } from "@/src/lib/metrics-test-suppressions-route"
 import { handleRunnerEvidenceMetricsRoute } from "@/src/lib/metrics-runner-evidence-route"
 import { handleRunnerToolsMetricsRoute } from "@/src/lib/metrics-runner-tools-route"
@@ -540,6 +541,8 @@ export default {
       }
     }
 
+    const skillResponse = await tryHandleSkillRoute(request, env, ctx, url)
+    if (skillResponse) return skillResponse
     const mcpResponse = await tryHandleMcpRoute(request, env, ctx, url)
     if (mcpResponse) return mcpResponse
     if (url.pathname.startsWith("/v1/cli/")) return tryHandleCliLoginRoute(request, env, ctx, url) // sig-cli-login
@@ -983,9 +986,7 @@ export { ProviderCooldownDO } from "@/src/do/provider-cooldown"
 // the sig-545-agent-runner-v1 new_sqlite_classes migration in wrangler.toml.
 export { AgentRunnerContainer } from "@/src/do/agent-runner-container"
 
-// SIG-566: per-run, expiring tenant MCP capability and global budget state.
 export { AgentMcpCapabilityDO } from "@/src/do/agent-mcp-capability"
-
 // SIG-144 (Linear unification slice 1): LinearTokenBroker — owns the Linear agent
 // token lifecycle + serializes refresh across isolates. Registered via the
 // [[durable_objects.bindings]] LINEAR_TOKEN_BROKER entry + the

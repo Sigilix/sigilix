@@ -192,12 +192,19 @@ function normalizeScopes(scope: TokenResponse["scope"]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
 }
 
-/** Compute the OAuth redirect URI. PINNED to OPENCLAW_GATEWAY_ISSUER (the worker
- *  origin the Linear OAuth app is configured against) so /linear/install and the
- *  token exchange use the same value and cannot drift; falls back to the request
- *  origin only when the issuer env is unset. */
-function linearRedirectUri(env: Pick<Env, "OPENCLAW_GATEWAY_ISSUER">, requestUrl: URL): string {
-  const base = env.OPENCLAW_GATEWAY_ISSUER ?? requestUrl.origin
+/** Compute the OAuth redirect URI. Pinned to SIGILIX_LINEAR_REDIRECT_ORIGIN — the
+ *  worker's public, same-site-with-the-portal origin (api.sigilix.ai) — so the
+ *  callback carries the portal session cookie and requireSession succeeds. This
+ *  is deliberately NOT OPENCLAW_GATEWAY_ISSUER: that value is the GCP WIF `iss`
+ *  and is the legacy workers.dev origin, which is off the sigilix.ai cookie
+ *  domain and made the callback fail the session check. /linear/install and the
+ *  token exchange both call this, so the redirect_uri still cannot drift. Falls
+ *  back to the gateway issuer, then the request origin, when unset. */
+function linearRedirectUri(
+  env: Pick<Env, "SIGILIX_LINEAR_REDIRECT_ORIGIN" | "OPENCLAW_GATEWAY_ISSUER">,
+  requestUrl: URL,
+): string {
+  const base = env.SIGILIX_LINEAR_REDIRECT_ORIGIN ?? env.OPENCLAW_GATEWAY_ISSUER ?? requestUrl.origin
   return `${base}/linear/oauth/callback`
 }
 
@@ -227,7 +234,11 @@ export function resolveAgentOAuthCreds(
 export async function buildLinearTenantAuthorizeUrl(
   env: Pick<
     Env,
-    "OPENCLAW_STATE" | "LINEAR_OAUTH_CLIENT_ID" | "OPENCLAW_LINEAR_AGENT_CLIENT_ID" | "OPENCLAW_GATEWAY_ISSUER"
+    | "OPENCLAW_STATE"
+    | "LINEAR_OAUTH_CLIENT_ID"
+    | "OPENCLAW_LINEAR_AGENT_CLIENT_ID"
+    | "SIGILIX_LINEAR_REDIRECT_ORIGIN"
+    | "OPENCLAW_GATEWAY_ISSUER"
   >,
   requestUrl: URL,
   stateValue: Omit<LinearTenantOAuthState, "version" | "createdAt">,

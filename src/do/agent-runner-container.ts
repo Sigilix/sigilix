@@ -99,13 +99,17 @@ export class AgentRunnerContainer extends Container<Env> {
   // One-shot runs should not idle; sleep quickly after the job completes.
   override sleepAfter = "2m"
 
-  // Egress isolation (phase-2 gate B) — DENYLIST-ONLY (boot-safe; see the consts).
-  // enableInternet stays TRUE (a deny-by-default allowlist starves CF boot → 500,
-  // learned the hard way, #858/#867). deniedHosts blocks the cloud-metadata IP
-  // unconditionally — the #1 credential-theft vector — without affecting boot or
-  // any host a run needs. Verified by a LIVE dispatch, not docker.
+  // Egress isolation (phase-2 gate B) — DISABLED, pending investigation.
+  // ⚠️ EMPIRICAL: setting ANY egress rule (allowedHosts OR deniedHosts) on this
+  // container 500s the boot, even WITH `export { ContainerProxy }` (#858/#867/#868/
+  // #869 all confirmed live). CF's outbound interception (usingInterception=true →
+  // ctx.exports.ContainerProxy) does not work here yet — likely needs a ctx.exports
+  // compat flag and/or a non-versioned `wrangler deploy` (our Workers-Builds
+  // versioned uploads may not register the new entrypoint). Until that's resolved
+  // the container stays on the base network so the LIVE runner works. The
+  // AGENT_RUNNER_DENIED_HOSTS const is kept for the eventual re-enable. Re-verify
+  // ANY egress change with a LIVE dispatch (dispatched:true), never docker.
   override enableInternet = true
-  override deniedHosts = [...AGENT_RUNNER_DENIED_HOSTS]
 
   // -------------------------------------------------------------------------
   // Run-record helpers — thin SQLite accessors over the DO's durable storage.

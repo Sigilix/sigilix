@@ -38,13 +38,15 @@ function makeDO(): AgentRunnerContainer {
 }
 
 describe("AgentRunnerContainer egress policy — class wiring", () => {
-  it("keeps internet enabled (boot-safe) and blocks the metadata IP via deniedHosts", () => {
+  // ⚠️ Egress is DISABLED (base network) pending investigation: ANY egress rule
+  // (allowedHosts/deniedHosts) 500s the container boot here, even with
+  // ContainerProxy exported (#858/#867/#868/#869). This locks the known-good
+  // base-network state so a re-add can't silently re-break the live runner —
+  // any egress change MUST be re-verified with a LIVE dispatch, not docker.
+  it("is on the base network — no egress rules set (boot-safe until interception works)", () => {
     const runner = makeDO()
-    // MUST stay true — enableInternet=false starves CF container boot.
     expect(runner.enableInternet).toBe(true)
-    // No allowlist — a deny-by-default allowlist also starves boot.
     expect(runner.allowedHosts).toBeUndefined()
-    // The metadata IP is blocked unconditionally.
-    expect(runner.deniedHosts).toContain("169.254.169.254")
+    expect(runner.deniedHosts).toBeUndefined()
   })
 })

@@ -326,11 +326,17 @@ describe("DeepResearchDO — authenticated MCP execution", () => {
     expect(events.find((event) => event.type === "final")?.markdown).toContain("[MCP: Linear/list_comments]")
     expect(names).toEqual(["tenant:42"])
     expect(calls.map((call) => call.path)).toEqual([
+      "/broker/memory/query",
       `/broker/runtime/${surface}/catalog`,
       `/broker/runtime/${surface}/invoke`,
     ])
-    expect(calls[0]!.body).toEqual({})
-    expect(calls[1]!.body).toEqual({
+    expect(calls[0]!.body).toEqual({
+      surface,
+      query: "What do the SIG-193 comments ask us to cover?",
+      topK: 4,
+    })
+    expect(calls[1]!.body).toEqual({})
+    expect(calls[2]!.body).toEqual({
       runId: "deep-research-instance-1",
       serverId: "linear-server-1",
       toolName: "list_comments",

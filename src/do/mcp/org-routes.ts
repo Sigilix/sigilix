@@ -562,20 +562,38 @@ async function handleRuntime(request: Request, env: Env, ctx: ExecutionContext, 
   const auth = await requireRuntimePrincipal(request, env, ctx)
   if ("response" in auth) return auth.response
   if (auth.principal.kind !== "tenant") return json({ error: "tenant_scope_required" }, 403)
-  if (parsed.value.surface !== "cli") return json({ error: "surface_not_allowed" }, 403)
+  if (path !== "memory/query" && parsed.value.surface !== "cli") {
+    return json({ error: "surface_not_allowed" }, 403)
+  }
+  if (
+    path === "memory/query" &&
+    (typeof parsed.value.query !== "string" ||
+      (parsed.value.topK !== undefined &&
+        (!Number.isSafeInteger(parsed.value.topK) || Number(parsed.value.topK) < 1 || Number(parsed.value.topK) > 8)))
+  ) {
+    return json({ error: "invalid_request" }, 400)
+  }
   const forwarded =
     path === "catalog"
       ? { surface: "cli", ...(parsed.value.appId === undefined ? {} : { appId: parsed.value.appId }) }
-      : {
-          surface: "cli",
-          serverId: parsed.value.serverId,
-          toolName: parsed.value.toolName,
-          runId: parsed.value.runId,
-          arguments: parsed.value.arguments,
-          ...(parsed.value.appId === undefined ? {} : { appId: parsed.value.appId }),
-        }
+      : path === "memory/query"
+        ? {
+            surface: "cli",
+            query: parsed.value.query,
+            ...(parsed.value.topK === undefined ? {} : { topK: parsed.value.topK }),
+            ...(parsed.value.appId === undefined ? {} : { appId: parsed.value.appId }),
+          }
+        : {
+            surface: "cli",
+            serverId: parsed.value.serverId,
+            toolName: parsed.value.toolName,
+            runId: parsed.value.runId,
+            arguments: parsed.value.arguments,
+            ...(parsed.value.appId === undefined ? {} : { appId: parsed.value.appId }),
+          }
   try {
-    const response = await resolveStub(env, auth.principal.scope).fetch(`${DO_BASE}/broker/runtime/${path}`, {
+    const brokerPath = path === "memory/query" ? "/broker/memory/query" : `/broker/runtime/${path}`
+    const response = await resolveStub(env, auth.principal.scope).fetch(`${DO_BASE}${brokerPath}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(forwarded),
@@ -649,6 +667,9 @@ export async function tryHandleOrgMcpRoute(
   }
   if (request.method === "POST" && url.pathname === "/v1/mcp/runtime/invoke") {
     return handleRuntime(request, env, ctx, "invoke")
+  }
+  if (request.method === "POST" && url.pathname === "/v1/mcp/runtime/memory/query") {
+    return handleRuntime(request, env, ctx, "memory/query")
   }
   return null
 }

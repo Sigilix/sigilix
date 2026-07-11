@@ -301,6 +301,20 @@ describe("runCliAgent", () => {
     expect(spawnEnv.OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER).toBe("1");
   });
 
+  it("spawns the CLI with stdin ignored (primary hang fix)", async () => {
+    // Node's default stdio gives the child an open, empty stdin pipe; the CLI
+    // blocks probing stdin at startup, produces no output, and never runs → we
+    // SIGKILL at the timeout → "no-change". stdin MUST be "ignore" (/dev/null →
+    // immediate EOF); stdout/stderr stay piped for streaming + capture.
+    mocks.spawn.mockReturnValue(fakeChild('{"type":"step_finish"}', 0));
+    mocks.execFile.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+
+    await runCliAgent(makeArgs());
+
+    const spawnOpts = mocks.spawn.mock.calls[0]?.[2] as { stdio?: unknown };
+    expect(spawnOpts.stdio).toEqual(["ignore", "pipe", "pipe"]);
+  });
+
   it("streams a diff-pane event for each completed in-repo edit, skipping out-of-repo", async () => {
     const events = { url: "https://api.sigilix.ai/internal/agent-runs/r/events", secret: "s" };
     const edit = (filePath: string) =>

@@ -240,6 +240,39 @@ export function safeActiveGrant(registry: TenantMcpGrantRegistry, grantId: strin
   }
 }
 
+export function grantTransitionStatus(
+  value: unknown,
+  expected: Pick<TenantMcpGrant, "grantId" | "ownerScope" | "serverId">,
+): TenantMcpGrant["status"] | null {
+  if (!isPlainObject(value) || !isPlainObject(value.grant)) return null
+  const grant = value.grant
+  if (
+    grant.grantId !== expected.grantId ||
+    grant.ownerScope !== expected.ownerScope ||
+    grant.serverId !== expected.serverId
+  ) {
+    return null
+  }
+  return grant.status === "pending" ||
+    grant.status === "active" ||
+    grant.status === "failed" ||
+    grant.status === "revoked"
+    ? grant.status
+    : null
+}
+
+export async function purgeMcpServerState(
+  storage: DurableObjectStorage,
+  serverId: string,
+  removeServer: () => Promise<void>,
+): Promise<void> {
+  // Delete capabilities first: a crash or SDK failure can leave a visible but
+  // disabled server row, never an orphaned policy that remains executable.
+  storage.sql.exec("DELETE FROM sigilix_mcp_policies_v2 WHERE server_id = ?", serverId)
+  storage.sql.exec("DELETE FROM sigilix_mcp_runtime_calls_v2 WHERE server_id = ?", serverId)
+  await removeServer()
+}
+
 export function brokerDescriptor(value: unknown, grant: TenantMcpGrant): McpRuntimeToolDescriptor | null {
   if (!isPlainObject(value) || value.serverId !== grant.serverId) return null
   const vendor = typeof value.vendor === "string" ? value.vendor : ""

@@ -1,4 +1,8 @@
-import { McpOAuthCallbackRegistry, type McpOAuthCallbackRoute } from "./oauth-callback-routing"
+import {
+  McpOAuthCallbackRegistry,
+  parsePendingMcpOAuthCallbackRoute,
+  type McpOAuthCallbackRoute,
+} from "./oauth-callback-routing"
 import { json } from "./mcp-connections-support"
 import type { Env } from "@/src/shared/types/env"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
@@ -20,7 +24,9 @@ export class McpOAuthCallbackDoHandler {
     const body = await readObject(request)
     if (body instanceof Response) return body
     if (action === "create") {
-      const route = this.routes.create(body as unknown as McpOAuthCallbackRoute)
+      const candidate = parsePendingMcpOAuthCallbackRoute(body)
+      if (!candidate) return json({ error: "invalid_route" }, 400)
+      const route = this.routes.create(candidate)
       if (!route) return json({ error: "route_conflict" }, 409)
       await this.storage.setAlarm(route.expiresAt)
       return json({ route }, 201)

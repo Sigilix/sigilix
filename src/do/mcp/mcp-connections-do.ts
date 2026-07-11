@@ -30,6 +30,7 @@ import {
   ensureMcpConnectionsSchema,
   failClosedStoredPolicy,
   effectiveBrokerPolicy,
+  grantTransitionStatus,
   isPlainObject,
   isPolicyEnvelope,
   isSessionOwnerScope,
@@ -37,6 +38,7 @@ import {
   json,
   parseConnectGrantContext,
   parseSafeId,
+  purgeMcpServerState,
   readMcpOAuthCompletion,
   redactMcpUrl,
   remoteTool,
@@ -259,7 +261,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
       const detail = err instanceof Error ? err.message : String(err)
       console.error("mcp-connections: registerServer failed", detail)
       this.connectingEndpoints.delete(canonicalUrl)
-      await this.mcp.removeServer(id).catch(() => {})
+      await this.removeServerAndPolicy(id).catch(() => {})
       return connectJson({ status: "error", error: "registration failed" }, 502)
     }
     this.connectingEndpoints.delete(canonicalUrl)
@@ -269,7 +271,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
       result = await this.mcp.connectToServer(id)
     } catch (err) {
       console.error("mcp-connections: connectToServer failed", err instanceof Error ? err.message : err)
-      await this.mcp.removeServer(id).catch(() => {})
+      await this.removeServerAndPolicy(id).catch(() => {})
       return connectJson({ status: "error", error: "connect failed" }, 502)
     }
 
@@ -279,7 +281,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
         // the pending SDK row in the owning DO before returning the rejection,
         // so no credential or server orphan survives the failed flow.
         try {
-          await this.mcp.removeServer(id)
+          await this.removeServerAndPolicy(id)
         } catch (err) {
           console.error("mcp-connections: oauth rejection cleanup failed", err instanceof Error ? err.message : err)
           return connectJson({ status: "error", error: "oauth cleanup failed" }, 502)
@@ -297,7 +299,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
           stableSubject: grantContext.stableSubject,
         })
         if (!route) {
-          await this.mcp.removeServer(id).catch(() => undefined)
+          await this.removeServerAndPolicy(id).catch(() => undefined)
           return connectJson({ status: "error", error: "failed to persist OAuth callback state" }, 502)
         }
       }
@@ -307,7 +309,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
       // `result.error` may carry untrusted content surfaced by the target
       // server — log the detail server-side, return a generic message.
       console.error("mcp-connections: connect failed", result.error)
-      await this.mcp.removeServer(id).catch(() => {})
+      await this.removeServerAndPolicy(id).catch(() => {})
       return connectJson({ status: "error", error: "failed to connect to the server" }, 502)
     }
     // "connected" — discover tools before reporting a count (best-effort; a
@@ -332,8 +334,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     if (!id) return json({ error: "not found" }, 404)
     const exists = this.mcp.listServers().some((row) => row.id === id)
     if (!exists) return json({ error: "not found" }, 404)
-    await this.mcp.removeServer(id)
-    this.deleteStoredPolicy(id)
+    await this.removeServerAndPolicy(id)
     return json({ ok: true })
   }
 
@@ -342,7 +343,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     const stableSubject = request.headers.get("x-sigilix-mcp-stable-subject") ?? ""
     const claimId = request.headers.get("x-sigilix-mcp-claim-id") ?? ""
     if (!ownerScope || !stableSubject || !claimId) {
-      return json({ authSuccess: false, authError: "callback state invalid" })
+      return json({ authSuccess: false, authError: "callback state invalid" }, 400)
     }
     const route = await readMcpOAuthCallbackRoute({
       env: this.env,
@@ -406,7 +407,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
 
   private async finalizeGrantedOAuthFailure(request: Request, route: McpOAuthCallbackRoute): Promise<Response> {
     let credentialPurged = false
-    await this.mcp.removeServer(route.serverId).then(
+    await this.removeServerAndPolicy(route.serverId).then(
       () => {
         credentialPurged = true
       },
@@ -472,7 +473,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
   private async transitionTenantGrant(
     route: McpOAuthCallbackRoute,
     transition: "activate" | "fail",
-  ): Promise<{ outcome: "active"; grant: TenantMcpGrant } | { outcome: "terminal" } | { outcome: "retryable" }> {
+  ): Promise<{ outcome: "active" } | { outcome: "terminal" } | { outcome: "retryable" }> {
     if (!this.env.MCP_CONNECTIONS) return { outcome: "retryable" }
     const stub = this.env.MCP_CONNECTIONS.get(this.env.MCP_CONNECTIONS.idFromName(route.tenantScope))
     const response = await stub.fetch(
@@ -482,13 +483,16 @@ export class McpConnectionsAgent extends DurableObject<Env> {
       },
     )
     if (!response.ok) return response.status === 404 ? { outcome: "terminal" } : { outcome: "retryable" }
-    const body = (await response.json()) as { grant?: TenantMcpGrant }
-    if (!body.grant) return { outcome: "retryable" }
-    if (transition === "activate" && body.grant.status === "active") return { outcome: "active", grant: body.grant }
-    if (transition === "fail" && (body.grant.status === "failed" || body.grant.status === "revoked")) {
+    const status = grantTransitionStatus(await response.json(), route)
+    if (!status) return { outcome: "retryable" }
+    if (transition === "activate" && status === "active") return { outcome: "active" }
+    if (transition === "fail" && (status === "failed" || status === "revoked")) {
       return { outcome: "terminal" }
     }
-    return body.grant.status === "pending" ? { outcome: "retryable" } : { outcome: "terminal" }
+    if (status === "pending") return { outcome: "retryable" }
+    return status === "active" || status === "failed" || status === "revoked"
+      ? { outcome: "terminal" }
+      : { outcome: "retryable" }
   }
 
   private handlePolicyGet(id: string): Response {
@@ -967,21 +971,16 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     )
   }
 
-  private deleteStoredPolicy(serverId: string): void {
-    this.ctx.storage.sql.exec("DELETE FROM sigilix_mcp_policies_v2 WHERE server_id = ?", serverId)
-    this.ctx.storage.sql.exec("DELETE FROM sigilix_mcp_runtime_calls_v2 WHERE server_id = ?", serverId)
+  private async removeServerAndPolicy(serverId: string): Promise<void> {
+    await purgeMcpServerState(this.ctx.storage, serverId, () => this.mcp.removeServer(serverId))
   }
 
   private reserveRuntimeCall(runId: string, serverId: string, surface: McpRuntimeSurface, maximum: number): boolean {
     if (maximum <= 0) return false
     const now = Date.now()
-    // Run ids are short-lived. Opportunistic one-day GC prevents a trusted
-    // internal caller bug from growing this counter table forever.
+    // Opportunistic one-day GC keeps trusted run-id bugs from growing this table forever.
     this.ctx.storage.sql.exec("DELETE FROM sigilix_mcp_runtime_calls_v2 WHERE updated_at < ?", now - 86_400_000)
-    // SQLite-backed DO SQL is synchronous and atomically isolated inside this
-    // object's private database. A conflicting concurrent request therefore
-    // evaluates the WHERE guard against the committed counter and becomes a
-    // no-op once the cap is reached; rowsWritten is the reservation result.
+    // SQLite DO isolation makes rowsWritten the atomic reservation result.
     const cursor = this.ctx.storage.sql.exec(
       `INSERT INTO sigilix_mcp_runtime_calls_v2 (run_id, server_id, surface, call_count, updated_at)
        VALUES (?, ?, ?, 1, ?)

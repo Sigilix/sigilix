@@ -72,9 +72,9 @@ export class McpOAuthCallbackRegistry {
     storage.sql.exec(ROUTE_SCHEMA)
   }
 
-  create(route: McpOAuthCallbackRoute): McpOAuthCallbackRoute | null {
-    if (!validRoute(route, this.now()) || route.status !== "pending" || route.claimId || route.claimExpiresAt)
-      return null
+  create(value: unknown): McpOAuthCallbackRoute | null {
+    const route = parsePendingMcpOAuthCallbackRoute(value, this.now())
+    if (!route) return null
     return this.storage.transactionSync(() => {
       let existing: McpOAuthCallbackRoute | null = null
       try {
@@ -165,7 +165,9 @@ export class McpOAuthCallbackRegistry {
 
   expireDue(): McpOAuthCallbackRoute | null {
     return this.storage.transactionSync(() => {
-      const row = this.storage.sql.exec<RouteRow>(`${ROUTE_SELECT} LIMIT 1`).toArray()[0]
+      const row = this.storage.sql
+        .exec<RouteRow>(`${ROUTE_SELECT} ORDER BY expires_at ASC, created_at ASC, state_hash ASC LIMIT 1`)
+        .toArray()[0]
       if (!row) return null
       const route = mapRow(row)
       const now = this.now()
@@ -303,7 +305,13 @@ export async function readMcpOAuthCallbackRoute(args: {
   if (!stateHash) return null
   const response = await routeRequest(args.env, stateHash, "read", args.ownerScope, args.stableSubject)
   const route = response.ok ? await readRouteResponse(response) : null
-  return route && (!args.expectedStatus || route.status === args.expectedStatus) ? route : null
+  return route &&
+    route.stateHash === stateHash &&
+    route.ownerScope === args.ownerScope &&
+    route.stableSubject === args.stableSubject &&
+    (!args.expectedStatus || route.status === args.expectedStatus)
+    ? route
+    : null
 }
 
 export async function claimMcpOAuthCallbackRoute(args: {
@@ -318,8 +326,13 @@ export async function claimMcpOAuthCallbackRoute(args: {
     claimId: crypto.randomUUID(),
   })
   if (!response.ok) return null
-  const value = (await response.json()) as McpOAuthClaimResult
-  return value && ["claimed", "wait", "terminal"].includes(value.outcome) ? value : null
+  const result = await readClaimResponse(response)
+  return result &&
+    result.route.stateHash === stateHash &&
+    result.route.ownerScope === args.ownerScope &&
+    result.route.stableSubject === args.stableSubject
+    ? result
+    : null
 }
 
 export async function updateMcpOAuthCallbackRoute(args: {
@@ -368,6 +381,38 @@ async function readRouteResponse(response: Response): Promise<McpOAuthCallbackRo
   } catch {
     return null
   }
+}
+
+async function readClaimResponse(response: Response): Promise<McpOAuthClaimResult | null> {
+  try {
+    const value = (await response.json()) as Record<string, unknown>
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return null
+    const route = validRoute(value.route, Date.now(), true) ? value.route : null
+    if (!route) return null
+    if (value.outcome === "claimed" || value.outcome === "wait") {
+      return route.status === "processing" &&
+        route.expiresAt > Date.now() &&
+        route.claimExpiresAt !== null &&
+        route.claimExpiresAt > Date.now()
+        ? { outcome: value.outcome, route }
+        : null
+    }
+    if (value.outcome === "terminal") {
+      return (route.status === "completed" || route.status === "failed") && typeof value.expired === "boolean"
+        ? { outcome: "terminal", route, expired: value.expired }
+        : null
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+export function parsePendingMcpOAuthCallbackRoute(
+  value: unknown,
+  now: number = Date.now(),
+): McpOAuthCallbackRoute | null {
+  return validRoute(value, now) && value.status === "pending" ? value : null
 }
 
 function mapRow(row: RouteRow): McpOAuthCallbackRoute {

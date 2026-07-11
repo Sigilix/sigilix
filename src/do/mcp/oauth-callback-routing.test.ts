@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 import {
+  claimMcpOAuthCallbackRoute,
   hashMcpOAuthState,
   MCP_OAUTH_CALLBACK_CLAIM_TTL_SECONDS,
   MCP_OAUTH_CALLBACK_PENDING_TTL_SECONDS,
@@ -13,6 +14,12 @@ import {
 
 const NOW = 1_800_000_000_000
 const RAW_STATE = "sdk-generated-oauth-state"
+
+async function rawStateHash(): Promise<string> {
+  const value = await hashMcpOAuthState(RAW_STATE)
+  if (!value) throw new Error("fixture state did not hash")
+  return value
+}
 
 function harness() {
   const sql = new NodeSqliteStorage()
@@ -171,5 +178,137 @@ describe("McpOAuthCallbackRegistry", () => {
     expect(registry.expireDue()).toEqual(failed)
     registry.deleteFailed(failed!.stateHash)
     expect(registry.readBound(failed!.stateHash, failed!.ownerScope, failed!.stableSubject)).toBeNull()
+  })
+
+  it("expires the earliest due route when a later route was inserted first", () => {
+    const { registry, setNow } = harness()
+    registry.create(pending({ stateHash: "b".repeat(43) }))
+    registry.create(
+      pending({
+        stateHash: "a".repeat(43),
+        grantId: "grant-2",
+        serverId: "server-2",
+        expiresAt: NOW + 1_000,
+      }),
+    )
+    setNow(NOW + 2_000)
+
+    expect(registry.expireDue()).toMatchObject({
+      stateHash: "a".repeat(43),
+      status: "failed",
+    })
+  })
+})
+
+describe("MCP OAuth callback wire validation", () => {
+  it.each([
+    { outcome: "claimed" },
+    { outcome: "claimed", route: pending() },
+    { outcome: "terminal", route: pending(), expired: false },
+  ])("rejects malformed claim responses %#", async (payload) => {
+    const namespace = {
+      idFromName: () => ({}) as DurableObjectId,
+      get: () =>
+        ({
+          fetch: async () => new Response(JSON.stringify(payload)),
+        }) as unknown as DurableObjectStub,
+    } as unknown as DurableObjectNamespace
+
+    await expect(
+      claimMcpOAuthCallbackRoute({
+        env: { MCP_CONNECTIONS: namespace },
+        callbackUrl: `https://api.sigilix.ai/mcp/oauth/callback?state=${RAW_STATE}`,
+        ownerScope: "session:111",
+        stableSubject: "user-uuid-1",
+      }),
+    ).resolves.toBeNull()
+  })
+
+  it("accepts a fully validated claimed response", async () => {
+    const now = Date.now()
+    const route: McpOAuthCallbackRoute = {
+      ...pending(),
+      stateHash: await rawStateHash(),
+      createdAt: now - 1_000,
+      expiresAt: now + 60_000,
+      status: "processing",
+      claimId: "claim-1",
+      claimExpiresAt: now + 60_000,
+    }
+    const namespace = {
+      idFromName: () => ({}) as DurableObjectId,
+      get: () =>
+        ({
+          fetch: async () => new Response(JSON.stringify({ outcome: "claimed", route })),
+        }) as unknown as DurableObjectStub,
+    } as unknown as DurableObjectNamespace
+
+    await expect(
+      claimMcpOAuthCallbackRoute({
+        env: { MCP_CONNECTIONS: namespace },
+        callbackUrl: `https://api.sigilix.ai/mcp/oauth/callback?state=${RAW_STATE}`,
+        ownerScope: "session:111",
+        stableSubject: "user-uuid-1",
+      }),
+    ).resolves.toEqual({ outcome: "claimed", route })
+  })
+
+  it("rejects a structurally valid claim response rebound to another owner", async () => {
+    const now = Date.now()
+    const route: McpOAuthCallbackRoute = {
+      ...pending(),
+      stateHash: await rawStateHash(),
+      ownerScope: "session:999",
+      createdAt: now - 1_000,
+      expiresAt: now + 60_000,
+      status: "processing",
+      claimId: "claim-1",
+      claimExpiresAt: now + 60_000,
+    }
+    const namespace = {
+      idFromName: () => ({}) as DurableObjectId,
+      get: () =>
+        ({
+          fetch: async () => Response.json({ outcome: "claimed", route }),
+        }) as unknown as DurableObjectStub,
+    } as unknown as DurableObjectNamespace
+
+    await expect(
+      claimMcpOAuthCallbackRoute({
+        env: { MCP_CONNECTIONS: namespace },
+        callbackUrl: `https://api.sigilix.ai/mcp/oauth/callback?state=${RAW_STATE}`,
+        ownerScope: "session:111",
+        stableSubject: "user-uuid-1",
+      }),
+    ).resolves.toBeNull()
+  })
+
+  it("rejects a processing claim whose lease already expired", async () => {
+    const now = Date.now()
+    const route: McpOAuthCallbackRoute = {
+      ...pending(),
+      stateHash: await rawStateHash(),
+      createdAt: now - 60_000,
+      expiresAt: now + 60_000,
+      status: "processing",
+      claimId: "claim-1",
+      claimExpiresAt: now - 1,
+    }
+    const namespace = {
+      idFromName: () => ({}) as DurableObjectId,
+      get: () =>
+        ({
+          fetch: async () => Response.json({ outcome: "claimed", route }),
+        }) as unknown as DurableObjectStub,
+    } as unknown as DurableObjectNamespace
+
+    await expect(
+      claimMcpOAuthCallbackRoute({
+        env: { MCP_CONNECTIONS: namespace },
+        callbackUrl: `https://api.sigilix.ai/mcp/oauth/callback?state=${RAW_STATE}`,
+        ownerScope: "session:111",
+        stableSubject: "user-uuid-1",
+      }),
+    ).resolves.toBeNull()
   })
 })

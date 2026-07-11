@@ -285,6 +285,31 @@ describe("McpConnectionsAgent — POST /connect", () => {
     expect(removeServerSpy).toHaveBeenCalledTimes(1)
   })
 
+  it("failed granted connect also purges the owner policy ceiling", async () => {
+    nextConnectResult = { state: "failed", error: "server unreachable" }
+    const { state, sql } = makeDoState()
+    const instance = new McpConnectionsAgent(state, {} as Env)
+
+    const response = await instance.fetch(
+      connectRequest({
+        serverId: "server-failed-grant",
+        url: "https://mcp.linear.app/mcp",
+        callbackUrl: "https://api.sigilix.ai/mcp/oauth/callback",
+        grant: {
+          grantId: "grant-failed",
+          ownerScope: "session:111",
+          tenantScope: "tenant:42",
+          stableSubject: "111",
+        },
+      }),
+    )
+
+    expect(response.status).toBe(502)
+    expect(
+      sql.exec("SELECT server_id FROM sigilix_mcp_policies_v2 WHERE server_id = ?", "server-failed-grant").toArray(),
+    ).toEqual([])
+  })
+
   it("does not expose SDK or SQLite detail when registration throws", async () => {
     nextRegisterError = new Error("SQLITE_CONSTRAINT at /internal/sdk/storage.ts:42")
     const instance = makeInstance()
@@ -469,7 +494,7 @@ describe("McpConnectionsAgent — GET /oauth-callback", () => {
   it("rejects a callback without a durable granted-route claim", async () => {
     const instance = makeInstance()
     const res = await instance.fetch(new Request("https://mcp-connections.do/oauth-callback?code=abc&state=xyz"))
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(400)
     expect(await res.json()).toEqual({ authSuccess: false, authError: "callback state invalid" })
     expect(handleCallbackSpy).not.toHaveBeenCalled()
   })
@@ -479,6 +504,7 @@ describe("McpConnectionsAgent — GET /oauth-callback", () => {
     const res = await instance.fetch(
       new Request("https://mcp-connections.do/oauth-callback?error=access_denied&state=xyz"),
     )
+    expect(res.status).toBe(400)
     expect(await res.json()).toEqual({ authSuccess: false, authError: "callback state invalid" })
     expect(establishConnectionSpy).not.toHaveBeenCalled()
     expect(removeServerSpy).not.toHaveBeenCalled()
@@ -1223,7 +1249,16 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     let activationAttempts = 0
     vi.spyOn(tenant, "fetch").mockImplementation((request) => {
       if (new URL(request.url).pathname.endsWith("/activate") && activationAttempts++ === 0) {
-        return Promise.resolve(new Response(JSON.stringify({ error: "transient" }), { status: 503 }))
+        return Promise.resolve(
+          Response.json({
+            grant: {
+              grantId: "grant-retry",
+              ownerScope: "session:wrong-owner",
+              serverId: "server-retry",
+              status: "active",
+            },
+          }),
+        )
       }
       return actualTenantFetch(request)
     })
@@ -1448,6 +1483,9 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     )
     expect(await response.json()).toEqual({ authSuccess: false, authError: "callback failed" })
     expect(removeServerSpy).toHaveBeenCalledWith("server-terminal")
+    expect(
+      ownerSql.exec("SELECT server_id FROM sigilix_mcp_policies_v2 WHERE server_id = ?", "server-terminal").toArray(),
+    ).toEqual([])
     expect(handleCallbackSpy).not.toHaveBeenCalled()
     expect(
       await readMcpOAuthCallbackRoute({

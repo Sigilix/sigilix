@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi } from "vitest"
 import { runResearchLoop, type EngineDeps } from "./engine"
 import { resolveResearchConfig } from "./config"
 import type { ResearchModelFn } from "./model"
@@ -74,6 +74,52 @@ function makeDeps(over: Partial<EngineDeps>): { deps: EngineDeps; events: Resear
 const typesOf = (events: ResearchEvent[]): string[] => events.map((e) => e.type)
 const countSearching = (events: ResearchEvent[]): number =>
   events.filter((e) => e.type === "status" && e.phase === "searching").length
+
+describe("explicit app routing", () => {
+  it.each(["app_unavailable", "app_ambiguous"] as const)(
+    "emits a fixed %s final with no model or provider tool call",
+    async (reason) => {
+      const model = vi.fn(makeModel())
+      const catalog = vi.fn(async () => [])
+      const explicitCatalog = vi.fn(async () => ({ kind: "unavailable" as const, reason }))
+      const invoke = vi.fn(async () => null)
+      const { deps, events } = makeDeps({
+        question: "list recent comments",
+        mode: "chat",
+        appId: "linear",
+        model,
+        mcp: { catalog, explicitCatalog, invoke },
+      })
+
+      await runResearchLoop(deps)
+
+      expect(explicitCatalog).toHaveBeenCalledTimes(1)
+      expect(catalog).not.toHaveBeenCalled()
+      expect(model).not.toHaveBeenCalled()
+      expect(invoke).not.toHaveBeenCalled()
+      expect(typesOf(events)).toEqual(["status", "final", "done"])
+      expect(events[1]).toEqual({
+        type: "final",
+        markdown:
+          reason === "app_ambiguous"
+            ? "**Linear is unavailable.** More than one eligible connection is configured. Choose a single connection before trying again."
+            : "**Linear is unavailable.** Connect it and enable it for this surface before trying again.",
+        sources: [],
+      })
+    },
+  )
+
+  it("keeps the registered but dark GitHub app from falling back to an ordinary answer", async () => {
+    const model = vi.fn(makeModel())
+    const { deps, events } = makeDeps({ question: "inspect pull requests", mode: "chat", appId: "github", model })
+
+    await runResearchLoop(deps)
+
+    expect(model).not.toHaveBeenCalled()
+    expect(typesOf(events)).toEqual(["status", "final", "done"])
+    expect(events[1]).toMatchObject({ type: "final", markdown: expect.stringContaining("GitHub is unavailable") })
+  })
+})
 
 describe("happy path", () => {
   it("emits the contract events in order and ends with final then done", async () => {

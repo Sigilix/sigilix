@@ -8,6 +8,7 @@ import {
   type StoredMcpPolicy,
 } from "./runtime-policy"
 import { type TenantMcpGrant, TenantMcpGrantRegistry } from "./tenant-mcp-grant-registry"
+import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 
 const MCP_SERVERS_TABLE_DDL = `
   CREATE TABLE IF NOT EXISTS cf_agents_mcp_servers (
@@ -112,6 +113,20 @@ export const JSON_HEADERS = { "content-type": "application/json" } as const
 export type McpOAuthCompletionStatus = "processing" | "token_stored" | "completed" | "failed"
 
 const MCP_OAUTH_PROCESSING_LEASE_MS = 15 * 60 * 1_000
+
+export async function readRuntimeJsonBody(
+  request: Request,
+  maxBytes: number,
+): Promise<Record<string, unknown> | Response> {
+  const raw = await readBodyCapped(request, maxBytes)
+  if (raw === null) return json({ error: "payload_too_large" }, 413)
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    return isPlainObject(parsed) ? parsed : json({ error: "invalid json" }, 400)
+  } catch {
+    return json({ error: "invalid json" }, 400)
+  }
+}
 
 export function ensureMcpConnectionsSchema(storage: DurableObjectStorage): void {
   storage.sql.exec(MCP_SERVERS_TABLE_DDL)

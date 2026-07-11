@@ -435,6 +435,36 @@ describe("DeepResearchDO — no secret leakage", () => {
 })
 
 describe("DeepResearchDO — validation", () => {
+  it("persists only a registry-valid app selector beside the already-cleaned task", async () => {
+    const { ctx, store } = makeDoState()
+    const model = vi.fn(baseHooks().model!)
+    const instance = new DeepResearchDO(ctx, makeEnv())
+    instance.setTestHooks(baseHooks({ model }))
+
+    const response = await instance.fetch(
+      req("/start", "POST", { question: "list recent comments", appId: "linear", creator: "session:42" }),
+    )
+    await drive(instance)
+
+    expect(response.status).toBe(200)
+    expect(store.get("meta")).toMatchObject({
+      question: "list recent comments",
+      appId: "linear",
+      creator: "session:42",
+    })
+    expect(model).not.toHaveBeenCalled()
+  })
+
+  it("rejects a forged app selector before starting", async () => {
+    const { ctx } = makeDoState()
+    const instance = new DeepResearchDO(ctx, makeEnv())
+
+    const response = await instance.fetch(req("/start", "POST", { question: "list", appId: "linear.evil" }))
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: "invalid_app" })
+  })
+
   it("rejects a start without a question", async () => {
     const { ctx } = makeDoState()
     const instance = new DeepResearchDO(ctx, makeEnv())

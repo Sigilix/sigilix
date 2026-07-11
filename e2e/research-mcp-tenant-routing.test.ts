@@ -147,7 +147,7 @@ describe("portal research to tenant MCP evidence", () => {
           cookie: `${SESSION_COOKIE}=session-e2e`,
         },
         body: JSON.stringify({
-          question: "What are the latest comments in Linear issue SIG-193?",
+          question: "@LiNeAr What are the latest comments in issue SIG-193?",
           mode: "chat",
           installationId: 99,
         }),
@@ -168,7 +168,7 @@ describe("portal research to tenant MCP evidence", () => {
     expect(events.find((event) => event.type === "final")?.markdown).toContain("[MCP: Linear/list_comments]")
     expect(brokerNames).toEqual(["tenant:99"])
     expect(brokerCalls).toEqual([
-      { path: "/broker/runtime/chat/catalog", body: {} },
+      { path: "/broker/runtime/chat/catalog", body: { appId: "linear" } },
       {
         path: "/broker/runtime/chat/invoke",
         body: {
@@ -176,8 +176,74 @@ describe("portal research to tenant MCP evidence", () => {
           serverId: "linear-grant",
           toolName: "list_comments",
           arguments: { issueId: "SIG-193" },
+          appId: "linear",
         },
       },
     ])
+  })
+
+  it.each([
+    ["revoked or policy-disabled", "app_unavailable"],
+    ["ambiguous", "app_ambiguous"],
+  ])("fails a %s explicit app closed before any model or provider tool call", async (_label, error) => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined)
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const kv = makeKv()
+    await createSession({
+      kv,
+      sessionId: "session-e2e",
+      login: "developer",
+      githubUserId: 42,
+      accessToken: "github-user-token",
+      encryptionKeyB64url: ENC_KEY,
+    })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ installations: [{ id: 99 }] }))),
+    )
+    const brokerCalls: Array<{ path: string; body: Record<string, unknown> }> = []
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      MCP_CONNECTIONS: {
+        idFromName: () => ({ name: "tenant:99" }),
+        get: () => ({
+          fetch: async (request: Request) => {
+            brokerCalls.push({ path: new URL(request.url).pathname, body: await request.json() })
+            return Response.json({ error }, { status: 409 })
+          },
+        }),
+      },
+    } as unknown as Env
+    const research = new DeepResearchDO(makeDoState(), env)
+    const model = vi.fn<ResearchModelFn>(async () => ({ text: "must not run", tokens: 1 }))
+    research.setTestHooks({ model })
+    env.DEEP_RESEARCH = {
+      newUniqueId: () => ({ toString: () => "research-e2e-run" }),
+      get: () => ({
+        fetch: (input: RequestInfo | URL, init?: RequestInit) => research.fetch(new Request(input, init)),
+      }),
+    } as unknown as DurableObjectNamespace
+
+    const response = await handleResearchCreate(
+      new Request("https://api.sigilix.ai/v1/research", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: `${SESSION_COOKIE}=session-e2e` },
+        body: JSON.stringify({ question: "@Linear list recent comments", mode: "chat", installationId: 99 }),
+      }),
+      env,
+      { waitUntil: () => undefined, passThroughOnException: () => undefined } as unknown as ExecutionContext,
+    )
+
+    expect(response.status).toBe(200)
+    await (research as unknown as { driveDone: Promise<void> }).driveDone
+    const events = await readSse(
+      await research.fetch(
+        new Request("https://deep-research.do/stream", { headers: { [CREATOR_HEADER]: "session:42" } }),
+      ),
+    )
+    expect(model).not.toHaveBeenCalled()
+    expect(brokerCalls).toEqual([{ path: "/broker/runtime/chat/catalog", body: { appId: "linear" } }])
+    expect(events.find((event) => event.type === "final")?.markdown).toContain("Linear is unavailable")
   })
 })

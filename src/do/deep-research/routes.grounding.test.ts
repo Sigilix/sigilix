@@ -81,6 +81,81 @@ afterEach(() => {
 })
 
 describe("handleResearchCreate — session org repo grounding", () => {
+  it("strips a mixed-case app mention into private routing metadata", async () => {
+    const kv = makeKv()
+    await createSession({
+      kv,
+      sessionId: "session-1",
+      login: "founder",
+      githubUserId: 42,
+      accessToken: "github-user-token",
+      encryptionKeyB64url: ENC_KEY,
+    })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ installations: [{ id: 134811639 }] }))),
+    )
+    let startBody: Record<string, unknown> | null = null
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      DEEP_RESEARCH: deepResearchNamespace((body) => {
+        startBody = body
+      }),
+    } as unknown as Env
+
+    const response = await handleResearchCreate(
+      request({ question: "  @LiNeAr, list recent comments", mode: "chat", installationId: 134811639 }),
+      env,
+      ctx,
+    )
+
+    expect(response.status).toBe(200)
+    expect(startBody).toMatchObject({
+      question: "list recent comments",
+      appId: "linear",
+      mcpTenantScope: "tenant:134811639",
+    })
+  })
+
+  it.each([
+    [
+      "@forged.example list comments",
+      "invalid_app_mention",
+      "@forged.example",
+      "Use a supported @App mention at the start of your request.",
+    ],
+    ["@MadeUp list comments", "unknown_app", "@MadeUp", "That app mention is not supported."],
+    ["@Linear", "missing_app_task", "@Linear", "Add a request after the app mention."],
+  ])("rejects %s before creating a research Durable Object", async (question, error, mention, message) => {
+    const kv = makeKv()
+    await createSession({
+      kv,
+      sessionId: "session-1",
+      login: "founder",
+      githubUserId: 42,
+      accessToken: "github-user-token",
+      encryptionKeyB64url: ENC_KEY,
+    })
+    const githubFetch = vi.fn(async () => new Response("not reached", { status: 500 }))
+    vi.stubGlobal("fetch", githubFetch)
+    let created = false
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      DEEP_RESEARCH: deepResearchNamespace(() => {
+        created = true
+      }),
+    } as unknown as Env
+
+    const response = await handleResearchCreate(request({ question, mode: "chat" }), env, ctx)
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error, message, mention })
+    expect(created).toBe(false)
+    expect(githubFetch).not.toHaveBeenCalled()
+  })
+
   it("resolves the configured indexed org repo from the session's exact GitHub installation scope", async () => {
     const kv = makeKv({
       "repo-index-manifest:sigilix/.github": "{}",

@@ -1445,20 +1445,20 @@ export interface Env {
   //                                    agent-runner on a SAFE minimal engine when an
   //                                    issue is assigned to the Sigilix agent user.
   //                                    Fail-closed to "off".
-  //   OPENCLAW_LINEAR_AGENT_USER_ID  — (SIG-545 B3) the Linear user id of the Sigilix
-  //                                    agent. An Issue.update assigning THIS user is
-  //                                    the trigger; unset → trigger inert.
+  //   OPENCLAW_LINEAR_AGENT_USER_ID  — (SIG-545 B3) the Linear user id of the Sigilix agent.
+  //                                    An Issue.update assigning THIS user is the trigger; unset → inert.
   AGENT_RUNNER: DurableObjectNamespace
+  AGENT_MCP_CAPABILITY: DurableObjectNamespace
   OPENCLAW_AGENT_RUNNER_MODE?: string
   OPENCLAW_PORTAL_AGENT_RUNNER_MODE?: string
   OPENCLAW_AGENT_RUNNER_ENGINE?: string
   OPENCLAW_PORTAL_FULL_ENGINE_MODE?: string
   OPENCLAW_AGENT_GROUNDING_ENDPOINT?: string
-  //   SIGILIX_AGENT_EVENTS_ENDPOINT  — Worker's OWN public base (e.g. https://api.sigilix.ai);
-  //     the runner container POSTs live file-edit events to {base}/internal/agent-runs/:runId/events
-  //     (per-run secret from the packet). Unset → no live streaming (finished-diff fallback).
+  // SIGILIX_AGENT_EVENTS_ENDPOINT — Worker base for per-run-secret live file-edit events; unset → no streaming.
   SIGILIX_AGENT_EVENTS_ENDPOINT?: string
   OPENCLAW_AGENT_EVENTS_ENDPOINT?: string
+  SIGILIX_AGENT_MCP_ENDPOINT?: string
+  OPENCLAW_AGENT_MCP_ENDPOINT?: string
   OPENCLAW_LINEAR_AGENT_RUN_MODE?: string
   OPENCLAW_LINEAR_AGENT_USER_ID?: string
   // Install hardening: when SET, the actor=app OAuth callback only accepts installs

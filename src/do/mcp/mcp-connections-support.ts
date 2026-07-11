@@ -67,14 +67,14 @@ export interface McpRuntimeToolDescriptor {
 }
 
 export interface ResearchBrokerRuntimeRoute {
-  surface: "chat" | "deep-research" | "pr-review"
+  surface: "chat" | "deep-research" | "pr-review" | "agent"
   action: "catalog" | "invoke"
 }
 
 /** Dedicated DO-internal routes bind non-CLI surfaces in the URL so public
  * callers cannot choose a more privileged runtime surface in JSON. */
 export function parseResearchBrokerRuntimePath(pathname: string): ResearchBrokerRuntimeRoute | null {
-  const match = /^\/broker\/runtime\/(chat|deep-research|pr-review)\/(catalog|invoke)$/.exec(pathname)
+  const match = /^\/broker\/runtime\/(chat|deep-research|pr-review|agent)\/(catalog|invoke)$/.exec(pathname)
   if (!match?.[1] || !match[2]) return null
   return {
     surface: match[1] as ResearchBrokerRuntimeRoute["surface"],

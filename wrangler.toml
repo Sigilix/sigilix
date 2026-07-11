@@ -327,6 +327,12 @@ class_name = "McpConnectionsAgent"
 name = "AGENT_RUNNER"
 class_name = "AgentRunnerContainer"
 
+# SIG-566: one globally-consistent, short-lived MCP capability object per
+# agent run. Stores only the bearer digest + exact tenant/tool binding.
+[[durable_objects.bindings]]
+name = "AGENT_MCP_CAPABILITY"
+class_name = "AgentMcpCapabilityDO"
+
 # SIG-545 B1: Cloudflare Container binding for AgentRunnerContainer.
 # instance_type "standard-1" = ½ vCPU, 4 GiB RAM, 8 GB disk (upgradeable
 # to standard-2 for heavy repos). max_instances kept low for the dark rollout;
@@ -448,6 +454,12 @@ new_sqlite_classes = ["DeepResearchDO"]
 [[migrations]]
 tag = "sig-mcp-connections-p1-v1"
 new_sqlite_classes = ["McpConnectionsAgent"]
+
+# SIG-566: AgentMcpCapabilityDO — SQLite-backed per-run capability state with
+# expiry alarms and terminal revocation. Forward-only.
+[[migrations]]
+tag = "sig-566-agent-mcp-capability-v1"
+new_sqlite_classes = ["AgentMcpCapabilityDO"]
 
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):
@@ -1386,6 +1398,11 @@ SIGILIX_PORTAL_AGENT_RUNNER_MODE = "on"
 # (the portal diff pane falls back to the finished PR diff). Revertible: remove
 # this line to instantly turn streaming off.
 SIGILIX_AGENT_EVENTS_ENDPOINT = "https://api.sigilix.ai"
+
+# SIG-566: the Worker's own public base. The container receives only a
+# short-lived opaque capability for this machine MCP endpoint; provider OAuth
+# credentials remain in the Worker-owned vault.
+SIGILIX_AGENT_MCP_ENDPOINT = "https://api.sigilix.ai"
 
 # Consumer binding — DEFERRED out of wrangler.toml because Cloudflare's
 # Queue API rejects re-registering a consumer that's already bound to

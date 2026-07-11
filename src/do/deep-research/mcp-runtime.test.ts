@@ -142,6 +142,82 @@ describe("research MCP runtime binding", () => {
     })
   })
 
+  it("queries memory in the exact tenant and rejects forged provenance", async () => {
+    let queryBody: unknown
+    const { env } = makeEnv(async (request) => {
+      queryBody = await request.json()
+      return json({
+        results: [
+          {
+            installationId: 99,
+            grantId: "linear-1",
+            provider: "linear",
+            toolName: "list_comments",
+            inputHash: "a".repeat(64),
+            sourceAt: "2099-07-10T00:00:00.000Z",
+            expiresAt: "2099-07-11T00:00:00.000Z",
+            content: "SIG-558 needs a revoke purge.",
+            score: 0.75,
+          },
+          {
+            installationId: 100,
+            grantId: "linear-2",
+            provider: "linear",
+            toolName: "list_comments",
+            inputHash: "b".repeat(64),
+            sourceAt: "2099-07-10T00:00:00.000Z",
+            expiresAt: "2099-07-11T00:00:00.000Z",
+            content: "another tenant",
+            score: 1,
+          },
+          {
+            installationId: 99,
+            grantId: "sentry-1",
+            provider: "sentry",
+            toolName: "search_issues",
+            inputHash: "c".repeat(64),
+            sourceAt: "2099-07-10T00:00:00.000Z",
+            expiresAt: "2099-07-11T00:00:00.000Z",
+            content: "wrong explicit app",
+            score: 0.5,
+          },
+          {
+            installationId: 99,
+            grantId: "linear-expired",
+            provider: "linear",
+            toolName: "list_comments",
+            inputHash: "d".repeat(64),
+            sourceAt: "2020-07-10T00:00:00.000Z",
+            expiresAt: "2020-07-11T00:00:00.000Z",
+            content: "expired evidence",
+            score: 0.4,
+          },
+        ],
+      })
+    })
+    const runtime = buildResearchMcpRuntime(env, "tenant:99", "run-memory", "deep-research", "linear")!
+
+    await expect(runtime.queryMemory("  what changed?  ", 2)).resolves.toEqual([
+      {
+        installationId: 99,
+        grantId: "linear-1",
+        provider: "linear",
+        toolName: "list_comments",
+        inputHash: "a".repeat(64),
+        sourceAt: "2099-07-10T00:00:00.000Z",
+        expiresAt: "2099-07-11T00:00:00.000Z",
+        content: "SIG-558 needs a revoke purge.",
+        score: 0.75,
+      },
+    ])
+    expect(queryBody).toEqual({
+      surface: "deep-research",
+      query: "what changed?",
+      topK: 2,
+      appId: "linear",
+    })
+  })
+
   it("fails soft when the internal MCP hop rejects or returns a non-success status", async () => {
     const rejected = makeEnv(() => {
       throw new Error("DO unavailable")

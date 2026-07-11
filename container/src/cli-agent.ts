@@ -329,7 +329,16 @@ function spawnCli(
 
     // detached → the child leads its own process group, so we can SIGKILL the
     // WHOLE group on timeout and not orphan opencode-spawned subprocesses.
-    const child = spawn(bin, cliArgs, { cwd: opts.cwd, env: opts.env, detached: true });
+    //
+    // ⚠️ stdio: stdin MUST be "ignore" (/dev/null). Node's default gives the child
+    // an OPEN, EMPTY stdin pipe; the CLI probes stdin at startup and BLOCKS on it
+    // forever → it produces ZERO output and never runs the task → we SIGKILL at the
+    // timeout → "no-change". (This is the primary runner hang; it's invisible when
+    // you run the CLI from a shell because a shell gives it a tty/closed stdin that
+    // EOFs immediately.) stdout/stderr stay piped so we can stream + capture them.
+    // The file-watcher disable in buildCliEnv is the second half — it lets the
+    // process EXIT after the run completes (so `close` fires instead of hanging).
+    const child = spawn(bin, cliArgs, { cwd: opts.cwd, env: opts.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     const killGroup = (): void => {
       try {
         if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");

@@ -17,7 +17,7 @@ describe("single-pass MCP evidence selection", () => {
   it("returns before model selection when the governed catalog is empty", async () => {
     const model = vi.fn<ResearchModelFn>()
     const invoke = vi.fn()
-    const runtime: ResearchMcpRuntime = { catalog: async () => [], invoke }
+    const runtime: ResearchMcpRuntime = { catalog: async () => [], queryMemory: async () => [], invoke }
 
     await expect(selectMcpEvidence({ question: "q", model, runtime })).resolves.toBeNull()
     expect(model).not.toHaveBeenCalled()
@@ -37,7 +37,7 @@ describe("single-pass MCP evidence selection", () => {
       content: [{ type: "text" as const, text: `result:${toolName}` }],
       truncated: false,
     }))
-    const runtime: ResearchMcpRuntime = { catalog: async () => catalog, invoke }
+    const runtime: ResearchMcpRuntime = { catalog: async () => catalog, queryMemory: async () => [], invoke }
     const model: ResearchModelFn = async (_role, _messages, tools) => {
       expect(tools?.map((entry) => entry.function.name)).toEqual([
         "sigilix_mcp_0",
@@ -70,7 +70,11 @@ describe("single-pass MCP evidence selection", () => {
 
   it("rejects malformed arguments and fails soft when selection fails", async () => {
     const invoke = vi.fn()
-    const runtime: ResearchMcpRuntime = { catalog: async () => [tool("s1", "list_comments")], invoke }
+    const runtime: ResearchMcpRuntime = {
+      catalog: async () => [tool("s1", "list_comments")],
+      queryMemory: async () => [],
+      invoke,
+    }
     const malformed: ResearchModelFn = async () => ({
       text: "",
       tokens: 1,
@@ -84,6 +88,58 @@ describe("single-pass MCP evidence selection", () => {
     }
     expect(await selectMcpEvidence({ question: "q", model: failing, runtime })).toBeNull()
     expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it("keeps governed memory evidence when the live provider fails", async () => {
+    const runtime: ResearchMcpRuntime = {
+      catalog: async () => [tool("s1", "list_comments")],
+      queryMemory: async () => [
+        {
+          installationId: 42,
+          grantId: "linear-grant",
+          provider: "linear",
+          toolName: "list_comments",
+          inputHash: "a".repeat(64),
+          sourceAt: "2026-07-10T00:00:00.000Z",
+          expiresAt: "2026-07-11T00:00:00.000Z",
+          content: "The ticket is blocked on the migration.",
+          score: 0.8,
+        },
+      ],
+      invoke: async () => null,
+    }
+    const model: ResearchModelFn = async () => ({
+      text: "",
+      tokens: 3,
+      toolCalls: [{ function: { name: "sigilix_mcp_0", arguments: { issueId: "SIG-558" } } }],
+    })
+
+    const evidence = await selectMcpEvidence({ question: "what blocks SIG-558?", model, runtime })
+
+    expect(evidence).toEqual({
+      tokens: 3,
+      items: [
+        {
+          vendor: "linear",
+          toolName: "list_comments",
+          text: "The ticket is blocked on the migration.",
+          truncated: false,
+          source: "memory",
+          installationId: 42,
+          grantId: "linear-grant",
+          inputHash: "a".repeat(64),
+          sourceAt: "2026-07-10T00:00:00.000Z",
+          expiresAt: "2026-07-11T00:00:00.000Z",
+          score: 0.8,
+        },
+      ],
+    })
+    const prompt = withMcpEvidence({ system: "Answer accurately.", user: "What blocks it?" }, evidence)
+    expect(prompt.user).toContain('"source":"memory-index"')
+    expect(prompt.user).toContain('"installationId":42')
+    expect(prompt.user).toContain('"grantId":"linear-grant"')
+    expect(prompt.user).toContain(`"inputHash":"${"a".repeat(64)}"`)
+    expect(prompt.user).toContain('quoted_text="The ticket is blocked on the migration."')
   })
 
   it("quotes tool output as untrusted data with visible provenance", () => {

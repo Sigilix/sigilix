@@ -82,13 +82,14 @@ describe("explicit app routing", () => {
       const model = vi.fn(makeModel())
       const catalog = vi.fn(async () => [])
       const explicitCatalog = vi.fn(async () => ({ kind: "unavailable" as const, reason }))
+      const queryMemory = vi.fn(async () => [])
       const invoke = vi.fn(async () => null)
       const { deps, events } = makeDeps({
         question: "list recent comments",
         mode: "chat",
         appId: "linear",
         model,
-        mcp: { catalog, explicitCatalog, invoke },
+        mcp: { catalog, explicitCatalog, queryMemory, invoke },
       })
 
       await runResearchLoop(deps)

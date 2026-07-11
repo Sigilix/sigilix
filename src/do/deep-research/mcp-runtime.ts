@@ -1,4 +1,5 @@
 import { sanitizeMcpInputSchema, sanitizeMcpResult, type SanitizedMcpResult } from "@/src/do/mcp/runtime-data"
+import { MCP_MEMORY_MAX_CONTENT_CHARS } from "@/src/do/mcp/mcp-memory-index"
 import { curatedReadToolForVendor } from "@/src/do/mcp/runtime-policy"
 import { isTenantRuntimeScope } from "@/src/lib/runtime-principal"
 import {
@@ -30,11 +31,24 @@ export interface ResearchMcpTool {
 export interface ResearchMcpRuntime {
   catalog(): Promise<ResearchMcpTool[]>
   explicitCatalog?: () => Promise<ResearchExplicitAppCatalog>
+  queryMemory(query: string, topK?: number): Promise<ResearchMcpMemoryEvidence[]>
   invoke(args: {
     serverId: string
     toolName: string
     arguments: Record<string, unknown>
   }): Promise<SanitizedMcpResult | null>
+}
+
+export interface ResearchMcpMemoryEvidence {
+  installationId: number
+  grantId: string
+  provider: string
+  toolName: string
+  inputHash: string
+  sourceAt: string
+  expiresAt: string
+  content: string
+  score: number
 }
 
 export type ResearchExplicitAppCatalog =
@@ -62,10 +76,12 @@ export function buildResearchMcpRuntime(
     return undefined
   }
   const selectedApp = appId ? resolveRuntimeApp(appId) : null
+  const installationId = Number(tenantScope.slice("tenant:".length))
   if (appId && !selectedApp?.executable) {
     return {
       catalog: async () => [],
       explicitCatalog: async () => ({ kind: "unavailable", reason: "app_unavailable" }),
+      queryMemory: async () => [],
       invoke: async () => null,
     }
   }
@@ -104,6 +120,25 @@ export function buildResearchMcpRuntime(
   return {
     catalog: loadCatalog,
 
+    async queryMemory(query, topK = 4) {
+      const trimmed = query.trim()
+      if (!trimmed || trimmed.length > 4_000 || !Number.isSafeInteger(topK) || topK < 1 || topK > 8) return []
+      const response = await postJson(stub, "/broker/memory/query", {
+        surface,
+        query: trimmed,
+        topK,
+        ...(appId ? { appId } : {}),
+      })
+      if (!response?.ok || !isPlainObject(response.value) || !Array.isArray(response.value.results)) return []
+      const evidence: ResearchMcpMemoryEvidence[] = []
+      for (const candidate of response.value.results) {
+        if (evidence.length >= topK) break
+        const parsed = parseMemoryEvidence(candidate, installationId, appId)
+        if (parsed) evidence.push(parsed)
+      }
+      return evidence
+    },
+
     ...(appId
       ? {
           async explicitCatalog(): Promise<ResearchExplicitAppCatalog> {
@@ -132,6 +167,54 @@ export function buildResearchMcpRuntime(
       if (!response?.ok || !isPlainObject(response.value)) return null
       return sanitizeMcpResult(response.value.result)
     },
+  }
+}
+
+function parseMemoryEvidence(
+  value: unknown,
+  installationId: number,
+  appId?: RuntimeAppId,
+): ResearchMcpMemoryEvidence | null {
+  if (!isPlainObject(value)) return null
+  const grantId = typeof value.grantId === "string" ? value.grantId : ""
+  const provider = typeof value.provider === "string" ? value.provider : ""
+  const toolName = typeof value.toolName === "string" ? value.toolName : ""
+  const inputHash = typeof value.inputHash === "string" ? value.inputHash : ""
+  const sourceAt = typeof value.sourceAt === "string" ? value.sourceAt : ""
+  const expiresAt = typeof value.expiresAt === "string" ? value.expiresAt : ""
+  const content = typeof value.content === "string" ? value.content : ""
+  const score = typeof value.score === "number" ? value.score : Number.NaN
+  const sourceTime = Date.parse(sourceAt)
+  const expiryTime = Date.parse(expiresAt)
+  if (
+    value.installationId !== installationId ||
+    !safeIdentifier(grantId) ||
+    !safeIdentifier(provider) ||
+    !safeIdentifier(toolName) ||
+    !/^[a-f0-9]{64}$/.test(inputHash) ||
+    !Number.isFinite(sourceTime) ||
+    !Number.isFinite(expiryTime) ||
+    expiryTime <= sourceTime ||
+    expiryTime <= Date.now() ||
+    !content.trim() ||
+    content.length > MCP_MEMORY_MAX_CONTENT_CHARS ||
+    !Number.isFinite(score) ||
+    score < -1 ||
+    score > 1 ||
+    (appId !== undefined && !isToolCompatibleWithRuntimeApp(appId, provider, toolName))
+  ) {
+    return null
+  }
+  return {
+    installationId,
+    grantId,
+    provider,
+    toolName,
+    inputHash,
+    sourceAt: new Date(sourceTime).toISOString(),
+    expiresAt: new Date(expiryTime).toISOString(),
+    content,
+    score,
   }
 }
 

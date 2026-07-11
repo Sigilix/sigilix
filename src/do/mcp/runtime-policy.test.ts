@@ -6,6 +6,7 @@ import {
   effectiveMcpPolicy,
   isMcpRuntimeSurface,
   isMcpSurface,
+  mcpMemoryIndexEnabled,
   mcpSurfaceEnabled,
   narrowMcpPolicy,
   vendorPolicyForUrl,
@@ -28,6 +29,11 @@ const RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF = {
   "pr-review": true,
   agent: true,
   "memory-index": false,
+} as const
+
+const ALL_SURFACES_ON = {
+  ...RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF,
+  "memory-index": true,
 } as const
 
 const VERIFIED_VENDOR_CASES = [
@@ -241,8 +247,8 @@ describe("MCP server-owned runtime policy", () => {
     "keeps the verified $vendor catalog dark until an explicit policy update",
     ({ vendor, url, tools }) => {
       expect(vendorPolicyForUrl(url)).toMatchObject({ vendor })
-      expect(vendorPolicyForUrl(url)?.surfaces).toEqual(RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF)
-      expect(vendorPolicyForUrl(url)?.surfaces["memory-index"]).toBe(false)
+      expect(vendorPolicyForUrl(url)?.surfaces).toEqual(ALL_SURFACES_ON)
+      expect(vendorPolicyForUrl(url)?.surfaces["memory-index"]).toBe(true)
       expect(vendorPolicyForUrl(url)?.readTools.map((tool) => tool.name)).toEqual(tools)
       expect(effectiveMcpPolicy(url)).toEqual({
         vendor,
@@ -373,14 +379,20 @@ describe("MCP server-owned runtime policy", () => {
     for (const surface of MCP_SURFACES) expect(mcpSurfaceEnabled(policy, surface)).toBe(false)
   })
 
-  it("defensively keeps memory indexing off for a forged effective policy", () => {
-    const forgedPolicy = {
-      ...effectiveMcpPolicy("https://mcp.linear.app/mcp"),
+  it("keeps memory non-invokable while exposing a separate, explicit index-policy check", () => {
+    const narrowed = narrowMcpPolicy("https://mcp.linear.app/mcp", {
+      version: 0,
       enabled: true,
-      surfaces: { ...RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF, "memory-index": true },
-    } as unknown as ReturnType<typeof effectiveMcpPolicy>
+      surfaces: ALL_SURFACES_ON,
+      allowedReadTools: ["list_comments"],
+      maxCallsPerRun: 1,
+    })
+    if (!narrowed.ok) throw new Error(narrowed.error)
+    const effective = effectiveMcpPolicy("https://mcp.linear.app/mcp", narrowed.policy)
 
-    expect(mcpSurfaceEnabled(forgedPolicy, "memory-index")).toBe(false)
+    expect(mcpSurfaceEnabled(effective, "memory-index")).toBe(false)
+    expect(mcpMemoryIndexEnabled(effective)).toBe(true)
+    expect(mcpMemoryIndexEnabled({ ...effective, allowedReadTools: [] })).toBe(false)
   })
 
   it("allows each runtime surface to be independently disabled", () => {
@@ -404,16 +416,25 @@ describe("MCP server-owned runtime policy", () => {
     }
   })
 
-  it("rejects enabling memory indexing until a real indexer exists", () => {
+  it("accepts installation-admin memory indexing as an explicit non-runtime surface", () => {
     expect(
       narrowMcpPolicy("https://mcp.linear.app/mcp", {
         version: 0,
         enabled: true,
-        surfaces: { ...RUNTIME_SURFACES_ON_MEMORY_INDEX_OFF, "memory-index": true },
-        allowedReadTools: [],
+        surfaces: ALL_SURFACES_ON,
+        allowedReadTools: ["list_comments"],
         maxCallsPerRun: 1,
       }),
-    ).toEqual({ ok: false, error: "unsupported_surface" })
+    ).toEqual({
+      ok: true,
+      policy: {
+        version: 1,
+        enabled: true,
+        surfaces: ALL_SURFACES_ON,
+        allowedReadTools: ["list_comments"],
+        maxCallsPerRun: 1,
+      },
+    })
   })
 
   it.each(MCP_SURFACES)("requires the explicit %s surface field", (missingSurface) => {

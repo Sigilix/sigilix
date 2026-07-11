@@ -170,6 +170,15 @@ describe("portal research to tenant MCP evidence", () => {
     expect(brokerCalls).toEqual([
       { path: "/broker/runtime/chat/catalog", body: { appId: "linear" } },
       {
+        path: "/broker/memory/query",
+        body: {
+          surface: "chat",
+          query: "What are the latest comments in issue SIG-193?",
+          topK: 4,
+          appId: "linear",
+        },
+      },
+      {
         path: "/broker/runtime/chat/invoke",
         body: {
           runId: "research-e2e-run",

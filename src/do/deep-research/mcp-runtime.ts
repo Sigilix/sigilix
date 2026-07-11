@@ -1,6 +1,11 @@
 import { sanitizeMcpInputSchema, sanitizeMcpResult, type SanitizedMcpResult } from "@/src/do/mcp/runtime-data"
 import { curatedReadToolForVendor } from "@/src/do/mcp/runtime-policy"
 import { isTenantRuntimeScope } from "@/src/lib/runtime-principal"
+import {
+  isToolCompatibleWithRuntimeApp,
+  resolveRuntimeApp,
+  type RuntimeAppId,
+} from "@/src/shared/domain/runtime-app-registry"
 import type { Env } from "@/src/shared/types/env"
 
 // Every schema is independently capped at 12 KiB by sanitizeMcpInputSchema;
@@ -24,12 +29,17 @@ export interface ResearchMcpTool {
 
 export interface ResearchMcpRuntime {
   catalog(): Promise<ResearchMcpTool[]>
+  explicitCatalog?: () => Promise<ResearchExplicitAppCatalog>
   invoke(args: {
     serverId: string
     toolName: string
     arguments: Record<string, unknown>
   }): Promise<SanitizedMcpResult | null>
 }
+
+export type ResearchExplicitAppCatalog =
+  | { kind: "ready"; tools: ResearchMcpTool[] }
+  | { kind: "unavailable"; reason: "app_unavailable" | "app_ambiguous" }
 
 /**
  * Bind research execution to the exact installation-owned MCP broker. A
@@ -41,6 +51,7 @@ export function buildResearchMcpRuntime(
   tenantScope: string,
   runId: string,
   surface: "chat" | "deep-research",
+  appId?: RuntimeAppId,
 ): ResearchMcpRuntime | undefined {
   if (
     !isTenantRuntimeScope(tenantScope) ||
@@ -50,45 +61,115 @@ export function buildResearchMcpRuntime(
   ) {
     return undefined
   }
+  const selectedApp = appId ? resolveRuntimeApp(appId) : null
+  if (appId && !selectedApp?.executable) {
+    return {
+      catalog: async () => [],
+      explicitCatalog: async () => ({ kind: "unavailable", reason: "app_unavailable" }),
+      invoke: async () => null,
+    }
+  }
   const stub = env.MCP_CONNECTIONS.get(env.MCP_CONNECTIONS.idFromName(tenantScope))
   const basePath = `/broker/runtime/${surface}`
 
-  return {
-    async catalog() {
-      const value = await postJson(stub, `${basePath}/catalog`, {})
-      if (!isPlainObject(value) || !Array.isArray(value.tools)) return []
-      const tools: ResearchMcpTool[] = []
-      const seen = new Set<string>()
-      for (const candidate of value.tools) {
-        if (tools.length >= MAX_CATALOG_TOOLS) break
-        if (!isPlainObject(candidate)) continue
-        const serverId = typeof candidate.serverId === "string" ? candidate.serverId : ""
-        const vendor = typeof candidate.vendor === "string" ? candidate.vendor : ""
-        const name = typeof candidate.name === "string" ? candidate.name : ""
-        const curated = curatedReadToolForVendor(vendor, name)
-        const inputSchema = sanitizeMcpInputSchema(candidate.inputSchema)
-        const key = `${serverId}\u0000${name}`
-        if (!safeIdentifier(serverId) || !curated || !inputSchema || seen.has(key)) continue
-        seen.add(key)
-        tools.push({ serverId, vendor, name, description: curated.description, inputSchema })
+  async function loadCatalog(): Promise<ResearchMcpTool[]> {
+    const response = await postJson(stub, `${basePath}/catalog`, appId ? { appId } : {})
+    if (!response?.ok || !isPlainObject(response.value) || !Array.isArray(response.value.tools)) return []
+    const tools: ResearchMcpTool[] = []
+    const seen = new Set<string>()
+    for (const candidate of response.value.tools) {
+      if (tools.length >= MAX_CATALOG_TOOLS) break
+      if (!isPlainObject(candidate)) continue
+      const serverId = typeof candidate.serverId === "string" ? candidate.serverId : ""
+      const vendor = typeof candidate.vendor === "string" ? candidate.vendor : ""
+      const name = typeof candidate.name === "string" ? candidate.name : ""
+      const curated = curatedReadToolForVendor(vendor, name)
+      const inputSchema = sanitizeMcpInputSchema(candidate.inputSchema)
+      const key = `${serverId}\u0000${name}`
+      if (
+        !safeIdentifier(serverId) ||
+        !curated ||
+        !inputSchema ||
+        seen.has(key) ||
+        (appId !== undefined && !isToolCompatibleWithRuntimeApp(appId, vendor, name))
+      ) {
+        continue
       }
-      return tools
-    },
+      seen.add(key)
+      tools.push({ serverId, vendor, name, description: curated.description, inputSchema })
+    }
+    return tools
+  }
+
+  return {
+    catalog: loadCatalog,
+
+    ...(appId
+      ? {
+          async explicitCatalog(): Promise<ResearchExplicitAppCatalog> {
+            const response = await postJson(stub, `${basePath}/catalog`, { appId })
+            if (!response?.ok) {
+              const error = isPlainObject(response?.value) ? response.value.error : undefined
+              return {
+                kind: "unavailable",
+                reason: error === "app_ambiguous" ? "app_ambiguous" : "app_unavailable",
+              }
+            }
+            const tools = await loadCatalogFromValue(response.value, appId)
+            return tools.length > 0 ? { kind: "ready", tools } : { kind: "unavailable", reason: "app_unavailable" }
+          },
+        }
+      : {}),
 
     async invoke(args) {
-      const value = await postJson(stub, `${basePath}/invoke`, {
+      const response = await postJson(stub, `${basePath}/invoke`, {
         runId,
         serverId: args.serverId,
         toolName: args.toolName,
         arguments: args.arguments,
+        ...(appId ? { appId } : {}),
       })
-      if (!isPlainObject(value)) return null
-      return sanitizeMcpResult(value.result)
+      if (!response?.ok || !isPlainObject(response.value)) return null
+      return sanitizeMcpResult(response.value.result)
     },
   }
 }
 
-async function postJson(stub: DurableObjectStub, path: string, body: unknown): Promise<unknown> {
+async function loadCatalogFromValue(value: unknown, appId: RuntimeAppId): Promise<ResearchMcpTool[]> {
+  if (!isPlainObject(value) || !Array.isArray(value.tools)) return []
+  const tools: ResearchMcpTool[] = []
+  const seen = new Set<string>()
+  for (const candidate of value.tools) {
+    if (tools.length >= MAX_CATALOG_TOOLS) break
+    if (!isPlainObject(candidate)) continue
+    const serverId = typeof candidate.serverId === "string" ? candidate.serverId : ""
+    const vendor = typeof candidate.vendor === "string" ? candidate.vendor : ""
+    const name = typeof candidate.name === "string" ? candidate.name : ""
+    const curated = curatedReadToolForVendor(vendor, name)
+    const inputSchema = sanitizeMcpInputSchema(candidate.inputSchema)
+    const key = `${serverId}\u0000${name}`
+    if (
+      !safeIdentifier(serverId) ||
+      !curated ||
+      !inputSchema ||
+      seen.has(key) ||
+      !isToolCompatibleWithRuntimeApp(appId, vendor, name)
+    ) {
+      continue
+    }
+    seen.add(key)
+    tools.push({ serverId, vendor, name, description: curated.description, inputSchema })
+  }
+  return tools
+}
+
+interface InternalMcpResponse {
+  ok: boolean
+  status: number
+  value: unknown
+}
+
+async function postJson(stub: DurableObjectStub, path: string, body: unknown): Promise<InternalMcpResponse | null> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), INTERNAL_MCP_TIMEOUT_MS)
   const startedAt = Date.now()
@@ -111,7 +192,6 @@ async function postJson(stub: DurableObjectStub, path: string, body: unknown): P
     )
     const response = await raceAbort(fetchOperation, controller.signal)
     if (!response.ok) {
-      void response.body?.cancel().catch(() => undefined)
       console.warn(
         JSON.stringify({
           event: "research-mcp-runtime-rejected",
@@ -120,11 +200,10 @@ async function postJson(stub: DurableObjectStub, path: string, body: unknown): P
           durationMs: Date.now() - startedAt,
         }),
       )
-      return null
     }
     const text = await readResponseCapped(response, MAX_INTERNAL_RESPONSE_BYTES, controller.signal)
     if (text === null) return null
-    return JSON.parse(text) as unknown
+    return { ok: response.ok, status: response.status, value: JSON.parse(text) as unknown }
   } catch (err) {
     console.warn(
       JSON.stringify({

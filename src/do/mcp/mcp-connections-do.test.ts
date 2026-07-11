@@ -899,6 +899,374 @@ describe("McpConnectionsAgent — tenant grant broker end to end", () => {
     )
   }
 
+  async function enableCliGrant(args: {
+    owner: InstanceType<typeof McpConnectionsAgent>
+    tenant: InstanceType<typeof McpConnectionsAgent>
+    ownerScope: string
+    serverId: string
+    grantId: string
+    url: string
+    tools: string[]
+  }): Promise<void> {
+    await args.owner.fetch(connectRequest({ serverId: args.serverId, url: args.url, callbackUrl: "https://cb" }))
+    await args.owner.fetch(
+      policyRequest(args.serverId, "PUT", {
+        version: 0,
+        enabled: true,
+        surfaces: { ...ALL_SURFACES_OFF, cli: true },
+        allowedReadTools: args.tools,
+        maxCallsPerRun: 2,
+      }),
+    )
+    await post(args.tenant, "/grants", {
+      grantId: args.grantId,
+      ownerScope: args.ownerScope,
+      serverId: args.serverId,
+      creatorSubject: args.ownerScope.replace("session:", "github:"),
+      serverUrl: args.url,
+    })
+    await post(args.tenant, `/grants/${args.grantId}/activate`, {})
+    await args.tenant.fetch(
+      new Request(`https://mcp-connections.do/broker/servers/${args.grantId}/policy`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          version: 0,
+          enabled: true,
+          surfaces: { ...ALL_SURFACES_OFF, cli: true },
+          allowedReadTools: args.tools,
+          maxCallsPerRun: 2,
+        }),
+      }),
+    )
+  }
+
+  it("filters an explicit app before touching another vendor's owner vault", async () => {
+    nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+    const { owner, tenant } = makePair()
+    await enableCliGrant({
+      owner,
+      tenant,
+      ownerScope: "session:111",
+      serverId: "linear-private",
+      grantId: "linear-public",
+      url: "https://mcp.linear.app/mcp",
+      tools: ["list_comments"],
+    })
+    await post(tenant, "/grants", {
+      grantId: "sentry-public",
+      ownerScope: "session:222",
+      serverId: "sentry-private",
+      creatorSubject: "github:222",
+      serverUrl: "https://mcp.sentry.dev/mcp",
+    })
+    await post(tenant, "/grants/sentry-public/activate", {})
+
+    const response = await post(tenant, "/broker/runtime/catalog", { surface: "cli", appId: "linear" })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      partial: false,
+      tools: [{ serverId: "linear-public", vendor: "linear", name: "list_comments" }],
+    })
+  })
+
+  it("rejects an app/vendor mismatch before a provider tool call", async () => {
+    nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+    const { owner, tenant } = makePair()
+    await enableCliGrant({
+      owner,
+      tenant,
+      ownerScope: "session:111",
+      serverId: "linear-private",
+      grantId: "linear-public",
+      url: "https://mcp.linear.app/mcp",
+      tools: ["list_comments"],
+    })
+
+    const response = await post(tenant, "/broker/runtime/invoke", {
+      surface: "cli",
+      appId: "sentry",
+      runId: "run-mismatch",
+      serverId: "linear-public",
+      toolName: "list_comments",
+      arguments: {},
+    })
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ error: "app_unavailable" })
+    expect(callToolSpy).not.toHaveBeenCalled()
+  })
+
+  it.each(["policy-off", "revoked"] as const)(
+    "returns app_unavailable with zero provider calls when an explicit grant is %s",
+    async (state) => {
+      nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+      const { owner, tenant } = makePair()
+      await enableCliGrant({
+        owner,
+        tenant,
+        ownerScope: "session:111",
+        serverId: "linear-private",
+        grantId: "linear-public",
+        url: "https://mcp.linear.app/mcp",
+        tools: ["list_comments"],
+      })
+      if (state === "policy-off") {
+        await tenant.fetch(
+          new Request("https://mcp-connections.do/broker/servers/linear-public/policy", {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              version: 1,
+              enabled: false,
+              surfaces: ALL_SURFACES_OFF,
+              allowedReadTools: [],
+              maxCallsPerRun: 0,
+            }),
+          }),
+        )
+      } else {
+        await tenant.fetch(new Request("https://mcp-connections.do/broker/servers/linear-public", { method: "DELETE" }))
+      }
+
+      const response = await post(tenant, "/broker/runtime/catalog", { surface: "cli", appId: "linear" })
+
+      expect(response.status).toBe(409)
+      expect(await response.json()).toEqual({ error: "app_unavailable" })
+      expect(callToolSpy).not.toHaveBeenCalled()
+    },
+  )
+
+  it("re-reads tenant policy after the final owner-policy await before explicit invoke", async () => {
+    nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+    const { owner, tenant } = makePair()
+    await enableCliGrant({
+      owner,
+      tenant,
+      ownerScope: "session:111",
+      serverId: "linear-private",
+      grantId: "linear-public",
+      url: "https://mcp.linear.app/mcp",
+      tools: ["list_comments"],
+    })
+
+    let releasePolicyRead!: () => void
+    let markPolicyReadStarted!: () => void
+    const policyReadStarted = new Promise<void>((resolve) => {
+      markPolicyReadStarted = resolve
+    })
+    const policyReadGate = new Promise<void>((resolve) => {
+      releasePolicyRead = resolve
+    })
+    const originalFetch = owner.fetch.bind(owner)
+    let policyReadCount = 0
+    vi.spyOn(owner, "fetch").mockImplementation(async (request) => {
+      const url = new URL(request.url)
+      if (request.method === "GET" && url.pathname === "/servers/linear-private/policy") {
+        policyReadCount += 1
+        if (policyReadCount === 2) {
+          markPolicyReadStarted()
+          await policyReadGate
+        }
+      }
+      return originalFetch(request)
+    })
+
+    const pending = post(tenant, "/broker/runtime/invoke", {
+      surface: "cli",
+      appId: "linear",
+      runId: "run-policy-race",
+      serverId: "linear-public",
+      toolName: "list_comments",
+      arguments: {},
+    })
+    await policyReadStarted
+    const disabled = await tenant.fetch(
+      new Request("https://mcp-connections.do/broker/servers/linear-public/policy", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          version: 1,
+          enabled: false,
+          surfaces: ALL_SURFACES_OFF,
+          allowedReadTools: [],
+          maxCallsPerRun: 0,
+        }),
+      }),
+    )
+    expect(disabled.status).toBe(200)
+    releasePolicyRead()
+
+    const response = await pending
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ error: "app_unavailable" })
+    expect(callToolSpy).not.toHaveBeenCalled()
+  })
+
+  it("re-reads tenant policy after owner catalog discovery before exposing explicit tools", async () => {
+    nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+    const { owner, tenant } = makePair()
+    await enableCliGrant({
+      owner,
+      tenant,
+      ownerScope: "session:111",
+      serverId: "linear-private",
+      grantId: "linear-public",
+      url: "https://mcp.linear.app/mcp",
+      tools: ["list_comments"],
+    })
+
+    let releaseCatalog!: () => void
+    let markCatalogStarted!: () => void
+    const catalogStarted = new Promise<void>((resolve) => {
+      markCatalogStarted = resolve
+    })
+    const catalogGate = new Promise<void>((resolve) => {
+      releaseCatalog = resolve
+    })
+    const originalFetch = owner.fetch.bind(owner)
+    vi.spyOn(owner, "fetch").mockImplementation(async (request) => {
+      if (request.method === "POST" && new URL(request.url).pathname === "/runtime/catalog") {
+        markCatalogStarted()
+        await catalogGate
+      }
+      return originalFetch(request)
+    })
+
+    const pending = post(tenant, "/broker/runtime/catalog", { surface: "cli", appId: "linear" })
+    await catalogStarted
+    const disabled = await tenant.fetch(
+      new Request("https://mcp-connections.do/broker/servers/linear-public/policy", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          version: 1,
+          enabled: false,
+          surfaces: ALL_SURFACES_OFF,
+          allowedReadTools: [],
+          maxCallsPerRun: 0,
+        }),
+      }),
+    )
+    expect(disabled.status).toBe(200)
+    releaseCatalog()
+
+    const response = await pending
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ error: "app_unavailable" })
+    expect(callToolSpy).not.toHaveBeenCalled()
+  })
+
+  it("re-reads owner policy after catalog discovery before exposing explicit tools", async () => {
+    nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+    const { owner, tenant } = makePair()
+    await enableCliGrant({
+      owner,
+      tenant,
+      ownerScope: "session:111",
+      serverId: "linear-private",
+      grantId: "linear-public",
+      url: "https://mcp.linear.app/mcp",
+      tools: ["list_comments"],
+    })
+
+    let releaseCatalog!: () => void
+    let markCatalogSnapshotReady!: () => void
+    const catalogSnapshotReady = new Promise<void>((resolve) => {
+      markCatalogSnapshotReady = resolve
+    })
+    const catalogGate = new Promise<void>((resolve) => {
+      releaseCatalog = resolve
+    })
+    const originalFetch = owner.fetch.bind(owner)
+    vi.spyOn(owner, "fetch").mockImplementation(async (request) => {
+      const response = await originalFetch(request)
+      if (request.method === "POST" && new URL(request.url).pathname === "/runtime/catalog") {
+        markCatalogSnapshotReady()
+        await catalogGate
+      }
+      return response
+    })
+
+    const pending = post(tenant, "/broker/runtime/catalog", { surface: "cli", appId: "linear" })
+    await catalogSnapshotReady
+    const disabled = await owner.fetch(
+      policyRequest("linear-private", "PUT", {
+        version: 1,
+        enabled: false,
+        surfaces: ALL_SURFACES_OFF,
+        allowedReadTools: [],
+        maxCallsPerRun: 0,
+      }),
+    )
+    expect(disabled.status).toBe(200)
+    releaseCatalog()
+
+    const response = await pending
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ error: "app_unavailable" })
+    expect(callToolSpy).not.toHaveBeenCalled()
+  })
+
+  it("fails an ambiguous explicit app closed before a provider tool call", async () => {
+    nextTools = [{ name: "list_comments", inputSchema: { type: "object" } }]
+    const { owner, tenant, env, instances } = makePair()
+    const secondOwner = new McpConnectionsAgent(makeDoState().state, env)
+    instances.set("session:222", secondOwner)
+    await enableCliGrant({
+      owner,
+      tenant,
+      ownerScope: "session:111",
+      serverId: "linear-private-1",
+      grantId: "linear-public-1",
+      url: "https://mcp.linear.app/mcp",
+      tools: ["list_comments"],
+    })
+    await enableCliGrant({
+      owner: secondOwner,
+      tenant,
+      ownerScope: "session:222",
+      serverId: "linear-private-2",
+      grantId: "linear-public-2",
+      url: "https://mcp.linear.app/mcp",
+      tools: ["list_comments"],
+    })
+
+    const response = await post(tenant, "/broker/runtime/catalog", { surface: "cli", appId: "linear" })
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ error: "app_ambiguous" })
+    expect(callToolSpy).not.toHaveBeenCalled()
+  })
+
+  it("keeps Jira and Confluence descriptors in disjoint app catalogs", async () => {
+    nextTools = [
+      { name: "getJiraIssue", inputSchema: { type: "object" } },
+      { name: "getConfluencePage", inputSchema: { type: "object" } },
+    ]
+    const { owner, tenant } = makePair()
+    await enableCliGrant({
+      owner,
+      tenant,
+      ownerScope: "session:111",
+      serverId: "atlassian-private",
+      grantId: "atlassian-public",
+      url: "https://mcp.atlassian.com/v1/mcp/authv2",
+      tools: ["getJiraIssue", "getConfluencePage"],
+    })
+
+    const jira = await post(tenant, "/broker/runtime/catalog", { surface: "cli", appId: "jira" })
+    const confluence = await post(tenant, "/broker/runtime/catalog", { surface: "cli", appId: "confluence" })
+
+    expect(((await jira.json()) as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name)).toEqual([
+      "getJiraIssue",
+    ])
+    expect(((await confluence.json()) as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name)).toEqual([
+      "getConfluencePage",
+    ])
+  })
+
   it("enforces the public broker's CLI-only surface inside the tenant DO", async () => {
     const { tenant } = makePair()
     const catalog = await post(tenant, "/broker/runtime/catalog", { surface: "chat" })

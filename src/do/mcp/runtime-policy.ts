@@ -1,3 +1,7 @@
+import type { OfficialMcpVendor } from "@/src/shared/domain/runtime-app-registry"
+
+export type { OfficialMcpVendor } from "@/src/shared/domain/runtime-app-registry"
+
 export const MCP_RUNTIME_SURFACES = ["chat", "deep-research", "cli", "pr-review", "agent"] as const
 export type McpRuntimeSurface = (typeof MCP_RUNTIME_SURFACES)[number]
 
@@ -15,18 +19,6 @@ export type McpSurfacePolicy = Readonly<
     "memory-index": false
   }
 >
-
-export type OfficialMcpVendor =
-  | "linear"
-  | "sentry"
-  | "cloudflare"
-  | "supabase"
-  | "notion"
-  | "atlassian"
-  | "stripe"
-  | "vercel"
-  | "hubspot"
-  | "intercom"
 
 export interface CuratedReadTool {
   name: string

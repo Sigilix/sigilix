@@ -28,6 +28,11 @@ import {
 } from "@/src/features/tenancy"
 import { resolveInstallationPlan } from "@/src/lib/resolve-plan"
 import { requireRuntimePrincipal } from "@/src/lib/runtime-principal"
+import {
+  parseLeadingRuntimeAppMention,
+  runtimeAppRouteError,
+  type RuntimeAppId,
+} from "@/src/shared/domain/runtime-app-registry"
 import { parseEffort, parseMode, parseTier } from "./config"
 import { CREATOR_HEADER } from "./deep-research-do"
 import { isCodebaseQuestion, resolveRepoTarget } from "./repo-grounding"
@@ -128,8 +133,17 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   } catch {
     return json({ error: "invalid json" }, 400)
   }
-  const question = typeof body.question === "string" ? body.question.trim() : ""
+  let question = typeof body.question === "string" ? body.question.trim() : ""
   if (!question) return json({ error: "missing question" }, 400)
+  const appRoute = parseLeadingRuntimeAppMention(question)
+  if (appRoute.kind === "rejected") {
+    return json({ ...runtimeAppRouteError(appRoute.reason), mention: appRoute.mention }, 400)
+  }
+  let appId: RuntimeAppId | undefined
+  if (appRoute.kind === "resolved") {
+    question = appRoute.task
+    appId = appRoute.appId
+  }
 
   const model = body.model === undefined ? "astraeus" : parseTier(body.model)
   if (model === null) return json({ error: "model must be one of: boreas, pyroeis, astraeus" }, 400)
@@ -269,6 +283,7 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       question,
+      ...(appId ? { appId } : {}),
       model,
       effort,
       mode,

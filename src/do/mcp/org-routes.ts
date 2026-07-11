@@ -13,6 +13,12 @@ import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { handlePortalPreflight, hasJsonContentType, withPortalCors } from "@/src/lib/portal-cors"
 import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
 import { requireRuntimePrincipal, runtimeSessionScope, runtimeSessionSubject } from "@/src/lib/runtime-principal"
+import {
+  parseLeadingRuntimeAppMention,
+  publicRuntimeAppCatalog,
+  resolveRuntimeApp,
+  runtimeAppRouteError,
+} from "@/src/shared/domain/runtime-app-registry"
 import type { Env } from "@/src/shared/types/env"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 
@@ -557,11 +563,22 @@ async function handleRuntime(request: Request, env: Env, ctx: ExecutionContext, 
   if ("response" in auth) return auth.response
   if (auth.principal.kind !== "tenant") return json({ error: "tenant_scope_required" }, 403)
   if (parsed.value.surface !== "cli") return json({ error: "surface_not_allowed" }, 403)
+  const forwarded =
+    path === "catalog"
+      ? { surface: "cli", ...(parsed.value.appId === undefined ? {} : { appId: parsed.value.appId }) }
+      : {
+          surface: "cli",
+          serverId: parsed.value.serverId,
+          toolName: parsed.value.toolName,
+          runId: parsed.value.runId,
+          arguments: parsed.value.arguments,
+          ...(parsed.value.appId === undefined ? {} : { appId: parsed.value.appId }),
+        }
   try {
     const response = await resolveStub(env, auth.principal.scope).fetch(`${DO_BASE}/broker/runtime/${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: parsed.raw,
+      body: JSON.stringify(forwarded),
     })
     return new Response(response.body, {
       status: response.status,
@@ -572,6 +589,25 @@ async function handleRuntime(request: Request, env: Env, ctx: ExecutionContext, 
     console.error("org-mcp: runtime broker failed", error instanceof Error ? error.message : error)
     return json({ error: "MCP runtime failed" }, 502)
   }
+}
+
+async function handleAppResolve(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  if (!hasJsonContentType(request)) return json({ error: "content-type must be application/json" }, 415)
+  const parsed = await readJsonObject(request)
+  if (!parsed.ok) return parsed.response
+  const auth = await requireRuntimePrincipal(request, env, ctx)
+  if ("response" in auth) return auth.response
+  if (auth.principal.kind !== "tenant") return json({ error: "tenant_scope_required" }, 403)
+  if (typeof parsed.value.text !== "string") return json({ error: "invalid_request" }, 400)
+  const route = parseLeadingRuntimeAppMention(parsed.value.text)
+  if (route.kind === "rejected") {
+    return json({ ...runtimeAppRouteError(route.reason), mention: route.mention }, 400)
+  }
+  if (route.kind === "resolved") {
+    const app = resolveRuntimeApp(route.appId)
+    return json({ version: 1, route: { ...route, mention: app?.canonicalMention ?? route.mention } })
+  }
+  return json({ version: 1, route })
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -585,6 +621,12 @@ export async function tryHandleOrgMcpRoute(
   ctx: ExecutionContext,
   url: URL,
 ): Promise<Response | null> {
+  if (request.method === "GET" && url.pathname === "/v1/apps/catalog") {
+    return withPortalCors(request, json(publicRuntimeAppCatalog()), env)
+  }
+  if (request.method === "POST" && url.pathname === "/v1/apps/resolve") {
+    return handleAppResolve(request, env, ctx)
+  }
   const orgMatch = parseOrgMcpPath(url.pathname)
   if (request.method === "OPTIONS" && orgMatch !== null) return handlePortalPreflight(request, env)
   if (orgMatch === "invalid")

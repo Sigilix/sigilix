@@ -27,6 +27,7 @@ import { isCodebaseQuestion, isTrivialMessage } from "./text-utils"
 import type { RepoGrounding, ResearchEffort, ResearchEvent, ResearchMode, ResearchTier } from "./types"
 import { buildResearchMcpRuntime } from "./mcp-runtime"
 import { isTenantRuntimeScope } from "@/src/lib/runtime-principal"
+import { resolveRuntimeApp, type RuntimeAppId } from "@/src/shared/domain/runtime-app-registry"
 
 const META_KEY = "meta"
 const EVENT_PREFIX = "evt:"
@@ -45,6 +46,8 @@ interface RunMeta {
   creator: string
   /** Tenant-owned MCP broker scope, separate from the run's session owner. */
   mcpTenantScope?: string
+  /** Untrusted route selector, revalidated against the server-owned registry. */
+  appId?: RuntimeAppId
   model: ResearchTier
   effort: ResearchEffort
   /** sig-chat-conversational-mode: the run mode (Deep Research toggle). */
@@ -76,6 +79,7 @@ export class DeepResearchDO extends DurableObject<Env> {
   private hooks: ResearchTestHooks | undefined
   private creator = ""
   private mcpTenantScope = ""
+  private appId: RuntimeAppId | undefined
   private model: ResearchTier = "astraeus"
   private effort: ResearchEffort = "medium"
   private mode: ResearchMode = "deep"
@@ -113,6 +117,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       mode?: unknown
       creator?: unknown
       mcpTenantScope?: unknown
+      appId?: unknown
       owner?: unknown
       repo?: unknown
       hasIndexedRepo?: unknown
@@ -135,6 +140,9 @@ export class DeepResearchDO extends DurableObject<Env> {
     this.creator = typeof body.creator === "string" ? body.creator : ""
     this.mcpTenantScope =
       typeof body.mcpTenantScope === "string" && isTenantRuntimeScope(body.mcpTenantScope) ? body.mcpTenantScope : ""
+    const app = body.appId === undefined ? null : resolveRuntimeApp(body.appId)
+    if (body.appId !== undefined && !app) return json({ error: "invalid_app" }, 400)
+    this.appId = app?.id
     // sig-deep-research-repo-grounding: the repo target (resolved in the route from
     // the caller's identity) + whether they have any indexed repo. Absent ⇒ no
     // codebase grounding for this run.
@@ -151,6 +159,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       cancelled: false,
       creator: this.creator,
       ...(this.mcpTenantScope ? { mcpTenantScope: this.mcpTenantScope } : {}),
+      ...(this.appId ? { appId: this.appId } : {}),
       model: this.model,
       effort: this.effort,
       mode: this.mode,
@@ -209,6 +218,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       this.mcpTenantScope,
       runId,
       this.mode === "chat" ? "chat" : "deep-research",
+      this.appId,
     )
 
     const deps: EngineDeps = {
@@ -222,6 +232,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       emit: (event) => this.emit(event),
       model: meteredModel,
       ...(mcp ? { mcp } : {}),
+      ...(this.appId ? { appId: this.appId } : {}),
       search: this.hooks?.search ?? ((query) => searchWeb({ query, env: this.env, runId, tenant })),
       fetchPage: this.hooks?.fetchPage ?? ((pageUrl) => fetchPage({ url: pageUrl, runId, tenant })),
       isCancelled: () => this.cancelled,
@@ -291,6 +302,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       cancelled: false,
       creator: this.creator,
       ...(this.mcpTenantScope ? { mcpTenantScope: this.mcpTenantScope } : {}),
+      ...(this.appId ? { appId: this.appId } : {}),
       model: this.model,
       effort: this.effort,
       mode: this.mode,

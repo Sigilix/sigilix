@@ -22,7 +22,6 @@ import {
 import { McpOAuthCallbackDoHandler } from "./oauth-callback-do-handler"
 import {
   JSON_HEADERS,
-  brokerDescriptor,
   brokerPolicyEnvelope,
   canonicalMcpEndpointUrl,
   claimMcpOAuthProcessing,
@@ -31,7 +30,6 @@ import {
   failClosedStoredPolicy,
   effectiveBrokerPolicy,
   grantTransitionStatus,
-  isPlainObject,
   isPolicyEnvelope,
   isSessionOwnerScope,
   isStoredSurfacePolicy,
@@ -41,6 +39,7 @@ import {
   parseSafeId,
   purgeMcpServerState,
   readMcpOAuthCompletion,
+  readRuntimeJsonBody,
   redactMcpUrl,
   remoteTool,
   safeActiveGrant,
@@ -55,6 +54,8 @@ import { guardUrl } from "@/src/do/deep-research/fetch-guard"
 import type { Env } from "@/src/shared/types/env"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { normalizeEnv } from "@/src/shared/util/normalize-env"
+import { resolveMcpRuntimeAppSelector, runtimeAppAllowsTool, runtimeAppMatchesEndpoint } from "./runtime-app-routing"
+import { buildBrokerRuntimeCatalog, readBrokerOwnerPolicy, resolveExplicitBrokerGrant } from "./broker-runtime-catalog"
 
 export type { McpPolicyEnvelope, McpRuntimeToolDescriptor } from "./mcp-connections-support"
 
@@ -521,7 +522,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
   }
 
   private async handleGrantCreate(request: Request): Promise<Response> {
-    const body = await this.readRuntimeBody(request)
+    const body = await readRuntimeJsonBody(request, MAX_RUNTIME_BODY_BYTES)
     if (body instanceof Response) return body
     const grantId = parseSafeId(body.grantId)
     const ownerScope = typeof body.ownerScope === "string" ? body.ownerScope : ""
@@ -584,7 +585,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     const grant = safeActiveGrant(this.grants, grantId)
     if (!grant) return json({ error: "not found" }, 404)
     if (request.method === "PUT") {
-      const body = await this.readRuntimeBody(request)
+      const body = await readRuntimeJsonBody(request, MAX_RUNTIME_BODY_BYTES)
       if (body instanceof Response) return body
       const updated = this.grants.updatePolicy(grantId, body)
       if (!updated) return json({ error: "not found" }, 404)
@@ -623,53 +624,38 @@ export class McpConnectionsAgent extends DurableObject<Env> {
   }
 
   private async handleBrokerCatalog(request: Request, fixedSurface?: "chat" | "deep-research"): Promise<Response> {
-    const body = await this.readRuntimeBody(request)
+    const body = await readRuntimeJsonBody(request, MAX_RUNTIME_BODY_BYTES)
     if (body instanceof Response) return body
     const surface = fixedSurface ?? body.surface
     if (!isMcpRuntimeSurface(surface)) return json({ error: "invalid_surface" }, 400)
     if (!fixedSurface && surface !== "cli") return json({ error: "surface_not_allowed" }, 403)
-    const tools: McpRuntimeToolDescriptor[] = []
-    let partial = false
-    for (const grant of this.grants
-      .listOpen()
-      .filter((candidate) => candidate.status === "active")
-      .slice(0, 32)) {
-      try {
-        const ownerEnvelope = await this.readOwnerPolicyEnvelope(grant)
-        if (!ownerEnvelope) {
-          partial = true
-          continue
+    const result = await buildBrokerRuntimeCatalog({
+      appId: body.appId,
+      surface,
+      grants: this.grants.listOpen(),
+      readActiveGrant: (grantId) => this.grants.getActive(grantId),
+      readOwnerPolicy: (grant) => readBrokerOwnerPolicy(this.ownerStub(grant.ownerScope), grant),
+      readOwnerCatalog: async (grant, ownerSurface) => {
+        try {
+          const response = await this.ownerStub(grant.ownerScope).fetch("https://mcp-connections.do/runtime/catalog", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ surface: ownerSurface, serverId: grant.serverId }),
+          })
+          if (!response.ok) return null
+          const value = (await response.json()) as { tools?: unknown[] }
+          return Array.isArray(value.tools) ? value.tools : null
+        } catch (err) {
+          console.warn("mcp-broker: catalog owner failed", err instanceof Error ? err.message : err)
+          return null
         }
-        const effective = effectiveBrokerPolicy(grant, ownerEnvelope)
-        if (!mcpSurfaceEnabled(effective, surface)) continue
-        const response = await this.ownerStub(grant.ownerScope).fetch("https://mcp-connections.do/runtime/catalog", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ surface, serverId: grant.serverId }),
-        })
-        if (!response.ok) {
-          partial = true
-          continue
-        }
-        const value = (await response.json()) as { tools?: unknown[] }
-        if (!Array.isArray(value.tools)) {
-          partial = true
-          continue
-        }
-        for (const candidate of value.tools) {
-          const descriptor = brokerDescriptor(candidate, grant)
-          if (descriptor && effective.allowedReadTools.includes(descriptor.name)) tools.push(descriptor)
-        }
-      } catch (err) {
-        partial = true
-        console.warn("mcp-broker: catalog owner failed", err instanceof Error ? err.message : err)
-      }
-    }
-    return json({ tools, partial })
+      },
+    })
+    return json(result.body, result.status)
   }
 
   private async handleBrokerInvoke(request: Request, fixedSurface?: "chat" | "deep-research"): Promise<Response> {
-    const body = await this.readRuntimeBody(request)
+    const body = await readRuntimeJsonBody(request, MAX_RUNTIME_BODY_BYTES)
     if (body instanceof Response) return body
     const grantId = parseSafeId(body.serverId)
     const toolName = parseSafeId(body.toolName)
@@ -680,9 +666,30 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     }
     if (!fixedSurface && surface !== "cli") return json({ error: "surface_not_allowed" }, 403)
     if (!areBoundedMcpArguments(body.arguments)) return json({ error: "invalid_arguments" }, 400)
-    const grant = this.grants.getActive(grantId)
+    const selector = resolveMcpRuntimeAppSelector(body.appId)
+    if (selector.kind === "invalid") return json({ error: "invalid_app" }, 400)
+    if (selector.kind === "unavailable") return json({ error: "app_unavailable" }, 409)
+    let grant = this.grants.getActive(grantId)
     if (!grant) return json({ error: "tool_not_allowed" }, 403)
-    // Register the call before the first await so revoke cannot pass it.
+    if (selector.kind === "resolved") {
+      if (
+        !runtimeAppMatchesEndpoint(selector.app, grant.serverUrl) ||
+        !runtimeAppAllowsTool(selector.app, selector.app.vendor, toolName)
+      ) {
+        return json({ error: "app_unavailable" }, 409)
+      }
+      const selected = await resolveExplicitBrokerGrant({
+        app: selector.app,
+        surface,
+        grants: this.grants.listOpen(),
+        readActiveGrant: (candidateGrantId) => this.grants.getActive(candidateGrantId),
+        readOwnerPolicy: (candidate) => readBrokerOwnerPolicy(this.ownerStub(candidate.ownerScope), candidate),
+      })
+      if (selected.kind !== "ready") return json({ error: selected.error }, 409)
+      if (selected.grantId !== grantId) return json({ error: "app_unavailable" }, 409)
+      grant = this.grants.getActive(grantId)
+      if (!grant) return json({ error: "app_unavailable" }, 409)
+    }
     let release!: () => void
     const admitted = new Promise<void>((resolve) => {
       release = resolve
@@ -691,26 +698,43 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     active.add(admitted)
     this.brokerInvocations.set(grantId, active)
     try {
-      const ownerEnvelope = await this.readOwnerPolicyEnvelope(grant)
+      const ownerEnvelope = await readBrokerOwnerPolicy(this.ownerStub(grant.ownerScope), grant)
       if (!ownerEnvelope) return json({ error: "broker_unavailable" }, 502)
-      const effective = effectiveBrokerPolicy(grant, ownerEnvelope)
+      const currentGrant = this.grants.getActive(grantId)
+      if (!currentGrant) {
+        return selector.kind === "resolved"
+          ? json({ error: "app_unavailable" }, 409)
+          : json({ error: "tool_not_allowed" }, 403)
+      }
+      if (selector.kind === "resolved" && !runtimeAppMatchesEndpoint(selector.app, currentGrant.serverUrl)) {
+        return json({ error: "app_unavailable" }, 409)
+      }
+      const effective = effectiveBrokerPolicy(currentGrant, ownerEnvelope)
       if (!mcpSurfaceEnabled(effective, surface) || !effective.allowedReadTools.includes(toolName)) {
-        return json({ error: "tool_not_allowed" }, 403)
+        return selector.kind === "resolved"
+          ? json({ error: "app_unavailable" }, 409)
+          : json({ error: "tool_not_allowed" }, 403)
+      }
+      if (selector.kind === "resolved" && !runtimeAppAllowsTool(selector.app, effective.vendor, toolName)) {
+        return json({ error: "app_unavailable" }, 409)
       }
       if (!this.reserveRuntimeCall(runId, grantId, surface, effective.maxCallsPerRun)) {
         return json({ error: "max_calls_per_run_exceeded" }, 429)
       }
-      const response = await this.ownerStub(grant.ownerScope).fetch("https://mcp-connections.do/runtime/invoke", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          runId,
-          surface,
-          serverId: grant.serverId,
-          toolName,
-          arguments: body.arguments,
-        }),
-      })
+      const response = await this.ownerStub(currentGrant.ownerScope).fetch(
+        "https://mcp-connections.do/runtime/invoke",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            runId,
+            surface,
+            serverId: currentGrant.serverId,
+            toolName,
+            arguments: body.arguments,
+          }),
+        },
+      )
       const text = await response.text()
       return new Response(text, { status: response.status, headers: JSON_HEADERS })
     } catch (err) {
@@ -723,25 +747,12 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     }
   }
 
-  private async readOwnerPolicyEnvelope(grant: TenantMcpGrant): Promise<McpPolicyEnvelope | null> {
-    try {
-      const response = await this.ownerStub(grant.ownerScope).fetch(
-        `https://mcp-connections.do/servers/${encodeURIComponent(grant.serverId)}/policy`,
-      )
-      if (!response.ok) return null
-      const value = (await response.json()) as unknown
-      return isPolicyEnvelope(value) ? value : null
-    } catch {
-      return null
-    }
-  }
-
   private ownerStub(ownerScope: string): DurableObjectStub {
     return this.env.MCP_CONNECTIONS.get(this.env.MCP_CONNECTIONS.idFromName(ownerScope))
   }
 
   private async handleRuntimeCatalog(request: Request): Promise<Response> {
-    const body = await this.readRuntimeBody(request)
+    const body = await readRuntimeJsonBody(request, MAX_RUNTIME_BODY_BYTES)
     if (body instanceof Response) return body
     if (!isMcpRuntimeSurface(body.surface)) return json({ error: "invalid_surface" }, 400)
     const onlyServerId = body.serverId === undefined ? undefined : parseSafeId(body.serverId)
@@ -750,7 +761,7 @@ export class McpConnectionsAgent extends DurableObject<Env> {
   }
 
   private async handleRuntimeInvoke(request: Request): Promise<Response> {
-    const body = await this.readRuntimeBody(request)
+    const body = await readRuntimeJsonBody(request, MAX_RUNTIME_BODY_BYTES)
     if (body instanceof Response) return body
     const serverId = typeof body.serverId === "string" ? body.serverId : ""
     const toolName = typeof body.toolName === "string" ? body.toolName : ""
@@ -845,17 +856,6 @@ export class McpConnectionsAgent extends DurableObject<Env> {
       }
     }
     return { tools, blockedToolCount, unsupportedServerCount }
-  }
-
-  private async readRuntimeBody(request: Request): Promise<Record<string, unknown> | Response> {
-    const raw = await readBodyCapped(request, MAX_RUNTIME_BODY_BYTES)
-    if (raw === null) return json({ error: "payload_too_large" }, 413)
-    try {
-      const parsed = JSON.parse(raw) as unknown
-      return isPlainObject(parsed) ? parsed : json({ error: "invalid json" }, 400)
-    } catch {
-      return json({ error: "invalid json" }, 400)
-    }
   }
 
   private buildPolicyEnvelope(

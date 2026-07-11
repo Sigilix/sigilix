@@ -148,6 +148,16 @@ function runtimeRequest(body: unknown, bearer?: string, cookie?: string, path = 
   })
 }
 
+function appResolveRequest(text: string, bearer?: string): Request {
+  const headers = new Headers({ "content-type": "application/json" })
+  if (bearer) headers.set("authorization", `Bearer ${bearer}`)
+  return new Request("https://api.sigilix.ai/v1/apps/resolve", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ text }),
+  })
+}
+
 async function dispatch(request: Request, environment: Env): Promise<Response> {
   const ctx = { waitUntil: () => undefined } as unknown as ExecutionContext
   const response = await tryHandleOrgMcpRoute(request, environment, ctx, new URL(request.url))
@@ -513,6 +523,86 @@ describe("installation-scoped MCP management", () => {
 })
 
 describe("tenant-key MCP runtime", () => {
+  it("exposes only the versioned public app names and aliases", async () => {
+    const { namespace, idFromNameCalls } = makeNamespace(() => new Response("not reached", { status: 500 }))
+    const request = new Request("https://api.sigilix.ai/v1/apps/catalog", {
+      headers: { origin: PORTAL_ORIGIN },
+    })
+
+    const response = await dispatch(request, env(makeKV(), namespace))
+    const body = (await response.json()) as {
+      version: number
+      apps: Array<Record<string, unknown>>
+    }
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("access-control-allow-origin")).toBe(PORTAL_ORIGIN)
+    expect(body.version).toBe(1)
+    expect(body.apps).toContainEqual(
+      expect.objectContaining({ id: "github", canonicalMention: "@GitHub", aliases: ["@gh"], surfaces: [] }),
+    )
+    expect(JSON.stringify(body)).not.toMatch(/serverId|grant|https?:\/\//)
+    expect(idFromNameCalls).toEqual([])
+  })
+
+  it("resolves and strips a leading app mention without contacting the tenant broker", async () => {
+    const db = await makeDb()
+    const bearer = await seedApiKey(db, 42)
+    const { namespace, idFromNameCalls } = makeNamespace(() => new Response("not reached", { status: 500 }))
+
+    const response = await dispatch(
+      appResolveRequest("  @LiNeAr: list recent comments", bearer),
+      env(makeKV(), namespace, db),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      version: 1,
+      route: {
+        kind: "resolved",
+        task: "list recent comments",
+        appId: "linear",
+        mention: "@Linear",
+      },
+    })
+    expect(idFromNameCalls).toEqual([])
+  })
+
+  it.each([
+    [
+      "@forged.example list issues",
+      "invalid_app_mention",
+      "@forged.example",
+      "Use a supported @App mention at the start of your request.",
+    ],
+    ["@MadeUp list issues", "unknown_app", "@MadeUp", "That app mention is not supported."],
+    ["@Linear", "missing_app_task", "@Linear", "Add a request after the app mention."],
+  ])("rejects %s before resolving a tenant broker", async (question, error, mention, message) => {
+    const db = await makeDb()
+    const bearer = await seedApiKey(db, 42)
+    const { namespace, idFromNameCalls } = makeNamespace(() => new Response("not reached", { status: 500 }))
+
+    const response = await dispatch(appResolveRequest(question, bearer), env(makeKV(), namespace, db))
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error, message, mention })
+    expect(idFromNameCalls).toEqual([])
+  })
+
+  it("returns an ordinary task without selecting an app or tenant broker", async () => {
+    const db = await makeDb()
+    const bearer = await seedApiKey(db, 42)
+    const { namespace, idFromNameCalls } = makeNamespace(() => new Response("not reached", { status: 500 }))
+
+    const response = await dispatch(appResolveRequest("list recent comments", bearer), env(makeKV(), namespace, db))
+
+    expect(await response.json()).toEqual({
+      version: 1,
+      route: { kind: "none", task: "list recent comments" },
+    })
+    expect(idFromNameCalls).toEqual([])
+  })
+
   it("routes an installation bearer to its tenant broker and preserves status and body", async () => {
     const db = await makeDb()
     const bearer = await seedApiKey(db, 42)
@@ -526,7 +616,7 @@ describe("tenant-key MCP runtime", () => {
     })
 
     const response = await dispatch(
-      runtimeRequest({ surface: "cli", query: "issues" }, bearer),
+      runtimeRequest({ surface: "cli", appId: "linear", question: "raw text must not cross the broker seam" }, bearer),
       env(makeKV(), namespace, db),
     )
 
@@ -535,6 +625,7 @@ describe("tenant-key MCP runtime", () => {
     expect(response.headers.get("authorization")).toBeNull()
     expect(idFromNameCalls).toEqual(["tenant:42"])
     expect(new URL(calls[0]!.request.url).pathname).toBe("/broker/runtime/catalog")
+    expect(await calls[0]!.request.json()).toEqual({ surface: "cli", appId: "linear" })
   })
 
   it("routes invoke through the same tenant broker without forwarding bearer credentials", async () => {

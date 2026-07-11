@@ -28,6 +28,7 @@ import type { ResearchMcpRuntime } from "./mcp-runtime"
 import { describeMcpEvidence, selectMcpEvidence, withMcpEvidence, type ResearchMcpEvidence } from "./mcp-tools"
 import type { SearchQueryResult } from "./search"
 import type { FetchPageResult } from "./fetch-guard"
+import { resolveRuntimeApp, type RuntimeAppId } from "@/src/shared/domain/runtime-app-registry"
 import type {
   QuestionCategory,
   RepoGrounding,
@@ -64,6 +65,8 @@ export interface EngineDeps {
   /** Verified installation-scoped read-only MCP runtime. Omitted when the
    *  caller has no positively authorized tenant selector. */
   mcp?: ResearchMcpRuntime
+  /** Server-validated explicit app selector. It is routing metadata, never model text. */
+  appId?: RuntimeAppId
   search: (query: string) => Promise<SearchQueryResult>
   fetchPage: (url: string) => Promise<FetchPageResult>
   isCancelled: () => boolean
@@ -98,6 +101,24 @@ const NO_SEARCH_NOTE = "Live web search isn't enabled — answering from the mod
  */
 export async function runResearchLoop(deps: EngineDeps): Promise<void> {
   try {
+    if (deps.appId) {
+      const app = resolveRuntimeApp(deps.appId)
+      const runtime = deps.mcp
+      const catalog = runtime?.explicitCatalog ? await runtime.explicitCatalog() : null
+      if (!app || !runtime || !catalog || catalog.kind === "unavailable") {
+        const reason = catalog?.kind === "unavailable" ? catalog.reason : "app_unavailable"
+        await emitExplicitAppUnavailable(deps, app?.name ?? "The requested app", reason)
+        return
+      }
+      deps = {
+        ...deps,
+        mcp: {
+          catalog: async () => catalog.tools,
+          invoke: (args) => runtime.invoke(args),
+        },
+      }
+    }
+
     // Greeting / trivial small-talk ("hey!", "thanks") → a short, direct, friendly
     // reply with NO web research and NO repo retrieval, regardless of the Deep
     // Research toggle. This is the cheap guard that stops a casual message from
@@ -154,6 +175,25 @@ export async function runResearchLoop(deps: EngineDeps): Promise<void> {
   } finally {
     await deps.emit({ type: "done" })
   }
+}
+
+async function emitExplicitAppUnavailable(
+  deps: EngineDeps,
+  appName: string,
+  reason: "app_unavailable" | "app_ambiguous",
+): Promise<void> {
+  const detail =
+    reason === "app_ambiguous"
+      ? "More than one eligible connection is configured. Choose a single connection before trying again."
+      : "Connect it and enable it for this surface before trying again."
+  await deps.emit({
+    type: "status",
+    phase: "planning",
+    round: 0,
+    model: deps.config.tier,
+    effort: deps.config.effort,
+  })
+  await deps.emit({ type: "final", markdown: `**${appName} is unavailable.** ${detail}`, sources: [] })
 }
 
 /**

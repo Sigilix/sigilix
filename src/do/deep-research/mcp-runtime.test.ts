@@ -69,6 +69,45 @@ describe("research MCP runtime binding", () => {
     expect(names).toEqual(["tenant:111"])
   })
 
+  it("resolves one explicit app catalog and preserves a typed ambiguous state", async () => {
+    const catalogBodies: unknown[] = []
+    const ready = makeEnv(async (request) => {
+      catalogBodies.push(await request.json())
+      return json({
+        tools: [
+          {
+            serverId: "linear-1",
+            vendor: "linear",
+            name: "list_comments",
+            inputSchema: { type: "object" },
+          },
+        ],
+      })
+    })
+    const runtime = buildResearchMcpRuntime(ready.env, "tenant:111", "run-explicit", "chat", "linear")!
+
+    await expect(runtime.explicitCatalog!()).resolves.toMatchObject({
+      kind: "ready",
+      tools: [{ serverId: "linear-1", vendor: "linear", name: "list_comments" }],
+    })
+    expect(catalogBodies).toEqual([{ appId: "linear" }])
+
+    const ambiguous = makeEnv(() => json({ error: "app_ambiguous" }, 409))
+    await expect(
+      buildResearchMcpRuntime(ambiguous.env, "tenant:111", "run-ambiguous", "chat", "linear")!.explicitCatalog!(),
+    ).resolves.toEqual({ kind: "unavailable", reason: "app_ambiguous" })
+  })
+
+  it("never contacts the MCP broker for the registered dark GitHub app", async () => {
+    const handler = vi.fn(() => json({ tools: [] }))
+    const { env, names } = makeEnv(handler)
+    const runtime = buildResearchMcpRuntime(env, "tenant:111", "run-github", "chat", "github")!
+
+    await expect(runtime.explicitCatalog!()).resolves.toEqual({ kind: "unavailable", reason: "app_unavailable" })
+    expect(names).toEqual([])
+    expect(handler).not.toHaveBeenCalled()
+  })
+
   it("posts an exact invocation tuple and accepts only sanitized text evidence", async () => {
     let invokeBody: unknown
     const { env } = makeEnv(async (request) => {
@@ -86,7 +125,7 @@ describe("research MCP runtime binding", () => {
         },
       })
     })
-    const runtime = buildResearchMcpRuntime(env, "tenant:99", "run-7", "deep-research")!
+    const runtime = buildResearchMcpRuntime(env, "tenant:99", "run-7", "deep-research", "linear")!
     await expect(
       runtime.invoke({
         serverId: "linear-1",
@@ -99,6 +138,7 @@ describe("research MCP runtime binding", () => {
       serverId: "linear-1",
       toolName: "list_comments",
       arguments: { issueId: "SIG-193" },
+      appId: "linear",
     })
   })
 

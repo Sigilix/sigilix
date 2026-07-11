@@ -382,11 +382,7 @@ export function isPolicyEnvelope(value: unknown): value is McpPolicyEnvelope {
 export function isStoredSurfacePolicy(value: unknown): value is McpSurfacePolicy {
   if (!isPlainObject(value)) return false
   const keys = ["chat", "deep-research", "cli", "pr-review", "agent", "memory-index"] as const
-  return (
-    Object.keys(value).length === keys.length &&
-    keys.every((key) => typeof value[key] === "boolean") &&
-    value["memory-index"] === false
-  )
+  return Object.keys(value).length === keys.length && keys.every((key) => typeof value[key] === "boolean")
 }
 
 export function canonicalMcpEndpointUrl(value: URL | string): string | null {

@@ -57,6 +57,7 @@ import { deleteRepoIndex } from "@/src/lib/index-delete"
 import { branchStateRepo } from "@/src/lib/index-branch"
 import { postReviewWorkBlocked } from "@/src/index-dispatch-post-review-work"
 import { runRateLimitGate } from "@/src/index-dispatch-rate-limit-gate"
+import { handleMcpMemoryExpireJob } from "@/src/do/mcp/mcp-memory-jobs"
 
 /**
  * Post the slash-command ack comment for `cmd` on the given PR.
@@ -226,10 +227,7 @@ export async function dispatchJob(
           dispatchedAt: Date.now(),
         }),
       )
-      // ARC-190 Task 7: when the message carries a string `runId`, the
-      // DO is the dedupe + retry source-of-truth. The wrapper posts
-      // /pickup → runs the work → posts /run-result. Legacy direct-path
-      // messages (no runId) bypass and run unchanged.
+      // ARC-190: string runId messages use the DO dedupe/retry path.
       // SIG-119: the ensemble's validator callbacks push rejection events
       // into this sink; the dispatcher flushes it once to ValidationMetricsDO
       // in the finally below (off the review hot path, non-fatal).
@@ -886,6 +884,8 @@ export async function dispatchJob(
         ...(job.threadRootId !== undefined ? { threadRootId: job.threadRootId } : {}),
         env,
       })
+    case "mcp-memory-expire":
+      return handleMcpMemoryExpireJob(job, env)
     case "index-repo":
       // ARC-235: customer-ready indexing consumer. Bootstrap jobs walk
       // the default-branch tree + filter to indexable files + process

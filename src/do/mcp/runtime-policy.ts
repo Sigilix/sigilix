@@ -8,17 +8,9 @@ export type McpRuntimeSurface = (typeof MCP_RUNTIME_SURFACES)[number]
 export const MCP_SURFACES = [...MCP_RUNTIME_SURFACES, "memory-index"] as const
 export type McpSurface = (typeof MCP_SURFACES)[number]
 
-/**
- * `memory-index` is intentionally visible in the policy contract so callers
- * cannot mistake an absent field for an enabled capability. Its literal
- * `false` type keeps it structurally unavailable until a provenance-aware
- * indexer exists.
- */
-export type McpSurfacePolicy = Readonly<
-  Record<McpRuntimeSurface, boolean> & {
-    "memory-index": false
-  }
->
+/** `memory-index` is a storage policy only. It never enters the callable
+ * runtime-surface union and defaults false until an installation admin opts in. */
+export type McpSurfacePolicy = Readonly<Record<McpSurface, boolean>>
 
 export interface CuratedReadTool {
   name: string
@@ -248,11 +240,8 @@ export function intersectMcpPolicies(
     enabled: ownerEffective.enabled && grantEffective.enabled,
     surfaces: surfacePolicy(
       Object.fromEntries(
-        MCP_RUNTIME_SURFACES.map((surface) => [
-          surface,
-          ownerEffective.surfaces[surface] && grantEffective.surfaces[surface],
-        ]),
-      ) as Record<McpRuntimeSurface, boolean>,
+        MCP_SURFACES.map((surface) => [surface, ownerEffective.surfaces[surface] && grantEffective.surfaces[surface]]),
+      ) as Record<McpSurface, boolean>,
     ),
     allowedReadTools: allowed,
     availableReadTools: ownerEffective.availableReadTools.filter((name) =>
@@ -294,6 +283,7 @@ export function vendorPolicyForUrl(rawUrl: string): VendorRuntimePolicy | null {
       cli: true,
       "pr-review": true,
       agent: true,
+      "memory-index": true,
     }),
     readTools: CURATED_READ_TOOLS[endpoint.vendor],
   }
@@ -321,8 +311,8 @@ export function effectiveMcpPolicy(rawUrl: string, stored?: StoredMcpPolicy): Ef
     enabled: stored?.enabled ?? false,
     surfaces: surfacePolicy(
       Object.fromEntries(
-        MCP_RUNTIME_SURFACES.map((surface) => [surface, base.surfaces[surface] && storedSurfaces[surface] === true]),
-      ) as Record<McpRuntimeSurface, boolean>,
+        MCP_SURFACES.map((surface) => [surface, base.surfaces[surface] && storedSurfaces[surface] === true]),
+      ) as Record<McpSurface, boolean>,
     ),
     allowedReadTools: allowed,
     availableReadTools,
@@ -363,12 +353,8 @@ export function narrowMcpPolicy(rawUrl: string, value: unknown, currentVersion =
     ) {
       return { ok: false, error: "invalid_policy" }
     }
-    if (rawSurfaces["memory-index"]) return { ok: false, error: "unsupported_surface" }
     requestedSurfaces = surfacePolicy(
-      Object.fromEntries(MCP_RUNTIME_SURFACES.map((surface) => [surface, rawSurfaces[surface]])) as Record<
-        McpRuntimeSurface,
-        boolean
-      >,
+      Object.fromEntries(MCP_SURFACES.map((surface) => [surface, rawSurfaces[surface]])) as Record<McpSurface, boolean>,
     )
   }
   if (!Array.isArray(value.allowedReadTools) || value.allowedReadTools.length > 64) {
@@ -397,8 +383,8 @@ export function narrowMcpPolicy(rawUrl: string, value: unknown, currentVersion =
       enabled: value.enabled,
       surfaces: surfacePolicy(
         Object.fromEntries(
-          MCP_RUNTIME_SURFACES.map((surface) => [surface, base.surfaces[surface] && requestedSurfaces[surface]]),
-        ) as Record<McpRuntimeSurface, boolean>,
+          MCP_SURFACES.map((surface) => [surface, base.surfaces[surface] && requestedSurfaces[surface]]),
+        ) as Record<McpSurface, boolean>,
       ),
       allowedReadTools: unique,
       maxCallsPerRun,
@@ -430,6 +416,15 @@ export function mcpSurfaceEnabled(policy: EffectiveMcpPolicy, surface: McpSurfac
   return surface !== "memory-index" && policy.enabled && policy.surfaces[surface] === true
 }
 
+export function mcpMemoryIndexEnabled(policy: EffectiveMcpPolicy): boolean {
+  return (
+    policy.vendor !== "custom" &&
+    policy.enabled &&
+    policy.surfaces["memory-index"] === true &&
+    policy.allowedReadTools.length > 0
+  )
+}
+
 function normalizePath(pathname: string): string {
   if (pathname === "/") return pathname
   return pathname.endsWith("/") ? pathname.slice(0, -1) : pathname
@@ -443,14 +438,14 @@ function isOfficialVendor(value: string): value is OfficialMcpVendor {
   return Object.hasOwn(CURATED_READ_TOOLS, value)
 }
 
-function surfacePolicy(enabled: Partial<Record<McpRuntimeSurface, boolean>> = {}): McpSurfacePolicy {
+function surfacePolicy(enabled: Partial<Record<McpSurface, boolean>> = {}): McpSurfacePolicy {
   return {
     chat: enabled.chat ?? false,
     "deep-research": enabled["deep-research"] ?? false,
     cli: enabled.cli ?? false,
     "pr-review": enabled["pr-review"] ?? false,
     agent: enabled.agent ?? false,
-    "memory-index": false,
+    "memory-index": enabled["memory-index"] ?? false,
   }
 }
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { TenantMcpGrantRegistry } from "./tenant-mcp-grant-registry"
 import { NodeSqliteStorage } from "@/src/test-shims/cloudflare-workers-shim"
 
@@ -186,6 +186,38 @@ describe("TenantMcpGrantRegistry", () => {
       grant: { grantId: "grant-2", status: "pending" },
     })
     expect(registry.revoke("missing-grant")).toBeNull()
+  })
+
+  it("runs synchronous revoke cleanup in the same transaction and rolls back on any callback failure", () => {
+    const { registry } = makeHarness()
+    registry.createPending(BASE_GRANT)
+    registry.activate(BASE_GRANT.grantId)
+    const cleanup = vi.fn(() => undefined)
+
+    expect(registry.revoke(BASE_GRANT.grantId, cleanup)).toMatchObject({ status: "revoked" })
+    expect(cleanup).toHaveBeenCalledWith(expect.objectContaining({ grantId: BASE_GRANT.grantId, status: "revoked" }))
+    expect(registry.revoke(BASE_GRANT.grantId, cleanup)).toMatchObject({ status: "revoked" })
+    expect(cleanup).toHaveBeenCalledTimes(2)
+
+    const second = registry.createPending({ ...BASE_GRANT, grantId: "grant-2" }).grant
+    registry.activate(second.grantId)
+    expect(() =>
+      registry.revoke(second.grantId, () => {
+        throw new Error("purge failed")
+      }),
+    ).toThrow("purge failed")
+    expect(registry.getActive(second.grantId)).toMatchObject({ status: "active" })
+  })
+
+  it("rejects a thenable returned from the transaction-bound revoke callback", () => {
+    const { registry } = makeHarness()
+    registry.createPending(BASE_GRANT)
+    registry.activate(BASE_GRANT.grantId)
+
+    expect(() => registry.revoke(BASE_GRANT.grantId, (() => Promise.resolve()) as never)).toThrow(
+      "revoke cleanup must be synchronous",
+    )
+    expect(registry.getActive(BASE_GRANT.grantId)).toMatchObject({ status: "active" })
   })
 
   it("garbage-collects stale pending grants into failed audit rows only", () => {

@@ -375,6 +375,12 @@ export type JobMessage =
       commentId: number
       threadRootId?: number
     }
+  | {
+      type: "mcp-memory-expire"
+      installationId: number
+      memoryId: string
+      expectedExpiresAt: number
+    }
   // ARC-234 + ARC-235: customer-ready indexing pipeline. Bootstrap jobs
   // (from the install / repos-added webhook) carry only the {owner,
   // repo, installationId, reason} producer payload. The ARC-235

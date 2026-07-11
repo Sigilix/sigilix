@@ -28,7 +28,6 @@ import {
   connectJson,
   ensureMcpConnectionsSchema,
   failClosedStoredPolicy,
-  effectiveBrokerPolicy,
   grantTransitionStatus,
   isPolicyEnvelope,
   isSessionOwnerScope,
@@ -54,8 +53,10 @@ import { guardUrl } from "@/src/do/deep-research/fetch-guard"
 import type { Env } from "@/src/shared/types/env"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { normalizeEnv } from "@/src/shared/util/normalize-env"
-import { resolveMcpRuntimeAppSelector, runtimeAppAllowsTool, runtimeAppMatchesEndpoint } from "./runtime-app-routing"
-import { buildBrokerRuntimeCatalog, readBrokerOwnerPolicy, resolveExplicitBrokerGrant } from "./broker-runtime-catalog"
+import { buildBrokerRuntimeCatalog, readBrokerOwnerPolicy } from "./broker-runtime-catalog"
+import { handleBrokerRuntimeInvoke } from "./broker-runtime-invoke"
+import { TenantMcpMemoryIndex } from "./mcp-memory-index"
+import { queryMcpMemory } from "./mcp-memory-runtime"
 
 export type { McpPolicyEnvelope, McpRuntimeToolDescriptor } from "./mcp-connections-support"
 
@@ -81,6 +82,8 @@ export interface McpServerSummary {
 export class McpConnectionsAgent extends DurableObject<Env> {
   private readonly mcp: MCPClientManager
   private readonly grants: TenantMcpGrantRegistry
+  private readonly memory: TenantMcpMemoryIndex
+  private readonly tenantInstallationId: number | null
   private readonly callbackRoutes: McpOAuthCallbackDoHandler
   private restored: Promise<void> | null = null
   /** In-flight reservation covering the async gap before the SDK row exists. */
@@ -91,6 +94,8 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     super(ctx, normalizeEnv(env))
     ensureMcpConnectionsSchema(ctx.storage)
     this.grants = new TenantMcpGrantRegistry(ctx.storage)
+    this.memory = new TenantMcpMemoryIndex(ctx.storage)
+    this.tenantInstallationId = installationIdFromTenantDoName(ctx.id.name)
     this.callbackRoutes = new McpOAuthCallbackDoHandler(ctx.storage, this.env)
     this.mcp = new MCPClientManager(MCP_CLIENT_NAME, MCP_CLIENT_VERSION, {
       storage: ctx.storage,
@@ -120,6 +125,9 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     if (request.method === "POST" && url.pathname === "/broker/runtime/catalog")
       return this.handleBrokerCatalog(request)
     if (request.method === "POST" && url.pathname === "/broker/runtime/invoke") return this.handleBrokerInvoke(request)
+    if (request.method === "POST" && url.pathname === "/broker/memory/query")
+      return this.handleBrokerMemoryQuery(request)
+    if (request.method === "POST" && url.pathname === "/broker/memory/expire") return this.handleMemoryExpire(request)
     const researchRuntime = parseResearchBrokerRuntimePath(url.pathname)
     if (request.method === "POST" && researchRuntime) {
       return researchRuntime.action === "catalog"
@@ -610,7 +618,10 @@ export class McpConnectionsAgent extends DurableObject<Env> {
   private async handleBrokerRevoke(grantId: string): Promise<Response> {
     if (!parseSafeId(grantId)) return json({ error: "not found" }, 404)
     try {
-      const grant = this.grants.revoke(grantId)
+      const grant = this.grants.revoke(grantId, () => {
+        this.memory.purgeGrant(grantId)
+        return undefined
+      })
       if (!grant) return json({ error: "not found" }, 404)
       const admitted = [...(this.brokerInvocations.get(grantId) ?? [])]
       if (admitted.length > 0) await Promise.allSettled(admitted)
@@ -657,93 +668,58 @@ export class McpConnectionsAgent extends DurableObject<Env> {
   private async handleBrokerInvoke(request: Request, fixedSurface?: "chat" | "deep-research"): Promise<Response> {
     const body = await readRuntimeJsonBody(request, MAX_RUNTIME_BODY_BYTES)
     if (body instanceof Response) return body
-    const grantId = parseSafeId(body.serverId)
-    const toolName = parseSafeId(body.toolName)
-    const runId = parseSafeId(body.runId)
-    const surface = fixedSurface ?? body.surface
-    if (!isMcpRuntimeSurface(surface) || !grantId || !toolName || !runId) {
-      return json({ error: "invalid_request" }, 400)
-    }
-    if (!fixedSurface && surface !== "cli") return json({ error: "surface_not_allowed" }, 403)
-    if (!areBoundedMcpArguments(body.arguments)) return json({ error: "invalid_arguments" }, 400)
-    const selector = resolveMcpRuntimeAppSelector(body.appId)
-    if (selector.kind === "invalid") return json({ error: "invalid_app" }, 400)
-    if (selector.kind === "unavailable") return json({ error: "app_unavailable" }, 409)
-    let grant = this.grants.getActive(grantId)
-    if (!grant) return json({ error: "tool_not_allowed" }, 403)
-    if (selector.kind === "resolved") {
-      if (
-        !runtimeAppMatchesEndpoint(selector.app, grant.serverUrl) ||
-        !runtimeAppAllowsTool(selector.app, selector.app.vendor, toolName)
-      ) {
-        return json({ error: "app_unavailable" }, 409)
-      }
-      const selected = await resolveExplicitBrokerGrant({
-        app: selector.app,
-        surface,
-        grants: this.grants.listOpen(),
-        readActiveGrant: (candidateGrantId) => this.grants.getActive(candidateGrantId),
-        readOwnerPolicy: (candidate) => readBrokerOwnerPolicy(this.ownerStub(candidate.ownerScope), candidate),
-      })
-      if (selected.kind !== "ready") return json({ error: selected.error }, 409)
-      if (selected.grantId !== grantId) return json({ error: "app_unavailable" }, 409)
-      grant = this.grants.getActive(grantId)
-      if (!grant) return json({ error: "app_unavailable" }, 409)
-    }
-    let release!: () => void
-    const admitted = new Promise<void>((resolve) => {
-      release = resolve
+    if (this.tenantInstallationId === null) return json({ error: "tenant_scope_required" }, 403)
+    return handleBrokerRuntimeInvoke({
+      body,
+      installationId: this.tenantInstallationId,
+      ...(fixedSurface ? { fixedSurface } : {}),
+      env: this.env,
+      grants: this.grants,
+      memory: this.memory,
+      activeInvocations: this.brokerInvocations,
+      ownerStub: (ownerScope) => this.ownerStub(ownerScope),
+      readOwnerPolicy: (grant) => readBrokerOwnerPolicy(this.ownerStub(grant.ownerScope), grant),
+      reserveRuntimeCall: (runId, grantId, surface, maximum) =>
+        this.reserveRuntimeCall(runId, grantId, surface, maximum),
     })
-    const active = this.brokerInvocations.get(grantId) ?? new Set<Promise<void>>()
-    active.add(admitted)
-    this.brokerInvocations.set(grantId, active)
+  }
+
+  private async handleBrokerMemoryQuery(request: Request): Promise<Response> {
+    const body = await readRuntimeJsonBody(request, MAX_RUNTIME_BODY_BYTES)
+    if (body instanceof Response) return body
+    if (this.tenantInstallationId === null) return json({ error: "tenant_scope_required" }, 403)
+    if (!isMcpRuntimeSurface(body.surface)) return json({ error: "invalid_surface" }, 400)
+    const query = typeof body.query === "string" ? body.query : ""
+    const topK = typeof body.topK === "number" ? body.topK : 4
+    const results = await queryMcpMemory({
+      env: this.env,
+      installationId: this.tenantInstallationId,
+      query,
+      topK,
+      surface: body.surface,
+      ...(body.appId === undefined ? {} : { appId: body.appId }),
+      grants: this.grants,
+      memory: this.memory,
+      readOwnerPolicy: (grant) => readBrokerOwnerPolicy(this.ownerStub(grant.ownerScope), grant),
+    })
+    return json({ results })
+  }
+
+  private async handleMemoryExpire(request: Request): Promise<Response> {
+    const body = await readRuntimeJsonBody(request, MAX_RUNTIME_BODY_BYTES)
+    if (body instanceof Response) return body
+    if (this.tenantInstallationId === null) return json({ error: "tenant_scope_required" }, 403)
     try {
-      const ownerEnvelope = await readBrokerOwnerPolicy(this.ownerStub(grant.ownerScope), grant)
-      if (!ownerEnvelope) return json({ error: "broker_unavailable" }, 502)
-      const currentGrant = this.grants.getActive(grantId)
-      if (!currentGrant) {
-        return selector.kind === "resolved"
-          ? json({ error: "app_unavailable" }, 409)
-          : json({ error: "tool_not_allowed" }, 403)
-      }
-      if (selector.kind === "resolved" && !runtimeAppMatchesEndpoint(selector.app, currentGrant.serverUrl)) {
-        return json({ error: "app_unavailable" }, 409)
-      }
-      const effective = effectiveBrokerPolicy(currentGrant, ownerEnvelope)
-      if (!mcpSurfaceEnabled(effective, surface) || !effective.allowedReadTools.includes(toolName)) {
-        return selector.kind === "resolved"
-          ? json({ error: "app_unavailable" }, 409)
-          : json({ error: "tool_not_allowed" }, 403)
-      }
-      if (selector.kind === "resolved" && !runtimeAppAllowsTool(selector.app, effective.vendor, toolName)) {
-        return json({ error: "app_unavailable" }, 409)
-      }
-      if (!this.reserveRuntimeCall(runId, grantId, surface, effective.maxCallsPerRun)) {
-        return json({ error: "max_calls_per_run_exceeded" }, 429)
-      }
-      const response = await this.ownerStub(currentGrant.ownerScope).fetch(
-        "https://mcp-connections.do/runtime/invoke",
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            runId,
-            surface,
-            serverId: currentGrant.serverId,
-            toolName,
-            arguments: body.arguments,
-          }),
-        },
+      return json(
+        this.memory.expireRecord(
+          this.tenantInstallationId,
+          typeof body.memoryId === "string" ? body.memoryId : "",
+          Number(body.expectedExpiresAt),
+          Date.now(),
+        ),
       )
-      const text = await response.text()
-      return new Response(text, { status: response.status, headers: JSON_HEADERS })
-    } catch (err) {
-      console.warn("mcp-broker: invoke owner failed", err instanceof Error ? err.message : err)
-      return json({ error: "broker_unavailable" }, 502)
-    } finally {
-      release()
-      active.delete(admitted)
-      if (active.size === 0) this.brokerInvocations.delete(grantId)
+    } catch {
+      return json({ error: "invalid_request" }, 400)
     }
   }
 
@@ -997,4 +973,12 @@ export class McpConnectionsAgent extends DurableObject<Env> {
     )
     return cursor.rowsWritten > 0
   }
+}
+
+function installationIdFromTenantDoName(name: string | undefined): number | null {
+  if (!name?.startsWith("tenant:")) return null
+  const value = name.slice("tenant:".length)
+  if (!/^\d+$/.test(value)) return null
+  const installationId = Number(value)
+  return Number.isSafeInteger(installationId) && installationId > 0 ? installationId : null
 }

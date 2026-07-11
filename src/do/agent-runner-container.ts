@@ -24,36 +24,20 @@ const RUN_EVENT_SECRET_KEY = "run-event-secret"
 // past the cap is safe (a full run edits far fewer than this many files).
 const MAX_RUN_EVENTS = 1000
 
-// ── Egress isolation (phase-2 security gate B) ────────────────────────────────
-// The container runs untrusted-input agent work, so its outbound network is
-// deny-by-default: it may reach ONLY the hosts a run genuinely needs, and
-// nothing else (every other host — incl. the cloud-metadata IP — is blocked with
-// HTTP 520 by the CF Containers platform). This governs BOTH engines, including
-// the LIVE minimal make-PR runner, so the list must cover its real reach:
-//   • github.com / api.github.com — clone, push, open the PR (+ *.githubusercontent
-//     for any raw/redirect fetch during clone)
-//   • openrouter.ai / ollama.com — the model host (per-run model.baseUrl)
-//   • api.sigilix.ai — grounding + the live-diff event ingest. ⚠️ COUPLING: the
-//     events endpoint (SIGILIX_AGENT_EVENTS_ENDPOINT) and the full engine's
-//     grounding endpoint are env-configurable — if either is ever repointed off
-//     api.sigilix.ai (e.g. a *.workers.dev fallback), add that host here or it is
-//     silently 520-blocked. Grounding is full-engine-only + fails gracefully, so
-//     verify its prod host is api.sigilix.ai BEFORE the full engine is un-gated.
-//   • registry.npmjs.org — the FULL engine's provider package (@ai-sdk/openai-
-//     compatible) is fetched at runtime; the untrusted model can't drive npm
-//     itself (no bash tool), so this entry is opencode's loader only.
-export const AGENT_RUNNER_ALLOWED_HOSTS: readonly string[] = [
-  "github.com",
-  "api.github.com",
-  "*.githubusercontent.com",
-  "openrouter.ai",
-  "ollama.com",
-  "api.sigilix.ai",
-  "registry.npmjs.org",
-]
-
-// Belt-and-suspenders: deny the cloud-metadata endpoint explicitly. CF does not
-// document a default block, and deniedHosts is evaluated first (unconditional).
+// ── Egress isolation (phase-2 security gate B) — DENYLIST-ONLY ────────────────
+// ⚠️ HARD-LEARNED: a deny-by-default ALLOWLIST (enableInternet=false +
+// allowedHosts, the original #858 design) STARVES the CF Containers platform's
+// BOOT-time outbound (image pull / health — not governed by allowedHosts), so the
+// container never boots ("container responded 500" for every dispatch). It broke
+// the LIVE runner and was reverted (#867). So we do NOT use enableInternet=false
+// or allowedHosts. Instead: keep enableInternet=true and block only the specific
+// dangerous host(s) via deniedHosts (evaluated first, unconditional). This blocks
+// the #1 vector — the cloud-metadata endpoint (credential theft) — without
+// touching boot or any host the run needs. A full allowlist that doesn't starve
+// boot needs separate CF research (platform egress groups / the outbound-handler
+// broker) — a follow-up before the full engine handles truly untrusted input.
+// Any change here MUST be verified by a LIVE dispatch (dispatched:true), not
+// docker — docker has no CF platform boot layer.
 export const AGENT_RUNNER_DENIED_HOSTS: readonly string[] = ["169.254.169.254"]
 
 /**
@@ -115,16 +99,13 @@ export class AgentRunnerContainer extends Container<Env> {
   // One-shot runs should not idle; sleep quickly after the job completes.
   override sleepAfter = "2m"
 
-  // Egress isolation (phase-2 gate B) — TEMPORARILY REVERTED to base network.
-  // Setting enableInternet=false + allowedHosts (PR #858) broke the container in
-  // prod: dispatch returns "container responded 500" for BOTH engines / any repo,
-  // i.e. the container never boots (the CF platform's boot-time outbound is not
-  // governed by allowedHosts, so deny-by-default starved boot). This restores the
-  // pre-#858 known-good network so the LIVE minimal make-PR runner works again.
-  // The allowlist/denylist consts are kept for a corrected re-add (denylist-only,
-  // keeping enableInternet=true, verified with a live boot test) BEFORE the full
-  // engine is ever enabled — the minimal loop is bounded and needs no egress gate.
+  // Egress isolation (phase-2 gate B) — DENYLIST-ONLY (boot-safe; see the consts).
+  // enableInternet stays TRUE (a deny-by-default allowlist starves CF boot → 500,
+  // learned the hard way, #858/#867). deniedHosts blocks the cloud-metadata IP
+  // unconditionally — the #1 credential-theft vector — without affecting boot or
+  // any host a run needs. Verified by a LIVE dispatch, not docker.
   override enableInternet = true
+  override deniedHosts = [...AGENT_RUNNER_DENIED_HOSTS]
 
   // -------------------------------------------------------------------------
   // Run-record helpers — thin SQLite accessors over the DO's durable storage.

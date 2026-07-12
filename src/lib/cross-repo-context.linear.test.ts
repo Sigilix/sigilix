@@ -112,6 +112,23 @@ describe("resolveConfiguredCrossRepoNamespaces", () => {
     expect(await resolveConfiguredCrossRepoNamespaces({ SIGILIX_PLATFORM_DB: db }, 42, "acme", "infra")).toEqual([])
   })
 
+  it("resolves configured siblings when the reviewed PR is in the secondary repo", async () => {
+    const db = await seed([101, 102])
+
+    expect(await resolveConfiguredCrossRepoNamespaces({ SIGILIX_PLATFORM_DB: db }, 42, "acme", "web")).toEqual([
+      "acme/api",
+    ])
+  })
+
+  it("expands an all-repositories binding from any installation member", async () => {
+    const db = await seed([], true)
+
+    expect(await resolveConfiguredCrossRepoNamespaces({ SIGILIX_PLATFORM_DB: db }, 42, "acme", "infra")).toEqual([
+      "acme/api",
+      "acme/web",
+    ])
+  })
+
   it("returns [] when D1 is unbound", async () => {
     expect(await resolveConfiguredCrossRepoNamespaces({}, 42, "acme", "api")).toEqual([])
   })

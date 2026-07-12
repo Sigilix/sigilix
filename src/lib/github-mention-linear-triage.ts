@@ -75,7 +75,6 @@ export async function runLinearTriageAction(
       config &&
       binding?.accessState === "allowed" &&
       binding.installationId === args.installationId &&
-      binding.githubRepoFullName.toLowerCase() === `${args.owner}/${args.repo}`.toLowerCase() &&
       teamIsSelected(config, binding.teamId)
     ) {
       if (config.createIssue === "disabled") return { kind: "disabled" }

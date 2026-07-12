@@ -464,16 +464,28 @@ export async function resolveLinearTeamBindingForRepo(
   installationId: number,
   repoFullName: string,
 ): Promise<LinearTeamBinding | null> {
+  const normalizedRepo = repoFullName.trim()
+  if (normalizedRepo.length > 256 || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(normalizedRepo)) return null
   const row = await db(env)
     .prepare(
       `SELECT ${TEAM_COLUMNS_B}` +
         " FROM linear_team_binding b JOIN linear_connection c" +
         " ON c.installation_id = b.installation_id AND c.linear_organization_id = b.linear_organization_id" +
-        " WHERE b.installation_id = ? AND lower(b.github_repo_full_name) = lower(?)" +
+        " WHERE b.installation_id = ? AND (" +
+        " lower(b.github_repo_full_name) = lower(?)" +
+        " OR EXISTS (SELECT 1 FROM linear_team_repo tr" +
+        "   WHERE tr.installation_id = b.installation_id" +
+        "   AND tr.linear_organization_id = b.linear_organization_id" +
+        "   AND tr.team_id = b.team_id" +
+        "   AND lower(tr.github_repo_full_name) = lower(?))" +
+        " OR (b.use_all_repos = 1 AND EXISTS (SELECT 1 FROM repo r" +
+        "   WHERE r.installation_id = b.installation_id" +
+        "   AND lower(r.full_name) = lower(?)))" +
+        ")" +
         " AND b.access_state = 'allowed' AND c.status = 'active'" +
         " ORDER BY b.selected DESC, lower(b.team_name), b.team_id LIMIT 1",
     )
-    .bind(installationId, repoFullName)
+    .bind(installationId, normalizedRepo, normalizedRepo, normalizedRepo)
     .first<TeamRow>()
   if (!row) return null
   const repos = await loadTeamReposFor(env, Number(row.installation_id), row.linear_organization_id, row.team_id)

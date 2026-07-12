@@ -16,6 +16,7 @@
 import { generate } from "./ollama"
 import { chat as ollamaChat } from "./ollama-chat"
 import { chat as openrouterChat } from "./openrouter-chat"
+import { chat as bedrockChat } from "./bedrock-chat"
 import { embedText, embedTexts, EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "./embeddings"
 import type { ChatArgs, ChatResult, ModelProviderPort } from "@/src/shared/ports/model"
 import type { EmbeddingPort } from "@/src/shared/ports/embedding"
@@ -41,10 +42,52 @@ export function isOpenRouterModel(model: string): boolean {
 }
 
 /**
- * Provider-routing chat: OpenRouter-shaped model → OpenRouter adapter, else Ollama.
- * Same `ChatArgs → ChatResult` contract regardless of provider.
+ * Bedrock-ensemble migration: the vendor/geo prefixes a Bedrock model id (or
+ * cross-region inference profile) can start with. An explicit REGISTRY, not a
+ * widened shape heuristic (per the fragility note above): a dot alone can't
+ * separate providers — the Ollama tag "glm-5.1:cloud" carries a dot, and real
+ * Bedrock ids can carry a ":" version suffix ("...-v1:0"), so neither character
+ * is discriminating. The first dot-segment is unambiguous.
+ */
+const BEDROCK_ID_PREFIXES = new Set([
+  // cross-region inference-profile geo prefixes ("us.anthropic.claude-sonnet-5")
+  "us",
+  "eu",
+  "ap",
+  "apac",
+  "global",
+  // model-id vendor prefixes ("deepseek.v3.2", "zai.glm-5", "nvidia.nemotron-super-3-120b")
+  "anthropic",
+  "deepseek",
+  "zai",
+  "nvidia",
+  "mistral",
+  "amazon",
+  "meta",
+  "ai21",
+  "cohere",
+])
+
+/**
+ * True when `model` is an AWS Bedrock id: no OpenRouter "/" and a first
+ * dot-segment in the vendor/geo registry. Checked FIRST by the router below —
+ * a Bedrock id never contains "/", and no Ollama tag's first dot-segment is a
+ * Bedrock vendor. Basis for per-call key selection too (`selectModelApiKey`).
+ */
+export function isBedrockModel(model: string): boolean {
+  if (model.includes("/")) return false
+  const dot = model.indexOf(".")
+  if (dot <= 0) return false
+  return BEDROCK_ID_PREFIXES.has(model.slice(0, dot))
+}
+
+/**
+ * Provider-routing chat: Bedrock-registry id → Bedrock adapter; OpenRouter-shaped
+ * model → OpenRouter adapter; else Ollama. Same `ChatArgs → ChatResult` contract
+ * regardless of provider.
  */
 export function chat(args: ChatArgs): Promise<ChatResult> {
+  if (isBedrockModel(args.model)) return bedrockChat(args)
   return isOpenRouterModel(args.model) ? openrouterChat(args) : ollamaChat(args)
 }
 

@@ -61,9 +61,10 @@ import {
   SYNTHESIZER_CONFIG,
   SYNTHESIZER_MODEL,
   modelApiKeys,
+  resolveConfigKeys,
   runSynthesizer,
-  selectConfigApiKey,
 } from "@/src/lib/ensemble/adapters/model-provider"
+import { resolveBedrockSynthConfig } from "@/src/lib/ensemble/adapters/model-provider-bedrock"
 import { isOpenRouterModel } from "@/src/shared/adapters/model"
 import type { ModelConfig } from "@/src/lib/ensemble/domain/model-policy"
 import { SYNTHESIZER_TIMEOUT_MS, SYNTHESIZER_RETRY_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
@@ -477,10 +478,13 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
                 : SYNTHESIZER_CONFIG.fallback,
             }
           : undefined
-      // SIG-406: the synth runner uses ONE key (selected by model-id shape). A user
-      // override that mixes providers (primary + fallback on different providers)
-      // would make `selectConfigApiKey` throw into an opaque synth timeout — drop the
-      // mismatched fallback (+ log) so the override degrades gracefully.
+      // SIG-406: a USER override that mixes providers (primary + fallback on
+      // different providers) drops the mismatched fallback (+ log) so the
+      // override degrades gracefully. Bedrock-ensemble migration NOTE: keys are
+      // now resolved per leg (`resolveConfigKeys`, below) which would serve a
+      // mixed USER override without throwing — this guard is kept DELIBERATELY
+      // so tenant-facing sigilix.json semantics stay exactly as shipped
+      // (per-leg keys are reserved for the env-flagged Bedrock lineup).
       if (
         synthConfigOverride?.fallback != null &&
         isOpenRouterModel(synthConfigOverride.fallback) !== isOpenRouterModel(synthConfigOverride.primary)
@@ -571,6 +575,22 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
         })),
       )
 
+      // Bedrock-ensemble migration: with NO per-PR user override, the
+      // env-flagged Bedrock synth config applies (`undefined` when the flag is
+      // off/unset or AWS creds are incomplete → the shipped SYNTHESIZER_CONFIG,
+      // byte-identical). A user sigilix.json override ALWAYS wins — the flag
+      // never silently replaces a tenant's explicit model choice.
+      if (synthConfigOverride === undefined) {
+        const bedrockSynth = resolveBedrockSynthConfig(env)
+        if (bedrockSynth !== undefined) synthConfigOverride = bedrockSynth
+      }
+      // SIG-406 / Bedrock migration: keys are selected by model-id shape, PER
+      // LEG — the Bedrock primary uses the packed credential envelope while its
+      // cross-provider OpenRouter fallback leg uses the OpenRouter key (a
+      // fallback with no key is stripped from the effective config). Resolved
+      // ONCE here; both synth attempts reuse it.
+      const synthKeys = resolveConfigKeys(synthConfigOverride ?? SYNTHESIZER_CONFIG, modelApiKeys(env))
+      const effectiveSynthOverride = synthConfigOverride !== undefined ? synthKeys.config : undefined
       const attemptSynth = async (
         userMessage: string,
         timeoutMs: number,
@@ -584,9 +604,8 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
             // (CR catch on PR #42).
             (signal) =>
               runSynthesizer({
-                // SIG-406: synth runs on OpenRouter (ultra); the key is selected by
-                // the effective config's model-id shape (a `:cloud` override → ollama).
-                apiKey: selectConfigApiKey(synthConfigOverride ?? SYNTHESIZER_CONFIG, modelApiKeys(env)),
+                apiKey: synthKeys.apiKey,
+                ...(synthKeys.fallbackApiKey !== undefined ? { fallbackApiKey: synthKeys.fallbackApiKey } : {}),
                 systemPrompt: synthSystemPrompt,
                 userMessage,
                 chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
@@ -595,7 +614,7 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
                 // specialist fan-out above.
                 perfCtx,
                 provenanceSources,
-                ...(synthConfigOverride ? { configOverride: synthConfigOverride } : {}),
+                ...(effectiveSynthOverride ? { configOverride: effectiveSynthOverride } : {}),
               }),
             timeoutMs,
             orchCtrl.signal,

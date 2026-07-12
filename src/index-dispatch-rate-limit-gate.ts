@@ -19,6 +19,13 @@ import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { attachExistingCheckRun, completeCheckRun } from "@/src/lib/pr-review-check-run"
 
+/**
+ * Hidden HTML marker on the over-cap notice. Lets a later push find an existing notice
+ * on the PR and skip re-posting, instead of stacking one comment per push. Invisible in
+ * rendered markdown; matched with a plain substring check on the comment body.
+ */
+const RATE_LIMIT_COMMENT_MARKER = "<!-- sigilix:rate-limit-notice -->"
+
 export interface RateLimitGateResult {
   /** true = caller must return immediately (rate-limited + comment posted). */
   skipped: boolean
@@ -48,12 +55,20 @@ export async function runRateLimitGate(
     checkRunId: number | undefined
   },
 ): Promise<RateLimitGateResult> {
-  // Resolve the installation's plan/tier so `resolveRateLimitCap` uses the tenant's
-  // real cap (a `pro`/`max`/`ultra` org is NOT free-capped at 2). readInstallationPlan
-  // THROWS on a missing binding or a D1 fault — catch it and fall back to the default
-  // (free) cap so a transient tier-read fault never widens the cap silently, and the
-  // gate stays fail-open on the review-blocking path.
+  // Resolve the installation's plan/tier so the gate uses the tenant's real cap AND
+  // real cost budget. readInstallationPlan THROWS on a missing binding or a D1 fault.
+  //
+  // sig-cost-primary: on a fault we must BYPASS the gate, not fall back to `null`.
+  // `null` does NOT mean "no limit" — it normalizes to the FREE tier on BOTH dimensions
+  // (resolveRateLimitCap(null) → the free count cap; normalizeBudgetTier(null) → "free"
+  // → the free USD budget). The usage read is a SEPARATE D1 statement that can still
+  // succeed, so a partial fault would apply the Free budget to a paying customer and
+  // BLOCK a review they had every right to run — fail-CLOSED, the exact opposite of the
+  // intent. (Harmless while only a count cap rode on the tier string and the gate was in
+  // shadow; not harmless now that a USD budget rides on it and the gate enforces.)
+  // An unknown tier is an infrastructure failure, not a free plan: let the review run.
   let tier: string | null = null
+  let tierReadFailed = false
   try {
     tier = await readInstallationPlan(env, args.installationId)
   } catch (err) {
@@ -65,6 +80,7 @@ export async function runRateLimitGate(
       }),
     )
     tier = null
+    tierReadFailed = true
   }
 
   // sig-trial-cap: a subscriber on their 14-day TRIAL gets the tier's FEATURES but HALF
@@ -77,13 +93,20 @@ export async function runRateLimitGate(
   const subscriptionStatus = await readTenantSubscriptionStatus(env, args.installationId)
   const trialing = !isFullPaidStatus(subscriptionStatus)
 
+  // `bypassReason` short-circuits checkRateLimit to allowed:true before any D1 read.
+  // Both reasons end in the SAME allow, so precedence is a telemetry choice only: the
+  // caller's explicit slash-command rerun wins, and "tier-read-failed" is reported when
+  // the fault is the sole reason we are letting this review through.
+  const bypassReason =
+    args.bypassClosedSkip === true ? "slash-command-rerun" : tierReadFailed ? "tier-read-failed" : undefined
+
   const rateLimit = await checkRateLimit(env, {
     installationId: args.installationId,
     authorLogin: args.authorLogin,
     nowMs: Date.now(),
     tier,
     trialing,
-    ...(args.bypassClosedSkip === true ? { bypassReason: "slash-command-rerun" } : {}),
+    ...(bypassReason !== undefined ? { bypassReason } : {}),
   })
 
   if (!rateLimit.allowed) {
@@ -98,14 +121,37 @@ export async function runRateLimitGate(
         installationId: args.installationId,
       })
       const client = new GitHubClient({ token })
-      const mins = Math.max(1, Math.ceil(rateLimit.resetMs / 60000))
-      await client.createIssueComment(
-        args.owner,
-        args.repo,
-        args.prNumber,
-        `**Sigilix · Rate limit reached** — ${rateLimit.used} of ${rateLimit.cap} reviews used in the past 5h. Next review slot in ~${mins}m.`,
-      )
-      posted = true
+      // Explain the ACTUAL binding dimension. Cost is designed to bind FIRST, so a
+      // cost-blocked review is normally still under its count cap and `resetMs` (which
+      // is count-based) is 0 — rendering the count numbers there would claim
+      // "N of M reviews used … next slot in ~1m", every part of which is false.
+      const body =
+        rateLimit.limitedBy === "cost"
+          ? `${RATE_LIMIT_COMMENT_MARKER}\n**Sigilix · Usage budget reached** — this repo has used its review budget for the past 5h. ` +
+            `Reviews are metered by model spend, not PR count, so a large diff uses more of the budget than a small one. ` +
+            `The window rolls continuously; the next review will run once earlier usage ages out (up to 5h).`
+          : `${RATE_LIMIT_COMMENT_MARKER}\n**Sigilix · Rate limit reached** — ${rateLimit.used} of ${rateLimit.cap} reviews used in the past 5h. ` +
+            `Next review slot in ~${Math.max(1, Math.ceil(rateLimit.resetMs / 60000))}m.`
+
+      // Dedupe: a blocked author typically keeps pushing, and every push re-enters this
+      // gate. Without this, each push posts another "budget reached" comment. One notice
+      // per PR is enough — the user already knows. An existing marker counts as "posted"
+      // so the review is still skipped (they have been told), not silently re-run.
+      const existing = await client.listIssueComments(args.owner, args.repo, args.prNumber)
+      if (existing.some((c) => (c.body ?? "").includes(RATE_LIMIT_COMMENT_MARKER))) {
+        console.log(
+          JSON.stringify({
+            event: "rate-limit-comment-deduped",
+            owner: args.owner,
+            repo: args.repo,
+            prNumber: args.prNumber,
+          }),
+        )
+        posted = true
+      } else {
+        await client.createIssueComment(args.owner, args.repo, args.prNumber, body)
+        posted = true
+      }
     } catch (err) {
       console.warn(
         JSON.stringify({

@@ -1115,6 +1115,19 @@ SIGILIX_TESTS_VALIDATOR_MODE = "enforce"
 # no inline findings (which is correct for a docs PR).
 SIGILIX_ENSEMBLE_ROUTER_ENABLED = "on"
 
+# Bedrock-ensemble migration (#892): flip the four SCREENED specialists —
+# security, tests, performance, synth — onto the AWS Bedrock lineup
+# (model-provider-bedrock.ts). LOGIC IS NOT MOVED by this global flag (it stays
+# on OpenRouter / kimi-k2.7-code until the explicit per-role
+# SIGILIX_ENSEMBLE_PROVIDER_LOGIC flip, pending the SIG-450 K≥12 bake-off).
+# Requires all three AWS creds present or the flag fail-safes back to OpenRouter:
+# AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY are SECRETS (set via
+# `wrangler versions secret put`, never committed); AWS_REGION is a plain var.
+# Rollback: set SIGILIX_ENSEMBLE_PROVIDER = "openrouter" (or remove this line) —
+# no data/schema change; the OpenRouter lineup is byte-identical to pre-#892.
+AWS_REGION = "us-east-1"
+SIGILIX_ENSEMBLE_PROVIDER = "bedrock"
+
 # SIG-224/227b: dynamic dispatcher mode. Flipped shadow -> "enforce_rules" 2026-06-03
 # for CONCURRENT-REVIEW LATENCY RELIEF (#66): under Ollama-Turbo contention reviews
 # blow the 895s orch budget and die (cooked, not late). "enforce_rules" is the

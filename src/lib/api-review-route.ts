@@ -96,8 +96,11 @@ async function admitUnderDailyCeiling(env: Env): Promise<boolean> {
 }
 
 /** Inert read bindings so Mode A can't touch any tenant's indexed code (retrieval +
- *  graph return nothing → genuinely diff-only). Mirrors the CLI's createLocalEnv stub. */
-function ungroundedEnv(env: Env): Env {
+ *  graph return nothing → genuinely diff-only). Mirrors the CLI's createLocalEnv stub.
+ *  Exported for the public demo route (api-demo-review-route.ts), which reviews a
+ *  stranger's PR and must be held to the SAME no-tenant-code guarantee — one
+ *  definition, so the two can never drift apart. */
+export function ungroundedEnv(env: Env): Env {
   const emptyIndex = {
     query: async () => ({ matches: [] }),
     insert: async () => undefined,

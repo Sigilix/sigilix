@@ -39,16 +39,18 @@
 // array; a DEGRADED (specialist-unavailable) review returns 200 but carries
 // `incomplete.rolesMissing` and says so in the summary.
 
+import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { PrReviewFinding, CodeContext } from "@/src/shared/domain/pr-review-finding"
 import { handlePrReviewEnsemble } from "@/src/lib/ensemble/app/orchestrator"
-import { isDryRunEngineFailure } from "@/src/lib/ensemble/app/session"
+import { isDryRunEngineFailure, type DryRunReview } from "@/src/lib/ensemble/app/session"
 import { computeReviewCost } from "@/src/lib/ensemble-slo-telemetry"
 import { severityLabelForScore } from "@/src/lib/ensemble/domain/verdict"
 import { trustWord } from "@/src/lib/trust-ledger-render"
 import { diffReviewClient } from "@/src/lib/api-review-diff-client"
 import { ungroundedEnv } from "@/src/lib/api-review-route"
 import { attachCodeContextToReview } from "@/src/shared/util/diff-code-context"
+import { hasJsonContentType } from "@/src/lib/portal-cors"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import {
   consumeIpQuota,
@@ -75,7 +77,24 @@ const MAX_BODY_BYTES = 4_096
 const MAX_EVIDENCE_LINES = 12
 const MAX_EVIDENCE_CHARS = 800
 
-const DEFAULT_DEMO_ORIGINS = "https://sigilix.ai,https://www.sigilix.ai,http://localhost:3000"
+// The marketing site only. NO localhost in the shipped default — a locally-served
+// attacker page must not get a readable (CORS-granted) response in prod. Dev sets
+// SIGILIX_DEMO_ORIGINS explicitly to add its localhost origin.
+const DEFAULT_DEMO_ORIGINS = "https://sigilix.ai,https://www.sigilix.ai"
+
+/**
+ * The env the demo engine runs under. `ungroundedEnv` already stubs code-index + graph
+ * retrieval inert (a stranger's repo is not indexed, and this also means no tenant's
+ * indexed code can ever be reached). On TOP of that, review-memory and learnings are
+ * forced OFF — exactly as `/v1/review`'s Mode B does (`groundedReviewEnv`) and for the
+ * same reason: the demo passes no `repoId`, so leaving them on would read stale legacy
+ * owner/repo records AND could fire the SIG-280 shadow KV write keyed on a STRANGER's
+ * owner/repo. Off → the demo review is a pure read with no cross-tenant reach, robustly
+ * (a structural guarantee) rather than incidentally.
+ */
+function demoEngineEnv(env: DemoEnv): Env {
+  return ungroundedEnv({ ...env, OPENCLAW_REVIEW_MEMORY_ENABLED: "off", OPENCLAW_LEARNINGS_MODE: "off" })
+}
 
 // ─── the public contract (the marketing site is built against this) ─────
 
@@ -222,6 +241,22 @@ export async function handleDemoReviewRoute(request: Request, env: DemoEnv): Pro
     return fail("demo_disabled", "The live demo is currently unavailable.", 503)
   }
 
+  // 1b. CROSS-ORIGIN DRIVE-BY GUARD. `application/json` is NOT a CORS-safelisted
+  //     content type, so requiring it forces a browser to PREFLIGHT — and the preflight
+  //     (handleDemoPreflight) 403s any origin not on the allowlist, before the POST ever
+  //     runs. Without this a malicious page could fire a no-preflight "simple" POST
+  //     (text/plain body) that STILL spends money even though it can't read the reply.
+  //     A same-origin/curl caller (no Origin header) is unaffected — the IP + budget
+  //     caps are its bound. An Origin header that IS present but not allowlisted is
+  //     rejected outright (belt-and-braces with the preflight).
+  if (!hasJsonContentType(request)) {
+    return fail("invalid_request", "Content-Type must be application/json.", 415)
+  }
+  const origin = request.headers.get("origin")
+  if (origin !== null && allowedOrigin(request, env) === null) {
+    return fail("forbidden", "This origin is not permitted to use the demo.", 403)
+  }
+
   // 2. Body (tiny cap) + URL shape.
   let raw: unknown
   try {
@@ -310,7 +345,7 @@ export async function handleDemoReviewRoute(request: Request, env: DemoEnv): Pro
       prNumber: target.prNumber,
       headSha: meta.value.headSha,
       installationId: 0, // no installation → no usage_ledger row (see header)
-      env: ungroundedEnv(env), // no index/graph retrieval: a stranger's repo is not indexed
+      env: demoEngineEnv(env), // no index/graph retrieval AND review-memory/learnings OFF (see below)
       githubClient: diffReviewClient({
         owner: target.owner,
         repo: target.repo,
@@ -336,8 +371,9 @@ export async function handleDemoReviewRoute(request: Request, env: DemoEnv): Pro
     return fail("review_failed", "The review could not be completed. Please try again.", 500)
   }
 
-  // Charge the REAL cost the ensemble reports, reconciling the reservation.
-  const costUsd = computeReviewCost(result.telemetry.tokenUsageByModel).totalUsd
+  // Charge the REAL cost the ensemble reports, reconciling the reservation. `?? {}` so
+  // a telemetry shape that ever omits the ledger can't throw past settleDemoSpend.
+  const costUsd = computeReviewCost(result.telemetry.tokenUsageByModel ?? {}).totalUsd
   await settleDemoSpend(env, now, costUsd)
 
   // RECALL-SAFETY: an engine failure is a 500, NEVER a 200 with an empty findings list.
@@ -368,16 +404,14 @@ export async function handleDemoReviewRoute(request: Request, env: DemoEnv): Pro
   return ok(body)
 }
 
-/** Shape the engine's dry-run review into the public demo contract. */
+/** Shape the engine's dry-run review into the public demo contract. Typed as the real
+ *  `DryRunReview` (not a structural subset) so a change to that shape — e.g. dropping
+ *  `incomplete` or `unanchoredFindings` — is a compile error here, not a silently
+ *  dropped finding or a degraded-banner that stops firing. */
 function buildResponse(
   target: DemoPrTarget,
   meta: { title: string; changedFiles: number },
-  review:
-    | {
-        verdict: { summary: string; findings: readonly PrReviewFinding[] }
-        incomplete?: { rolesMissing: readonly string[] }
-      }
-    | undefined,
+  review: DryRunReview | undefined,
   diff: string,
   durationMs: number,
 ): DemoReviewResponse {
@@ -397,8 +431,16 @@ function buildResponse(
       findings: [],
     }
   }
-  const enriched = attachCodeContextToReview({ verdict: review.verdict, unanchoredFindings: [] }, diff)
-  const findings = enriched.verdict.findings.map(toDemoFinding)
+  // RECALL-SAFETY: include the BODY-ONLY (unanchored) findings, not just the inline
+  // ones. In a diff-only/ungrounded review the model often cites a line that isn't an
+  // added line, so its finding lands in `unanchoredFindings`; dropping those would make
+  // a review whose only issue is body-only render as "0 findings" — a real finding
+  // rendering as a clean pass. Every other renderer in the repo merges both lists.
+  const enriched = attachCodeContextToReview(
+    { verdict: review.verdict, unanchoredFindings: review.unanchoredFindings },
+    diff,
+  )
+  const findings = [...enriched.verdict.findings, ...enriched.unanchoredFindings].map(toDemoFinding)
   const rolesMissing = review.incomplete?.rolesMissing ?? []
   // RECALL-SAFETY: a degraded review says so in the human-facing summary too — a
   // partial review must never read as a confident clean pass.

@@ -123,7 +123,14 @@ function stubGithub(
 }
 
 /** A successful dry-run engine result carrying one finding and a $0.30 token bill. */
-function engineOk(overrides: { costUsd?: number; findings?: unknown[]; incomplete?: { rolesMissing: string[] } } = {}) {
+function engineOk(
+  overrides: {
+    costUsd?: number
+    findings?: unknown[]
+    unanchoredFindings?: unknown[]
+    incomplete?: { rolesMissing: string[] }
+  } = {},
+) {
   return {
     status: "skipped",
     telemetry: {
@@ -146,7 +153,7 @@ function engineOk(overrides: { costUsd?: number; findings?: unknown[]; incomplet
           },
         ],
       },
-      unanchoredFindings: [],
+      unanchoredFindings: overrides.unanchoredFindings ?? [],
       ...(overrides.incomplete ? { incomplete: overrides.incomplete } : {}),
     },
   } as unknown as Awaited<ReturnType<typeof handlePrReviewEnsemble>>
@@ -161,6 +168,44 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+})
+
+describe("cross-origin drive-by guard (content-type + origin)", () => {
+  it("415s a POST whose Content-Type is not application/json (blocks the no-preflight simple request)", async () => {
+    const github = stubGithub()
+    const request = new Request("https://api.sigilix.ai/v1/demo/review", {
+      method: "POST",
+      headers: { "content-type": "text/plain", "cf-connecting-ip": "203.0.113.9" },
+      body: JSON.stringify({ prUrl: PR_URL }),
+    })
+    const response = await handleDemoReviewRoute(request, env())
+    expect(response.status).toBe(415)
+    expect(github.calls).toHaveLength(0)
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+
+  it("403s a POST from a present-but-disallowed Origin (before spending anything)", async () => {
+    const github = stubGithub()
+    const response = await handleDemoReviewRoute(post({ prUrl: PR_URL }, { origin: "https://evil.example" }), env())
+    expect(response.status).toBe(403)
+    expect(await response.json()).toMatchObject({ error: "forbidden" })
+    expect(github.calls).toHaveLength(0)
+    expect(mockEngine).not.toHaveBeenCalled()
+  })
+
+  it("allows an allowlisted Origin", async () => {
+    stubGithub()
+    mockEngine.mockResolvedValue(engineOk())
+    const response = await handleDemoReviewRoute(post({ prUrl: PR_URL }, { origin: "https://sigilix.ai" }), env())
+    expect(response.status).toBe(200)
+  })
+
+  it("allows a no-Origin caller (curl / same-origin) — the IP + budget caps bound it", async () => {
+    stubGithub()
+    mockEngine.mockResolvedValue(engineOk())
+    const response = await handleDemoReviewRoute(post({ prUrl: PR_URL }), env())
+    expect(response.status).toBe(200)
+  })
 })
 
 describe("kill switch — FAIL CLOSED", () => {
@@ -551,6 +596,43 @@ describe("the review itself is READ-ONLY", () => {
     const index = injected.OPENCLAW_CODE_INDEX as unknown as { query: () => Promise<{ matches: unknown[] }> }
     expect(await index.query()).toEqual({ matches: [] })
   })
+
+  it("forces review-memory and learnings OFF — no cross-tenant read, no shadow KV write", async () => {
+    stubGithub()
+    mockEngine.mockResolvedValue(engineOk())
+    await handleDemoReviewRoute(post({ prUrl: PR_URL }), env())
+    const injected = (mockEngine.mock.calls[0]![0] as EnsembleHandlerArgs).env as unknown as Record<string, string>
+    expect(injected.OPENCLAW_REVIEW_MEMORY_ENABLED).toBe("off")
+    expect(injected.OPENCLAW_LEARNINGS_MODE).toBe("off")
+  })
+})
+
+describe("recall-safety — body-only findings are not dropped", () => {
+  it("includes UNANCHORED findings (a body-only issue must not render as 0 findings)", async () => {
+    stubGithub()
+    mockEngine.mockResolvedValue(
+      engineOk({
+        findings: [],
+        unanchoredFindings: [
+          {
+            path: "src/pay.ts",
+            line: 1,
+            score: 5,
+            category: "security",
+            headline: "Unbounded fee multiplier",
+            body: "This can overflow.",
+            trust: { tier: "grounded-model" },
+          },
+        ],
+      }),
+    )
+    const response = await handleDemoReviewRoute(post({ prUrl: PR_URL }), env())
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { stats: { findingsCount: number }; findings: Array<{ severity: string }> }
+    // The only finding is body-only — it MUST still be reported, not silently dropped.
+    expect(body.stats.findingsCount).toBe(1)
+    expect(body.findings[0]!.severity).toBe("P0")
+  })
 })
 
 describe("the success contract (the marketing site is built against this)", () => {
@@ -645,4 +727,16 @@ describe("GitHub unavailability", () => {
     expect(await response.json()).toMatchObject({ error: "github_unavailable" })
     expect(mockEngine).not.toHaveBeenCalled()
   })
+
+  it.each([401, 403])(
+    "maps a GitHub %d (bad token / rate-limit) to github_unavailable, NOT not_public",
+    async (status) => {
+      // A public repo must never be accused of being private because OUR token expired
+      // or OUR shared egress IP hit GitHub's rate limit.
+      stubGithub({ repo: { status, body: { message: "rate limited" } } })
+      const response = await handleDemoReviewRoute(post({ prUrl: PR_URL }), env())
+      expect(response.status).toBe(502)
+      expect(await response.json()).toMatchObject({ error: "github_unavailable" })
+    },
+  )
 })

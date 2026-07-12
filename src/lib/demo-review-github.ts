@@ -67,9 +67,11 @@ function num(v: unknown): number {
 }
 
 /**
- * Assert the repo exists AND is public. 404/403 (which is what an unauthenticated read
- * of a private/nonexistent repo returns) → `not_public`, so we never disclose whether a
+ * Assert the repo exists AND is public. A 404 (what an unauthenticated read of a
+ * private/nonexistent repo returns) → `not_public`, so we never disclose whether a
  * private repo exists. A 200 whose `private` is anything but `false` → `not_public` too.
+ * A 401/403 is an operational fault (our token / our rate limit), not the user's repo —
+ * see the status handling below.
  */
 export async function fetchPublicRepo(env: DemoEnv, target: DemoPrTarget): Promise<DemoGithubResult<true>> {
   let response: Response
@@ -80,8 +82,22 @@ export async function fetchPublicRepo(env: DemoEnv, target: DemoPrTarget): Promi
   } catch (error) {
     return { ok: false, failure: { kind: "unavailable", detail: error instanceof Error ? error.message : "fetch" } }
   }
-  if (response.status === 404 || response.status === 403 || response.status === 401) {
-    return { ok: false, failure: { kind: "not_public" } }
+  // 404 is the ONLY status that means "private or nonexistent" (an unauthenticated —
+  // or under-scoped — read of a private repo is a 404). A 401/403 here is an
+  // OPERATIONAL fault (a bad SIGILIX_DEMO_GITHUB_TOKEN, or GitHub's per-egress-IP rate
+  // limit exhausted) — NOT the user's repo being private. Reporting it as `not_public`
+  // would accuse a legitimate public repo of being private and mask a spend/DoS alarm,
+  // so it maps to `unavailable` (→ 502) and is logged loudly.
+  if (response.status === 404) return { ok: false, failure: { kind: "not_public" } }
+  if (response.status === 401 || response.status === 403) {
+    console.error(
+      JSON.stringify({
+        event: "demo-github-auth-or-ratelimit",
+        status: response.status,
+        remaining: response.headers.get("x-ratelimit-remaining"),
+      }),
+    )
+    return { ok: false, failure: { kind: "unavailable", detail: `repo lookup returned ${response.status}` } }
   }
   if (!response.ok) {
     return { ok: false, failure: { kind: "unavailable", detail: `repo lookup returned ${response.status}` } }
@@ -111,6 +127,17 @@ export async function fetchPrMeta(env: DemoEnv, target: DemoPrTarget): Promise<D
   const headSha = typeof body?.head?.sha === "string" ? body.head.sha : ""
   if (!body || headSha === "") {
     return { ok: false, failure: { kind: "unavailable", detail: "pull response missing head sha" } }
+  }
+  // FAIL CLOSED on the size fields: they drive the diff-size cap, so if GitHub omits
+  // them we must NOT read them as 0 (which would silently pass an unbounded PR through
+  // to the model). An absent count → `unavailable`, not a free pass. GitHub's pulls
+  // endpoint always returns these, so this only fires on a malformed response.
+  if (
+    typeof body.changed_files !== "number" ||
+    typeof body.additions !== "number" ||
+    typeof body.deletions !== "number"
+  ) {
+    return { ok: false, failure: { kind: "unavailable", detail: "pull response missing size fields" } }
   }
   return {
     ok: true,

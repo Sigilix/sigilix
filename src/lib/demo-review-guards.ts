@@ -165,7 +165,28 @@ export function parseDemoPrUrl(raw: string): DemoPrTarget | null {
   if (!/^[0-9]+$/.test(num)) return null
   const prNumber = Number(num)
   if (!Number.isSafeInteger(prNumber) || prNumber <= 0) return null
-  return { owner, repo: repo.replace(/\.git$/, ""), prNumber }
+  const cleanRepo = repo.replace(/\.git$/, "")
+  if (cleanRepo === "") return null // e.g. ".git" strips to empty → not a real repo
+  return { owner, repo: cleanRepo, prNumber }
+}
+
+/**
+ * The quota bucket key for an IP. For IPv6 we bucket on the /64 PREFIX, not the full
+ * address: a single host is routinely handed an entire /64 (18 quintillion addresses)
+ * and can rotate its source address per request, so keying on the full address would
+ * make the per-IP cap trivially bypassable. IPv4 keeps its full address.
+ */
+export function ipBucket(ip: string): string {
+  if (ip.includes(":")) {
+    // Expand `::` so we can take a stable first-four-hextet (/64) prefix.
+    const [head = "", tail = ""] = ip.split("::")
+    const headParts = head.split(":").filter(Boolean)
+    const tailParts = tail.split(":").filter(Boolean)
+    const missing = Math.max(0, 8 - headParts.length - tailParts.length)
+    const full = [...headParts, ...Array(missing).fill("0"), ...tailParts]
+    return `v6:${full.slice(0, 4).join(":")}`
+  }
+  return `v4:${ip}`
 }
 
 // ─── KV-backed counters ─────────────────────────────────────────────
@@ -180,9 +201,10 @@ export function secondsUntilNextUtcDay(now: Date): number {
   return Math.max(1, Math.ceil((next - now.getTime()) / 1000))
 }
 
-/** IPs are PII — key the quota on a hash, never the raw address. */
+/** IPs are PII — key the quota on a hash of the IP BUCKET (a /64 for IPv6), never the
+ *  raw address. */
 async function ipKey(ip: string, now: Date): Promise<string> {
-  return `demo:ip:${await sha256Hex(ip)}:${utcDay(now)}`
+  return `demo:ip:${await sha256Hex(ipBucket(ip))}:${utcDay(now)}`
 }
 
 export interface IpQuota {

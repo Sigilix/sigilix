@@ -14,6 +14,7 @@ import {
   DEMO_ASSUMED_COST_USD,
   addDemoSpend,
   consumeIpQuota,
+  ipBucket,
   isDemoBudgetExhausted,
   parseDemoPrUrl,
   readDemoCache,
@@ -139,8 +140,31 @@ describe("parseDemoPrUrl", () => {
     ["PR zero", "https://github.com/o/r/pull/0"],
     ["a path-traversal owner", "https://github.com/../r/pull/1"],
     ["an internal scheme", "file:///etc/passwd"],
+    ["a repo that strips to empty", "https://github.com/o/.git/pull/1"],
   ])("rejects %s", (_label, url) => {
     expect(parseDemoPrUrl(url)).toBeNull()
+  })
+})
+
+describe("ipBucket — IPv6 is bucketed to a /64 so a host can't rotate past the cap", () => {
+  it("keeps a full IPv4 address", () => {
+    expect(ipBucket("203.0.113.7")).toBe("v4:203.0.113.7")
+  })
+
+  it("collapses every address in one /64 to a single bucket", () => {
+    const a = ipBucket("2001:db8:abcd:1234:0:0:0:1")
+    const b = ipBucket("2001:db8:abcd:1234:ffff:ffff:ffff:ffff")
+    expect(a).toBe("v6:2001:db8:abcd:1234")
+    expect(a).toBe(b) // same /64 → same quota bucket
+  })
+
+  it("expands `::` before taking the prefix", () => {
+    expect(ipBucket("2001:db8::1")).toBe("v6:2001:db8:0:0")
+    expect(ipBucket("::1")).toBe("v6:0:0:0:0")
+  })
+
+  it("puts a DIFFERENT /64 in a different bucket", () => {
+    expect(ipBucket("2001:db8:abcd:1234::1")).not.toBe(ipBucket("2001:db8:abcd:9999::1"))
   })
 })
 

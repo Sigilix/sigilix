@@ -8,6 +8,10 @@ import type { Env } from "@/src/shared/types/env"
 
 const BASE_SQL = readFileSync(new URL("../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
 const LINEAR_SQL = readFileSync(new URL("../../migrations/0016_create_linear_integration.sql", import.meta.url), "utf8")
+const TEAM_REPO_SQL = readFileSync(
+  new URL("../../migrations/0018_create_linear_team_repo.sql", import.meta.url),
+  "utf8",
+)
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(7))
 const COOKIE = "__Host-sigilix_session"
 
@@ -35,6 +39,7 @@ async function setup() {
   const db = makeD1()
   await db.exec(BASE_SQL)
   await db.exec(LINEAR_SQL)
+  await db.exec(TEAM_REPO_SQL)
   const now = "2026-07-10T00:00:00.000Z"
   await db
     .prepare(

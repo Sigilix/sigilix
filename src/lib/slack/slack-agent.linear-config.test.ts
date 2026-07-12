@@ -91,6 +91,7 @@ async function makeLinearDb(): Promise<D1Database> {
   await db.exec(
     readFileSync(new URL("../../../migrations/0016_create_linear_integration.sql", import.meta.url), "utf8"),
   )
+  await db.exec(readFileSync(new URL("../../../migrations/0018_create_linear_team_repo.sql", import.meta.url), "utf8"))
   return db
 }
 
@@ -145,7 +146,13 @@ async function makeConnectedEnv(overrides: Partial<LinearConfig> = {}): Promise<
           scope: overrides.scope ?? DEFAULT_LINEAR_CONFIG.scope,
           writeback: overrides.writeback ?? DEFAULT_LINEAR_CONFIG.writeback,
         },
-        bindings: [{ teamId: "team-uuid-1", githubRepoId: 101, githubRepoFullName: "sigilix/sigilix" }],
+        bindings: [
+          {
+            teamId: "team-uuid-1",
+            repos: [{ githubRepoId: 101, githubRepoFullName: "sigilix/sigilix" }],
+            useAllRepos: false,
+          },
+        ],
         updatedBy: "admin",
         nowIso: "2026-07-10T00:01:00.000Z",
       },

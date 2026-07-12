@@ -306,6 +306,8 @@ describe("SIG-242 Linear tenant boundary", () => {
     const secondary = await resolveLinearTeamBindingForRepo({ SIGILIX_PLATFORM_DB: db }, 11, "ACME/WEB")
     expect(secondary?.teamId).toBe("team-a")
     expect(secondary?.repos.map((repo) => repo.githubRepoFullName).sort()).toEqual(["acme/api", "acme/web"])
+    await expect(resolveLinearTeamBindingForRepo({ SIGILIX_PLATFORM_DB: db }, 11, "../acme/web")).resolves.toBeNull()
+    await expect(resolveLinearTeamBindingForRepo({ SIGILIX_PLATFORM_DB: db }, 11, "acme/web/extra")).resolves.toBeNull()
 
     // Even the same full name registered under another installation cannot
     // satisfy this team's explicit membership or cross the installation key.

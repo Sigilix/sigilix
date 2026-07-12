@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock("@/src/lib/linear", () => ({
-  buildLinearClient: vi.fn(async () => ({ createIssue: mocks.createIssue })),
+  buildLinearClient: vi.fn(() => ({ createIssue: mocks.createIssue })),
 }))
 vi.mock("@/src/lib/triage", () => ({ triageIssue: mocks.triageIssue }))
 vi.mock("@/src/features/linear-integration", async (importOriginal) => {

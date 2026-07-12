@@ -31,6 +31,7 @@ import {
   type LinearTokenScope,
 } from "@/src/lib/linear-token-broker-client"
 import { requireSession } from "@/src/lib/auth-middleware"
+import { renderConnectedPage } from "@/src/lib/oauth-connected-page"
 import { decryptAccessToken } from "@/src/lib/auth-session"
 import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
 import {
@@ -550,7 +551,7 @@ export async function handleLinearOAuthCallback(request: Request, env: Env): Pro
     }),
   )
 
-  return htmlPage("Sigilix agent installed — you can close this tab.")
+  return renderConnectedPage({ title: "Sigilix agent installed" })
 }
 
 async function finalizeTenantLinearInstall(
@@ -676,7 +677,7 @@ async function finalizeTenantLinearInstall(
       hasExpiry: typeof record.expiresAt === "number",
     }),
   )
-  return htmlPage("Sigilix Linear integration connected — you can close this tab.")
+  return renderConnectedPage({ title: "Connected to Linear" })
 }
 
 /** Compensate a broker write only when D1 does not already contain the exact
@@ -908,14 +909,4 @@ function text(message: string, status: number): Response {
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
-}
-
-function htmlPage(message: string): Response {
-  const safe = message.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-  return new Response(
-    `<!doctype html><html><head><meta charset="utf-8"><title>Sigilix</title></head>` +
-      `<body style="font-family:system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem">` +
-      `<h1>${safe}</h1></body></html>`,
-    { status: 200, headers: { "content-type": "text/html; charset=utf-8" } },
-  )
 }

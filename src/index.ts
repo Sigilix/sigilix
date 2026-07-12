@@ -30,7 +30,7 @@ import {
   type RawReviewTelemetry,
 } from "@/src/lib/recall-alarm"
 import { handleValidationMetricsRoute } from "@/src/lib/metrics-validation-route"
-import { handleReviewApiRoute } from "@/src/lib/api-review-route"
+import { tryHandleReviewApiRoutes } from "@/src/lib/review-api-routes"
 import {
   isAgentPortalPath,
   tryHandleAgentEventIngestRoute,
@@ -502,9 +502,9 @@ export default {
       return handlePortalPreflight(request, env)
     }
 
-    if (request.method === "POST" && url.pathname === "/v1/review") {
-      return withPortalCors(request, await handleReviewApiRoute(request, env, ctx), env)
-    }
+    // The review HTTP surface: POST /v1/review (authed) + POST /v1/demo/review (PUBLIC, no auth — see review-api-routes.ts).
+    const reviewApiResponse = tryHandleReviewApiRoutes(request, env, ctx, url)
+    if (reviewApiResponse) return reviewApiResponse
     // The runner container's live-event ingest — machine-authed (per-run secret),
     // no session, no CORS; must be handled before the session/CORS blocks below.
     const agentMcpResponse = await tryHandleAgentMcpMachineRoute(request, env, url)

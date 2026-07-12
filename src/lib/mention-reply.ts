@@ -43,6 +43,7 @@ import {
   type LinearConfig,
   type LinearTenantContext,
 } from "@/src/features/linear-integration"
+import { resolveBindingRepoScope } from "@/src/lib/cross-repo-context"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 // Note: no HTML-comment marker in the rendered body. Linear renders
@@ -304,22 +305,20 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
 
   let tenantConfig: LinearConfig | null = null
   let tenantRepo: { owner: string; repo: string } | null = null
+  // Cross-repo context: capped sibling namespaces beyond the primary (multi-repo / use-all).
+  let tenantSiblingNamespaces: string[] = []
   if (tenant) {
     const [config, binding] = await Promise.all([
       getLinearConfig(env, tenant.installationId),
       resolveLinearTeamBinding(env, tenant.organizationId, data.issue.team.id),
     ])
     tenantConfig = config
-    const parts = binding?.githubRepoFullName.split("/") ?? []
+    // The team's primary repo + capped cross-repo siblings (multi-repo / use-all).
+    // A team with >=1 accessible repo resolves here instead of failing closed.
+    const scope = binding ? await resolveBindingRepoScope(env, binding, tenant.installationId) : null
     const valid =
       !!config &&
-      !!binding &&
-      binding.installationId === tenant.installationId &&
-      binding.accessState === "allowed" &&
-      binding.githubRepoId > 0 &&
-      parts.length === 2 &&
-      !!parts[0] &&
-      !!parts[1] &&
+      !!scope &&
       (tenant.teamId === undefined || tenant.teamId === data.issue.team.id) &&
       teamIsSelected(config, data.issue.team.id)
     if (!valid) {
@@ -337,7 +336,11 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
       log("missing-tenant-binding", { teamId: data.issue.team.id })
       return
     }
-    tenantRepo = { owner: parts[0]!, repo: parts[1]! }
+    tenantRepo = scope!.primary
+    tenantSiblingNamespaces = scope!.siblingNamespaces
+    if (scope!.truncated > 0) {
+      log("cross-repo-siblings-capped", { truncated: scope!.truncated })
+    }
     if (!config.writeback.comments) {
       log("comment-writeback-disabled", { teamId: data.issue.team.id })
       return
@@ -413,6 +416,7 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
           teamKey: retrievalTeamKey,
           env,
           ...(tenantRepo ? { namespace: `${tenantRepo.owner}/${tenantRepo.repo}` } : {}),
+          ...(tenantSiblingNamespaces.length > 0 ? { crossRepoNamespaces: tenantSiblingNamespaces } : {}),
         })
       : []
   log("retrieval-done", { chunks: chunks.length, namespace: retrievalTeamKey })

@@ -397,15 +397,15 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     }
 
     // ─── SIG-318 (PR 12g-2): the GATHER-EVIDENCE seam ─────────
-    // The multi-corpus retrieval, dep-vuln scan, AST-source fetch + parse-once cache,
-    // branch-vector build, and symbol retrieval live in ensemble/app/context/gather-
-    // evidence. It mutates `telemetry` (dep-vuln) by reference and returns the
-    // retrieval cache so the orchestrator's `let cache` is reassigned (12a pre-try-let).
+    // Multi-corpus retrieval, dep-vuln scan, AST-source fetch + parse-once cache, branch-vector
+    // build, and symbol retrieval live in ensemble/app/context/gather-evidence. It mutates
+    // `telemetry` (dep-vuln) by reference; returns the retrieval cache (12a pre-try-let reassign).
     const evidence = await gatherRetrievalEvidence({
       env,
       client,
       owner,
       repo,
+      installationId,
       prNumber,
       headSha,
       ensembleConfig,

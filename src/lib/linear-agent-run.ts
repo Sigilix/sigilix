@@ -29,6 +29,7 @@ import {
   type LinearConfig,
   type LinearTenantContext,
 } from "@/src/features/linear-integration"
+import { resolveBindingRepoScope } from "@/src/lib/cross-repo-context"
 
 /** Ollama Turbo base — the free minimal-engine provider for the B3 trigger. */
 const OLLAMA_TURBO_BASE = "https://ollama.com/v1"
@@ -255,20 +256,18 @@ export async function runLinearAgentRun(
         resolveLinearTeamBinding(env, tenant.organizationId, issue.team.id),
       ])
       tenantConfig = config
-      const repoParts = binding?.githubRepoFullName.split("/") ?? []
+      // The agent-runner dispatches a PR to a SINGLE repo, so it targets the
+      // team's PRIMARY effective repo. Resolving the effective set (vs. the raw
+      // primary column) means a use-all / multi-repo team resolves a target here
+      // instead of failing closed on `githubRepoId > 0`.
+      const scope = binding ? await resolveBindingRepoScope(env, binding, tenant.installationId) : null
       if (
         config &&
-        binding &&
-        binding.installationId === tenant.installationId &&
-        binding.accessState === "allowed" &&
-        binding.githubRepoId > 0 &&
-        repoParts.length === 2 &&
-        repoParts[0] &&
-        repoParts[1] &&
+        scope &&
         (tenant.teamId === undefined || tenant.teamId === issue.team.id) &&
         teamIsSelected(config, issue.team.id)
       ) {
-        mapping = { owner: repoParts[0], repo: repoParts[1] }
+        mapping = scope.primary
         installationId = tenant.installationId
       }
     } else {

@@ -237,7 +237,12 @@ describe("tenant-bound Linear OAuth", () => {
 
     const startA = await handleLinearTenantInstall(installRequest(11, "alice-session"), env, undefined, 11)
     expect(startA.status).toBe(200)
-    const stateA = stateFrom((await startA.json()) as { authorizeUrl: string })
+    const startBodyA = (await startA.json()) as { authorizeUrl: string }
+    // prompt=consent forces Linear to re-issue a code on every reconnect, even
+    // when the workspace already has the app installed — without it an already-
+    // installed org never reaches the callback that writes linear_connection.
+    expect(new URL(startBodyA.authorizeUrl).searchParams.get("prompt")).toBe("consent")
+    const stateA = stateFrom(startBodyA)
     const storedState = JSON.parse(values.get(`linear-oauth-state:${stateA}`) ?? "{}") as Record<string, unknown>
     expect(storedState).toMatchObject({ version: 1, installationId: 11, userId: "111", login: "alice" })
 

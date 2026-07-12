@@ -556,14 +556,14 @@ export interface Env {
   // per-key metering — once the day's count hits the limit the endpoint returns 429.
   OPENCLAW_SIGILIX_API_DAILY_LIMIT?: string
 
-  // SIG-545: the OIDC issuer URI for the Boreas CLI gateway — MUST be the exact
-  // worker origin (no trailing slash) the GCP Workload-Identity-Federation provider
-  // was created against. Used as the assertion JWT `iss` + to build the /.well-known
-  // discovery URLs. Unset → POST /v1/boreas/chat/completions and the
-  // openid-configuration doc are inert (503); the route mints no GCP token. Auth for
-  // the gateway reuses the shared OPENCLAW_SIGILIX_API_KEY bearer above. Set via
-  // `wrangler secret put OPENCLAW_GATEWAY_ISSUER https://<worker-origin>`.
+  // SIG-545: OIDC issuer URI for the Boreas CLI gateway — the exact worker origin
+  // the GCP WIF provider was created against (assertion JWT `iss` + /.well-known).
+  // Unset → boreas chat/discovery 503. `wrangler secret put OPENCLAW_GATEWAY_ISSUER`.
   OPENCLAW_GATEWAY_ISSUER?: string
+
+  // Same-site public origin (api.sigilix.ai) for the Linear OAuth redirect_uri so
+  // the callback keeps the portal cookie; see wrangler.toml. Not the gateway iss.
+  SIGILIX_LINEAR_REDIRECT_ORIGIN?: string
 
   // SIG-545: coarse endpoint-wide daily request ceiling for POST
   // /v1/boreas/chat/completions (cost/abuse guard — every admitted request mints a

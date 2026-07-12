@@ -1404,6 +1404,15 @@ SIGILIX_AGENT_EVENTS_ENDPOINT = "https://api.sigilix.ai"
 # credentials remain in the Worker-owned vault.
 SIGILIX_AGENT_MCP_ENDPOINT = "https://api.sigilix.ai"
 
+# Public origin used to build the Linear OAuth redirect_uri. MUST be the same
+# site as the portal (app.sigilix.ai) so the callback carries the portal session
+# cookie — a workers.dev redirect drops the .sigilix.ai cookie and the callback
+# fails requireSession ("must be completed by the user who started it"). This is
+# deliberately NOT OPENCLAW_GATEWAY_ISSUER (that is the GCP WIF `iss`, a
+# workers.dev origin). This exact value MUST also be an allowed redirect URI on
+# the Linear OAuth app.
+SIGILIX_LINEAR_REDIRECT_ORIGIN = "https://api.sigilix.ai"
+
 # Consumer binding — DEFERRED out of wrangler.toml because Cloudflare's
 # Queue API rejects re-registering a consumer that's already bound to
 # this same script (HTTP 11004 — "Queue already has a consumer"), and

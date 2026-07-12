@@ -32,6 +32,8 @@ export interface BindingRepoScope {
   primaryNamespace: string
   /** Lowercased sibling namespaces (deduped, primary excluded, capped). */
   siblingNamespaces: string[]
+  /** Exact effective D1 binding set, before the retrieval fan-out cap. */
+  allNamespaces: string[]
   /** How many siblings were dropped by the `MAX_CROSS_REPO_SIBLINGS` cap (for logging). */
   truncated: number
 }
@@ -69,6 +71,7 @@ export async function resolveBindingRepoScope(
     primary: { owner, repo },
     primaryNamespace,
     siblingNamespaces,
+    allNamespaces: [primaryNamespace, ...rest],
     truncated: rest.length - siblingNamespaces.length,
   }
 }

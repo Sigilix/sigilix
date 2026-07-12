@@ -233,7 +233,12 @@ function validCatalogManifest(skill: GovernedSkillManifest): boolean {
     /^[a-f0-9]{40}$/.test(skill.source.commit) &&
     /^[a-f0-9]{64}$/.test(skill.source.skillFileSha256) &&
     skill.instructions.normalize("NFC") === skill.instructions &&
-    skill.eligibleSurfaces.every((surface) => surface === "chat" || surface === "deep-research")
+    // Only the wired guidance surfaces may appear in a manifest. "pr-review" is
+    // DELIBERATELY invalid — the review-ensemble prompt is the product's most
+    // measurement-sensitive surface and must never pick up governed guidance
+    // through a catalog edit alone. "cli" stays invalid until the gateway has a
+    // safe injection seam (today it is a transparent OpenAI-compat proxy).
+    skill.eligibleSurfaces.every((surface) => surface === "chat" || surface === "deep-research" || surface === "agent")
   )
 }
 

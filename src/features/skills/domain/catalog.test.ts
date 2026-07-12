@@ -3,8 +3,8 @@ import { GOVERNED_SKILL_CATALOG } from "./catalog"
 
 describe("governed skill catalog", () => {
   it("contains only pinned, permissively licensed, guidance-only sources", () => {
-    expect(GOVERNED_SKILL_CATALOG).toHaveLength(20)
-    expect(new Set(GOVERNED_SKILL_CATALOG.map((skill) => skill.id)).size).toBe(20)
+    expect(GOVERNED_SKILL_CATALOG).toHaveLength(26)
+    expect(new Set(GOVERNED_SKILL_CATALOG.map((skill) => skill.id)).size).toBe(26)
     for (const skill of GOVERNED_SKILL_CATALOG) {
       expect(skill.schemaVersion).toBe(1)
       expect(["engineering", "security", "data", "operations", "knowledge"]).toContain(skill.category)
@@ -20,7 +20,13 @@ describe("governed skill catalog", () => {
       expect(skill.review.reviewedBy).toBe("sigilix-engineering")
       expect(["2026-07-11", "2026-07-12"]).toContain(skill.review.reviewedAt)
       expect(skill.requiredCapabilities).toEqual([])
-      expect(skill.eligibleSurfaces).toEqual(["chat", "deep-research"])
+      // Guidance surfaces only: chat + deep-research always, plus the wired
+      // "agent" surface (Slack agent + Linear triage) where explicitly granted.
+      // "pr-review" and "cli" must never appear in a manifest.
+      expect(skill.eligibleSurfaces.slice(0, 2)).toEqual(["chat", "deep-research"])
+      expect([...skill.eligibleSurfaces].every((surface) => ["chat", "deep-research", "agent"].includes(surface))).toBe(
+        true,
+      )
       expect(skill.instructions).not.toMatch(/(?:^|\n)\s*(?:npm|npx|curl|git|mkdir|python|bash|sh)\s+/i)
     }
   })
@@ -57,7 +63,37 @@ describe("governed skill catalog", () => {
         "openai-ci-failure-diagnosis": "7b326b4a2f0f5f85122144628ec02077e48841e0e0e82efce88b3415bcfb7c26",
         "anthropic-activity-digest": "d711d49b898eb303b74488dce75308e8737786d87210f1dca13ec325bc7f5737",
         "anthropic-stakeholder-update": "bcdb8ee95dc34d025dcc3d98e7435c4dca45930581b3b7a8707f8770dd364e79",
+        "openai-linear-workflows": "ce0f39c95b6c9190f8ea33614393cdb556b2684dd8388ded394e9cb915f42601",
+        "openai-pr-comment-resolution": "77389eefd3fb6584210668ca8e43f4b8de87e7722ddd953474bc9e24cdfaaedd",
+        "anthropic-debugging-workflow": "e50bb92cbcb2715139f3a3cb9ff282a8f0f9ae794f8f35d81338654e2601d32a",
+        "anthropic-testing-strategy": "5c5e95830754bbdd838213fa05fc8f07523f591fd558fd3c86031ffd479f7a9e",
+        "anthropic-code-review-practices": "6303932f1b301c614a6f5a0099cd87a19e1cd1b7cbfa1a1e11e996edbca6426b",
+        "anthropic-technical-documentation": "1d469418f786a05be83d2a05f04d68788aeed584d13863a650f5ad73c6c4cf50",
       },
+    )
+  })
+
+  it("pins the exact agent-surface grant list — the Slack-agent/triage surface is opt-in per skill", () => {
+    expect(
+      GOVERNED_SKILL_CATALOG.filter((skill) => (skill.eligibleSurfaces as readonly string[]).includes("agent"))
+        .map((skill) => skill.id)
+        .sort(),
+    ).toEqual(
+      [
+        "supabase-postgres-best-practices",
+        "supabase-platform-workflows",
+        "cloudflare-durable-objects",
+        "cloudflare-workers-best-practices",
+        "cloudflare-wrangler",
+        "cloudflare-agents-sdk",
+        "openai-security-best-practices",
+        "openai-define-goal",
+        "openai-linear-workflows",
+        "openai-pr-comment-resolution",
+        "anthropic-debugging-workflow",
+        "anthropic-testing-strategy",
+        "anthropic-technical-documentation",
+      ].sort(),
     )
   })
 
@@ -78,6 +114,12 @@ describe("governed skill catalog", () => {
       "openai-ci-failure-diagnosis": ["github"],
       "anthropic-activity-digest": [],
       "anthropic-stakeholder-update": [],
+      "openai-linear-workflows": ["linear"],
+      "openai-pr-comment-resolution": ["github"],
+      "anthropic-debugging-workflow": [],
+      "anthropic-testing-strategy": [],
+      "anthropic-code-review-practices": [],
+      "anthropic-technical-documentation": [],
     })
   })
 })

@@ -6,6 +6,8 @@
 import type { GovernedSkillManifest, SkillReviewProvenance, SkillSurface } from "./catalog"
 
 const CHAT_RESEARCH_SURFACES = ["chat", "deep-research"] as const satisfies readonly SkillSurface[]
+// "agent" — the Slack agent + the Linear issue-triage pipeline. See catalog.ts.
+const CHAT_RESEARCH_AGENT_SURFACES = ["chat", "deep-research", "agent"] as const satisfies readonly SkillSurface[]
 
 const REVIEW_2026_07_12: SkillReviewProvenance = {
   status: "approved-guidance-only",
@@ -252,7 +254,7 @@ Keep the goal short enough to check every subsequent step against it.`,
     },
     review: REVIEW_2026_07_12,
     appIds: [],
-    eligibleSurfaces: CHAT_RESEARCH_SURFACES,
+    eligibleSurfaces: CHAT_RESEARCH_AGENT_SURFACES,
     requiredCapabilities: [],
     dataSensitivity: "public-guidance",
     triggerPhrases: [

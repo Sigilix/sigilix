@@ -1377,7 +1377,9 @@ SIGILIX_GATE = "shadow"
 # via `wrangler secret put` (its public id SIGILIX_SLACK_CLIENT_ID is in [vars]).
 SIGILIX_SLACK_MODE = "on"
 # Beta channel→repo scope (key "<teamId>:<channelId>"; repos must be EXACT
-# owner/repo entries in OPENCLAW_GITHUB_INSTALLATION_MAP).
+# owner/repo entries in OPENCLAW_GITHUB_INSTALLATION_MAP). FALLBACK ONLY:
+# customer channel→repo bindings live in D1 (migration 0019, portal-managed)
+# and are resolved FIRST — this env map keeps the founder's beta channel safe.
 SIGILIX_SLACK_SCOPE_MAP = '{"T0AFVBGRDRD:C0BEL8ZAARE":{"repos":["sigilix/sigilix"]}}'
 
 # SIG-545 B1: enable the agent-runner. "on" → dispatchAgentRun mints a GitHub App

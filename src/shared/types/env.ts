@@ -1398,7 +1398,7 @@ export interface Env {
   //   SIGILIX_SLACK_MODE      "off" (default/unknown) | "shadow" | "on".
   //   SIGILIX_SLACK_SCOPE_MAP  JSON {"<teamId>:<channelId>":{"repos":["owner/repo"],"linearTeam":"<LINEAR_TEAM_ID>"}}
   //                            repos must be EXACT owner/repo entries present in OPENCLAW_GITHUB_INSTALLATION_MAP;
-  //                            linearTeam is the Linear team UUID (NOT the team key). Lightweight beta store; SIG-193 later.
+  //                            FALLBACK ONLY: D1 bindings (migration 0019) are checked FIRST — slack-scope.ts.
   SLACK_SIGNING_SECRET?: string
   SLACK_CLIENT_ID?: string
   SLACK_CLIENT_SECRET?: string

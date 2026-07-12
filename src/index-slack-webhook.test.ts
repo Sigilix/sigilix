@@ -149,7 +149,7 @@ function makeEnv(mode: "off" | "shadow" | "on", kv: FakeKV, secret: string | und
 // ─── Scoped scope mock ────────────────────────────────────────────────────────
 
 function scopeOk() {
-  vi.mocked(resolveSlackScope).mockReturnValue({
+  vi.mocked(resolveSlackScope).mockResolvedValue({
     ok: true,
     scope: {
       teamId: TEAM_ID,
@@ -161,7 +161,7 @@ function scopeOk() {
 }
 
 function scopeDenied() {
-  vi.mocked(resolveSlackScope).mockReturnValue({ ok: false, reason: "no-config" })
+  vi.mocked(resolveSlackScope).mockResolvedValue({ ok: false, reason: "no-config" })
 }
 
 // ─── Shared test setup ────────────────────────────────────────────────────────

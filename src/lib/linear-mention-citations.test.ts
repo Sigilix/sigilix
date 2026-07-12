@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import {
   addLinearCitationMetadata,
+  linearCitationMetadataForChunk,
   prependLinearCitationVerification,
   type LinearMentionCitation,
 } from "@/src/lib/linear-mention-citations"
@@ -23,7 +24,7 @@ function citation(overrides: Partial<LinearMentionCitation> = {}): LinearMention
 
 describe("prependLinearCitationVerification", () => {
   it("verifies same-path citations in sibling repos at each exact structured ref", async () => {
-    const fetchFileContent = vi.fn(async () => "one\ntwo\nthree")
+    const fetchFileContent = vi.fn(() => Promise.resolve("one\ntwo\nthree"))
     const answer = "The two implementations share a boundary."
 
     const out = await prependLinearCitationVerification({
@@ -43,7 +44,7 @@ describe("prependLinearCitationVerification", () => {
   })
 
   it("allows safe segment paths including Makefile and .gitignore", async () => {
-    const fetchFileContent = vi.fn(async () => "one")
+    const fetchFileContent = vi.fn(() => Promise.resolve("one"))
     const out = await prependLinearCitationVerification({
       answer: "Build metadata.",
       citations: [citation({ path: "Makefile", lineEnd: 1 }), citation({ path: ".gitignore", lineEnd: 1 })],
@@ -58,7 +59,7 @@ describe("prependLinearCitationVerification", () => {
   })
 
   it("uses canonical configured repo casing and dedupes identical file reads", async () => {
-    const fetchFileContent = vi.fn(async () => "one\ntwo")
+    const fetchFileContent = vi.fn(() => Promise.resolve("one\ntwo"))
     const out = await prependLinearCitationVerification({
       answer: "One source, repeated.",
       citations: [citation({ repo: "ACME/API" }), citation({ repo: "acme/api" })],
@@ -72,7 +73,7 @@ describe("prependLinearCitationVerification", () => {
   })
 
   it("rejects foreign repos and unsafe paths without GitHub IO", async () => {
-    const fetchFileContent = vi.fn(async () => "secret")
+    const fetchFileContent = vi.fn(() => Promise.resolve("secret"))
     const invalidPaths = [
       "/etc/passwd",
       "src//x.ts",
@@ -110,8 +111,44 @@ describe("prependLinearCitationVerification", () => {
     expect(out).toContain(`\n\`\`\`\n\n${answer}`)
   })
 
-  it("returns the answer byte-for-byte when citations are absent and caps sequential work at 24", async () => {
-    const fetchFileContent = vi.fn(async () => "one\ntwo")
+  it("rejects a citation into an empty file", async () => {
+    const out = await prependLinearCitationVerification({
+      answer: "Empty file.",
+      citations: [citation({ lineStart: 1, lineEnd: 1 })],
+      allowedRepos: ["acme/api"],
+      fetchFileContent: vi.fn(() => Promise.resolve("")),
+    })
+
+    expect(out).toContain("status=unverified reason=invalid-range")
+  })
+
+  it("runs unique file reads with bounded concurrency", async () => {
+    let active = 0
+    let peak = 0
+    const fetchFileContent = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          active += 1
+          peak = Math.max(peak, active)
+          setTimeout(() => {
+            active -= 1
+            resolve("one\ntwo")
+          }, 1)
+        }),
+    )
+
+    await prependLinearCitationVerification({
+      answer: "Several sources.",
+      citations: Array.from({ length: 8 }, (_, index) => citation({ path: `src/f${index}.ts` })),
+      allowedRepos: ["acme/api"],
+      fetchFileContent,
+    })
+
+    expect(peak).toBe(4)
+  })
+
+  it("returns the answer byte-for-byte when citations are absent and caps work at 24", async () => {
+    const fetchFileContent = vi.fn(() => Promise.resolve("one\ntwo"))
     await expect(
       prependLinearCitationVerification({
         answer: "No citations.",
@@ -155,6 +192,26 @@ describe("addLinearCitationMetadata", () => {
     expect(chunks[1]?.content).toContain(
       `[citation_metadata] ${JSON.stringify(citation({ repo: "acme/web", path: "Makefile", lineEnd: 1, ref: SHA_B }))}`,
     )
+  })
+
+  it("uses a chunk's sibling provenance in agent-tool citation metadata", () => {
+    const citationMetadata = linearCitationMetadataForChunk("acme/api", {
+      repo: "acme/web",
+      path: "src/web.ts",
+      lineStart: 2,
+      lineEnd: 3,
+      score: 1,
+      content: "code",
+      indexedHeadSha: SHA_B,
+    })
+
+    expect(citationMetadata).toEqual({
+      repo: "acme/web",
+      path: "src/web.ts",
+      lineStart: 2,
+      lineEnd: 3,
+      ref: SHA_B,
+    })
   })
 
   it("keeps citations optional in the v8 schema and instructs exact sidecar copying", () => {

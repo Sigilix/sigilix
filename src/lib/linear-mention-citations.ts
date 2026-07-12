@@ -1,4 +1,5 @@
 import type { RetrievedChunk } from "@/src/lib/retrieval"
+import { mapWithConcurrency } from "@/src/shared/util/bounded-concurrency"
 
 export const MAX_LINEAR_MENTION_CITATIONS = 24
 
@@ -36,38 +37,40 @@ export async function prependLinearCitationVerification(args: PrependLinearCitat
 
   const allowed = new Map(args.allowedRepos.map((repo) => [repo.toLowerCase(), repo]))
   const fileCache = new Map<string, Promise<string | null>>()
-  const results: CitationResult[] = []
-  for (const raw of args.citations.slice(0, MAX_LINEAR_MENTION_CITATIONS)) {
-    const citation = parseCitation(raw)
-    if (!citation) {
-      results.push({ citation: null, status: "unverified", reason: "invalid-metadata" })
-      continue
-    }
-    const canonicalRepo = allowed.get(citation.repo.toLowerCase())
-    if (!canonicalRepo) {
-      results.push({ citation, status: "unverified", reason: "repository-not-allowed" })
-      continue
-    }
-    const normalizedCitation = { ...citation, repo: canonicalRepo }
-    const [owner, repo] = canonicalRepo.split("/") as [string, string]
-    const cacheKey = `${canonicalRepo}\0${citation.path}\0${citation.ref}`
-    let request = fileCache.get(cacheKey)
-    if (!request) {
-      request = args.fetchFileContent(owner, repo, citation.path, citation.ref).catch(() => null)
-      fileCache.set(cacheKey, request)
-    }
-    const content = await request
-    if (content === null) {
-      results.push({ citation: normalizedCitation, status: "unverified", reason: "file-unavailable" })
-      continue
-    }
-    const totalLines = content.length === 0 ? 1 : content.split("\n").length
-    if (citation.lineEnd < citation.lineStart || citation.lineEnd > totalLines) {
-      results.push({ citation: normalizedCitation, status: "unverified", reason: "invalid-range" })
-      continue
-    }
-    results.push({ citation: normalizedCitation, status: "verified" })
-  }
+  const settled = await mapWithConcurrency(
+    args.citations.slice(0, MAX_LINEAR_MENTION_CITATIONS),
+    4,
+    async (raw): Promise<CitationResult> => {
+      const citation = parseCitation(raw)
+      if (!citation) {
+        return { citation: null, status: "unverified", reason: "invalid-metadata" }
+      }
+      const canonicalRepo = allowed.get(citation.repo.toLowerCase())
+      if (!canonicalRepo) {
+        return { citation, status: "unverified", reason: "repository-not-allowed" }
+      }
+      const normalizedCitation = { ...citation, repo: canonicalRepo }
+      const [owner, repo] = canonicalRepo.split("/") as [string, string]
+      const cacheKey = `${canonicalRepo}\0${citation.path}\0${citation.ref}`
+      let request = fileCache.get(cacheKey)
+      if (!request) {
+        request = args.fetchFileContent(owner, repo, citation.path, citation.ref).catch(() => null)
+        fileCache.set(cacheKey, request)
+      }
+      const content = await request
+      if (content === null) {
+        return { citation: normalizedCitation, status: "unverified", reason: "file-unavailable" }
+      }
+      const totalLines = content.length === 0 ? 0 : content.split("\n").length
+      if (citation.lineEnd < citation.lineStart || citation.lineEnd > totalLines) {
+        return { citation: normalizedCitation, status: "unverified", reason: "invalid-range" }
+      }
+      return { citation: normalizedCitation, status: "verified" }
+    },
+  )
+  const results: CitationResult[] = settled.map((result) =>
+    result.status === "fulfilled" ? result.value : { citation: null, status: "unverified", reason: "file-unavailable" },
+  )
 
   const lines = results.map((result, index) => renderResult(index + 1, result))
   return ["```verification", ...lines, "```", "", args.answer].join("\n")
@@ -96,8 +99,9 @@ export function linearCitationMetadataForChunk(
   repoNamespace: string,
   chunk: RetrievedChunk,
 ): LinearMentionCitation | null {
-  const parts = repoNamespace.split("/")
-  const repo = parts.length >= 2 ? `${parts[0]}/${parts[1]}` : repoNamespace
+  const sourceNamespace = chunk.repo ?? repoNamespace
+  const parts = sourceNamespace.split("/")
+  const repo = parts.length >= 2 ? `${parts[0]}/${parts[1]}` : sourceNamespace
   return parseCitation({
     repo,
     path: chunk.path,

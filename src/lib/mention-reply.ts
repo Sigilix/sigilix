@@ -44,7 +44,11 @@ import {
 } from "@/src/features/linear-integration"
 import { resolveBindingRepoScope } from "@/src/lib/cross-repo-context"
 import { resolveTenantLinearRepoScope, type LinearAgentRepoScope } from "@/src/lib/mention-reply-repo-scope"
-import { addLinearCitationMetadata, prependLinearCitationVerification } from "@/src/lib/linear-mention-citations"
+import {
+  addLinearCitationMetadata,
+  MAX_LINEAR_MENTION_CITATIONS,
+  prependLinearCitationVerification,
+} from "@/src/lib/linear-mention-citations"
 
 export type { LinearAgentRepoScope } from "@/src/lib/mention-reply-repo-scope"
 
@@ -421,7 +425,10 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
     sourceCommentId: data.id,
     codebaseStatus: renderCodebaseRetrievalStatus(repoScope, chunks.length),
     codebaseChunks: formatChunksForPrompt(
-      addLinearCitationMetadata(chunks, teamRepo ? indexNamespace(teamRepo.owner, teamRepo.repo) : ""),
+      addLinearCitationMetadata(
+        chunks,
+        repoScope.repo ?? (teamRepo ? indexNamespace(teamRepo.owner, teamRepo.repo) : ""),
+      ),
     ),
     linkedPrs,
     linkedPrFailures,
@@ -940,7 +947,7 @@ function parseVerdict(text: string): MentionVerdict | null {
   if (!answer) return null
   const confidence = Number(obj.confidence)
   const abstain = Boolean(obj.abstain)
-  const citations = Array.isArray(obj.citations) ? obj.citations.slice(0, 24) : []
+  const citations = Array.isArray(obj.citations) ? obj.citations.slice(0, MAX_LINEAR_MENTION_CITATIONS) : []
   return {
     answer,
     confidence: Number.isFinite(confidence) && confidence >= 1 && confidence <= 5 ? Math.round(confidence) : 3,

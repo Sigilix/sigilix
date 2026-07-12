@@ -50,6 +50,16 @@ export interface RateLimitDecision {
    * Otherwise `formatUsageFooter(used, cap, resetMs)`.
    */
   footer: string
+  /**
+   * WHICH dimension bound the decision — `"cost"` when the USD budget is exhausted,
+   * `"count"` when the request-count cap is. Surfaced (not just telemetered) because
+   * the caller must explain the block truthfully: cost is designed to bind FIRST, so a
+   * cost-blocked review is normally still UNDER its count cap, and `resetMs` — which is
+   * count-based — is 0. Rendering the count numbers in that case tells the user
+   * "15 of 20 reviews used, next slot in ~1m", all three parts of which are false.
+   * `"count"` on allow/off/bypass/fault (no dimension bound anything).
+   */
+  limitedBy: "cost" | "count"
 }
 
 // ─── checkRateLimit ──────────────────────────────────────────────────────────
@@ -95,6 +105,7 @@ export async function checkRateLimit(
     costBudgetUsd,
     costRemainingUsd: costRemaining(usedCostUsd),
     footer,
+    limitedBy: "count",
   })
 
   try {
@@ -153,7 +164,21 @@ export async function checkRateLimit(
     // for v1 (a retry just re-blocks) — an exact cost countdown is a later refinement.
     const resetMs = computeResetMs(res.windowRowsAscMs, RATE_LIMIT_WINDOW_MS, used, cap, burst, args.nowMs)
     const footer = formatUsageFooter(used, cap, resetMs)
-    const base = { mode, used, cap, resetMs, usedCostUsd, costBudgetUsd, costRemainingUsd, footer } as const
+    // The binding dimension (which cap was hit). Part of the DECISION, not just
+    // telemetry: the caller needs it to explain a block truthfully, because a
+    // cost-bound block is normally still under its count cap with resetMs = 0.
+    const limitedBy = !costAllowed ? "cost" : "count"
+    const base = {
+      mode,
+      used,
+      cap,
+      resetMs,
+      usedCostUsd,
+      costBudgetUsd,
+      costRemainingUsd,
+      footer,
+      limitedBy,
+    } as const
 
     // 7. Under BOTH caps → allowed for all modes.
     if (rawAllowed) {
@@ -162,9 +187,6 @@ export async function checkRateLimit(
       )
       return { allowed: true, ...base }
     }
-
-    // The binding dimension (which cap was hit) — for telemetry only.
-    const limitedBy = !costAllowed ? "cost" : "count"
 
     // 8. Over a cap — split by mode.
     if (mode === "shadow") {
@@ -210,6 +232,8 @@ export async function checkRateLimit(
       costBudgetUsd,
       costRemainingUsd: costRemaining(0),
       footer: "",
+      // Nothing bound anything — this is the fail-open path (allowed:true).
+      limitedBy: "count",
     }
   }
 }

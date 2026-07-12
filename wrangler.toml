@@ -526,6 +526,35 @@ SIGILIX_LINEAR_AGENT_RUN_MODE = "on"
 SIGILIX_FAIRNESS_MODE = "shadow"
 SIGILIX_TENANT_CONCURRENCY_CAP = "2"
 
+# SIG-38 / sig-cost-based-metering: the PR-review gate. "off" | "shadow" | "enforce".
+# This var was NEVER SET, so it fell back to the code default "shadow" — checkRateLimit
+# ran on every review, counted, logged "rate-limit-ok"… and let everything through. The
+# gate was fully built and wired into dispatch; it was simply never switched on.
+#
+# "enforce" turns on BOTH dimensions of `rawAllowed = countAllowed && costAllowed`:
+#   • COST (the real gate)  — TIER_COST_BUDGET_USD, a rolling USD budget per window.
+#     Free $0.375/5h · $1.50/wk; pro $3.75/$15; teams $5.50/$22; max $10/$40;
+#     enterprise unbounded. Measured per-review cost is $0.047–$0.83 (17x spread), so
+#     dollars — not PR count — are what actually track spend.
+#     Free $0.375/5h · $1.50/wk; pro $3.75/$15; teams $5.50/$22; max $10/$40;
+#     ultra $17.50/$70; enterprise unbounded.
+#   • COUNT (anti-abuse backstop) — deliberately raised ABOVE the budget so cost bites
+#     first; it only catches trivial-PR spam that stays cheap per review.
+# The deciders fail OPEN on a null/non-finite read AND the gate now bypasses entirely
+# when the tenant's TIER cannot be read (see index-dispatch-rate-limit-gate.ts): an
+# unknown tier must never be silently treated as Free, or a D1 hiccup would apply the
+# Free budget to a paying customer and block a review it had every right to run.
+SIGILIX_RATE_LIMIT_MODE = "enforce"
+
+# SIGILIX_USAGE_METER_MODE (usage-pool caps for chat/CLI/Slack) is deliberately LEFT
+# UNSET → code default "shadow". Do NOT flip it to "enforce" alongside the gate above
+# without first fixing the org pool, because the two are in direct tension:
+# DEFAULT_POOL_CAPS.org is a TIER-BLIND 20/5h and its ORG_METERS *includes* pr_reviews,
+# while the cost budgets above deliberately permit far more than 20 reviews per 5h
+# (pro ~15, teams ~22, max ~40, ultra ~70). An org exercising the review volume it pays
+# for would therefore have its Slack assistant hard-blocked by the same pool. Fix first
+# (make the org cap tier-aware, or drop pr_reviews from ORG_METERS), then flip.
+
 # Pyroeis served model (POST /v1/pyroeis/chat/completions) — Gemini 3.5 Flash on
 # Vertex AI, addressed over the SAME OpenAI-compat chat/completions endpoint the
 # other gateway legs use (first-party Gemini = `google/gemini-<version>`, no `-maas`

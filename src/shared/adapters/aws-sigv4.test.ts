@@ -8,7 +8,7 @@
 
 import { createHash, createHmac } from "node:crypto"
 import { describe, expect, it } from "vitest"
-import { signAwsRequestV4 } from "@/src/lib/boreas-gateway/aws-sigv4"
+import { signAwsRequestV4 } from "@/src/shared/adapters/aws-sigv4"
 
 const ACCESS_KEY = "AKIDEXAMPLE"
 const SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"

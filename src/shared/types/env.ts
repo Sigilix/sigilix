@@ -8,6 +8,7 @@
 // no shared/types -> do coupling. Type-only move: zero runtime, zero behavior change.
 
 import type { JobMessage } from "./job"
+import type { AwsBedrockEnv } from "./env-aws-bedrock"
 
 // sig-worker-debrand-openclaw: OPENCLAW_ → SIGILIX_ rebrand of the Worker's config
 // vars, secrets, and resource bindings, done BACK-COMPAT. `interface Env` below keeps
@@ -16,7 +17,7 @@ import type { JobMessage } from "./job"
 // `SIGILIX_<X>` sibling for each — all optional (unset until the founder sets them).
 // `normalizeEnv` (@/src/shared/util/normalize-env) mirrors the two at each entry
 // point, SIGILIX_-preferred with OPENCLAW_ fallback, and returns `NormalizedEnv`.
-export interface Env {
+export interface Env extends AwsBedrockEnv {
   OPENCLAW_STATE: KVNamespace
   // Vectorize index storing 768-dim embeddings of code chunks per repo.
   OPENCLAW_CODE_INDEX: VectorizeIndex
@@ -609,22 +610,9 @@ export interface Env {
   // Same shape as OPENCLAW_BOREAS_FALLBACK_TURBO_MODEL above.
   OPENCLAW_ASTRAEUS_FALLBACK_TURBO_MODEL?: string
 
-  // #158 failover chain, leg 3 (AWS Bedrock -- SCAFFOLD, disabled at launch).
-  // Shared AWS credentials for the SigV4-signed Bedrock Runtime Converse call.
-  // ALL THREE (region + access key id + secret) must be set for the Bedrock leg
-  // to be attempted for ANY model; any one missing -> the leg is skipped
-  // entirely (not a failure -- this is the founder-locked launch state until
-  // real AWS creds exist). Set via `wrangler secret put` for the two secret
-  // values; the region may be a plain [vars] entry.
-  OPENCLAW_AWS_REGION?: string
-  OPENCLAW_AWS_ACCESS_KEY_ID?: string
-  OPENCLAW_AWS_SECRET_ACCESS_KEY?: string
-  // Per-model Bedrock model id override -- also gates the leg per-model: even
-  // with AWS creds configured, a route with its model id unset skips Bedrock
-  // (no guessed model id). Same three-var pattern as the Turbo fallback above.
-  OPENCLAW_BOREAS_FALLBACK_BEDROCK_MODEL?: string
-  OPENCLAW_PYROEIS_FALLBACK_BEDROCK_MODEL?: string
-  OPENCLAW_ASTRAEUS_FALLBACK_BEDROCK_MODEL?: string
+  // The AWS + Bedrock-ensemble vars live in the composed `AwsBedrockEnv`
+  // sub-interface (`./env-aws-bedrock`) that `Env` extends — the per-feature
+  // split the class-module allowlist note names as this file's real fix.
 
   // POST /v1/verify (sealed pure-logic verification oracle) — coarse endpoint-wide
   // daily request ceiling (it burns QuickJS CPU). Numeric string; unset → a built-in

@@ -43,6 +43,30 @@ export function wrapFailure<T>(
   return out
 }
 
+// Bedrock-ensemble migration: relocated VERBATIM from model-provider.ts to keep
+// that adapter <=1k lines (the SIG-386 spill-sibling pattern — same as
+// `wrapFailure` above). Pure abort-aware sleep; only `runWithRetryAndFallback`
+// calls it.
+export async function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
+  // CR + arc PR #37 catch: if the signal is already aborted on entry,
+  // the abort event has already fired and our addEventListener will
+  // never trigger — without this guard we'd sleep the full ms before
+  // returning. Closes the race between caller's abort check + our
+  // listener installation.
+  if (ms <= 0 || signal.aborted) return
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer)
+        resolve()
+      },
+      { once: true },
+    )
+  })
+}
+
 /**
  * Classify a failure reason as permanent (don't retry, don't fall back)
  * vs transient (retry primary, then try fallback).

@@ -247,6 +247,41 @@ const VERIFIED_VENDOR_CASES = [
       "netlify-extension-services-reader",
     ],
   },
+  {
+    vendor: "slack",
+    url: "https://mcp.slack.com/mcp",
+    tools: [
+      "slack_search_public",
+      "slack_search_public_and_private",
+      "slack_search_channels",
+      "slack_search_users",
+      "slack_read_channel",
+      "slack_read_thread",
+      "slack_read_user_profile",
+    ],
+  },
+  {
+    vendor: "asana",
+    url: "https://mcp.asana.com/v2/mcp",
+    tools: [
+      "search_objects",
+      "get_task",
+      "get_tasks",
+      "get_my_tasks",
+      "search_tasks",
+      "get_project",
+      "get_projects",
+      "get_portfolio",
+      "get_portfolios",
+      "get_items_for_portfolio",
+      "get_status_overview",
+      "get_attachments",
+      "get_user",
+      "get_me",
+      "get_users",
+      "get_teams",
+    ],
+  },
 ] as const
 
 describe("MCP server-owned runtime policy", () => {
@@ -282,6 +317,32 @@ describe("MCP server-owned runtime policy", () => {
     expect(vendorPolicyForUrl("https://netlify-mcp.netlify.app/mcp")?.vendor).toBe("netlify")
     expect(vendorPolicyForUrl("https://netlify-mcp.netlify.app/mcp/")?.vendor).toBe("netlify")
     expect(vendorPolicyForUrl("https://netlify-mcp.netlify.app/mcp/extra")).toBeNull()
+    expect(vendorPolicyForUrl("https://mcp.slack.com/mcp")?.vendor).toBe("slack")
+    expect(vendorPolicyForUrl("https://mcp.slack.com/mcp/extra")).toBeNull()
+    expect(vendorPolicyForUrl("https://mcp.asana.com/v2/mcp")?.vendor).toBe("asana")
+    // Asana's retired V1 SSE endpoint is not an alias of the V2 endpoint.
+    expect(vendorPolicyForUrl("https://mcp.asana.com/sse")).toBeNull()
+    expect(vendorPolicyForUrl("https://mcp.asana.com/v2/mcp/extra")).toBeNull()
+  })
+
+  it("rejects provider write tools on the Slack and Asana curated policies", () => {
+    // Provider-documented write surfaces must never pass narrowMcpPolicy: the
+    // curated read allowlist is the only capability an org admin can request.
+    for (const [url, writeTool] of [
+      ["https://mcp.slack.com/mcp", "slack_send_message"],
+      ["https://mcp.slack.com/mcp", "slack_create_canvas"],
+      ["https://mcp.asana.com/v2/mcp", "create_tasks"],
+      ["https://mcp.asana.com/v2/mcp", "delete_task"],
+    ] as const) {
+      const result = narrowMcpPolicy(url, {
+        version: 0,
+        enabled: true,
+        surfaces: ALL_SURFACES_ON,
+        allowedReadTools: [writeTool],
+        maxCallsPerRun: 1,
+      })
+      expect(result).toEqual({ ok: false, error: "unsupported_tool" })
+    }
   })
 
   it.each(VERIFIED_VENDOR_CASES)(

@@ -3,6 +3,8 @@
 // reviewed code change. The injected text is intentionally Sigilix-authored,
 // bounded guidance rather than executable package content.
 
+import { CONNECTED_WORK_SKILLS } from "./catalog-connected-work"
+
 export const SKILL_SURFACES = ["chat", "deep-research", "cli", "pr-review", "agent"] as const
 export type SkillSurface = (typeof SKILL_SURFACES)[number]
 
@@ -29,7 +31,7 @@ export interface SkillSourceProvenance {
 export interface SkillReviewProvenance {
   status: "approved-guidance-only"
   reviewedBy: "sigilix-engineering"
-  reviewedAt: "2026-07-11"
+  reviewedAt: "2026-07-11" | "2026-07-12"
 }
 
 export interface SkillCapabilityRequirement {
@@ -676,6 +678,7 @@ Do not claim that an ownership analysis was executed unless the required reposit
     ],
     priority: 5,
   },
+  ...CONNECTED_WORK_SKILLS,
 ] as const satisfies readonly GovernedSkillManifest[]
 
 export function governedSkillById(id: string): GovernedSkillManifest | null {

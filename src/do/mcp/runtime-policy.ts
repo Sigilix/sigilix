@@ -49,6 +49,8 @@ const OFFICIAL_ENDPOINTS: readonly OfficialEndpoint[] = [
   { vendor: "launchdarkly", hostname: "mcp.launchdarkly.com", pathname: "/mcp/launchdarkly" },
   { vendor: "datadog", hostname: "mcp.datadoghq.com", pathname: "/v1/mcp" },
   { vendor: "netlify", hostname: "netlify-mcp.netlify.app", pathname: "/mcp" },
+  { vendor: "slack", hostname: "mcp.slack.com", pathname: "/mcp" },
+  { vendor: "asana", hostname: "mcp.asana.com", pathname: "/v2/mcp" },
 ]
 
 /**
@@ -232,6 +234,43 @@ const CURATED_READ_TOOLS: Readonly<Record<OfficialMcpVendor, readonly CuratedRea
     "netlify-deploy-services-reader",
     "netlify-project-services-reader",
     "netlify-extension-services-reader",
+  ]),
+  // Read-tool names are published in Slack's provider-owned skill doc
+  // (slackapi/slack-mcp-plugin @ 9ea300a7, skills/slack-search/SKILL.md — the
+  // same pinned, hashed file the slack-search-grounding skill vendors).
+  // Every write surface the hosted server exposes — send/draft/schedule message,
+  // reactions, canvas create/update, conversation create — stays denied here, so
+  // an organization admin cannot enable a way for the model to speak in Slack.
+  slack: reviewedReadTools("Slack", [
+    "slack_search_public",
+    "slack_search_public_and_private",
+    "slack_search_channels",
+    "slack_search_users",
+    "slack_read_channel",
+    "slack_read_thread",
+    "slack_read_user_profile",
+  ]),
+  // Read-tool names are published in Asana's provider-owned MCP tools reference
+  // (developers.asana.com/docs/mcp-tools-reference, V2 server). Write tools
+  // (create/update/delete/comment/status) and the interactive preview tools
+  // remain outside this allowlist, as do the AI-teammate agent reads.
+  asana: reviewedReadTools("Asana", [
+    "search_objects",
+    "get_task",
+    "get_tasks",
+    "get_my_tasks",
+    "search_tasks",
+    "get_project",
+    "get_projects",
+    "get_portfolio",
+    "get_portfolios",
+    "get_items_for_portfolio",
+    "get_status_overview",
+    "get_attachments",
+    "get_user",
+    "get_me",
+    "get_users",
+    "get_teams",
   ]),
 }
 

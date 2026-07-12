@@ -457,7 +457,7 @@ export default {
       return handleSlackRequest(request, env, ctx)
     }
     if (request.method === "GET") {
-      if (url.pathname === "/slack/install") return handleSlackInstall(request, env)
+      if (url.pathname === "/slack/install") return handleSlackInstall(request, env, ctx)
       if (url.pathname === "/slack/oauth/callback") return handleSlackOAuthCallback(request, env)
       if (url.pathname === "/slack/installed") return handleSlackInstalled()
     }

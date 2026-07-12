@@ -9,13 +9,31 @@
 // status strings appear in console.error to prevent accidental token leakage.
 // CSRF: the install flow uses a KV-backed nonce (state) with a 10-minute TTL;
 // the callback verifies and immediately deletes the nonce to prevent replays.
+//
+// Org linkage (customer self-serve): when the portal starts the install with
+// `?installation_id=N`, the flow is session-gated + admin-gated and the org
+// identity rides the OAuth `state` (KV record, same as the GitLab connector).
+// The callback then links the Slack team to that Sigilix installation in D1
+// (slack_workspace, migration 0019) so the portal can bind channels to repos.
+// A bare GET /slack/install (no param) keeps the original anonymous behavior.
 
+import { requireSession } from "@/src/lib/auth-middleware"
+import { decryptAccessToken } from "@/src/lib/auth-session"
+import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
+import { upsertSlackWorkspace } from "@/src/lib/slack/slack-binding-store"
 import type { Env } from "@/src/shared/types/env"
 
 export interface SlackInstall {
   teamId: string
   botToken: string
   installedAt: number
+}
+
+/** Org identity carried through the OAuth `state` KV record. The legacy
+ *  anonymous flow stores the literal "1" instead (no org linkage). */
+interface SlackOAuthStateRecord {
+  installationId: number
+  login: string
 }
 
 const KV_PREFIX = "slack-install:"
@@ -60,10 +78,11 @@ export async function getSlackBotToken(
  *  proceeding with the code exchange. */
 export async function buildSlackAuthorizeUrl(
   env: Pick<Env, "OPENCLAW_STATE" | "SLACK_CLIENT_ID" | "OPENCLAW_BASE_URL">,
-  args?: { scopes?: string },
+  args?: { scopes?: string; stateRecord?: SlackOAuthStateRecord },
 ): Promise<string> {
   const state = crypto.randomUUID()
-  await env.OPENCLAW_STATE.put(`${STATE_KV_PREFIX}${state}`, "1", { expirationTtl: 600 })
+  const stateValue = args?.stateRecord ? JSON.stringify(args.stateRecord) : "1"
+  await env.OPENCLAW_STATE.put(`${STATE_KV_PREFIX}${state}`, stateValue, { expirationTtl: 600 })
   const redirectUri = slackRedirectUri(env)
   const scopes = args?.scopes ?? DEFAULT_SCOPES
   return (
@@ -75,14 +94,63 @@ export async function buildSlackAuthorizeUrl(
   )
 }
 
+/** The portal origin — where org-linked installs bounce back to. */
+function portalUrl(env: Pick<Env, "OPENCLAW_PORTAL_URL">): string {
+  return env.OPENCLAW_PORTAL_URL ?? "https://app.sigilix.ai"
+}
+
+/** Bounce back to the portal's Slack app page with a status flag. */
+function portalRedirect(env: Pick<Env, "OPENCLAW_PORTAL_URL">, params: Record<string, string>): Response {
+  const u = new URL(`${portalUrl(env)}/apps/slack`)
+  for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v)
+  return new Response(null, { status: 302, headers: { location: u.toString() } })
+}
+
 /** Handle GET /slack/install — redirect the user to Slack's OAuth consent screen.
  *  Returns 503 if SLACK_CLIENT_ID is unset (Slack not configured).
- *  A fresh CSRF nonce is generated and stored in KV on every request. */
-export async function handleSlackInstall(_request: Request, env: Env): Promise<Response> {
+ *  A fresh CSRF nonce is generated and stored in KV on every request.
+ *
+ *  With `?installation_id=N` (the portal's connect flow) the request is
+ *  session-gated and admin-gated for THAT installation, and the org identity is
+ *  carried through the OAuth state so the callback can link the workspace. */
+export async function handleSlackInstall(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   if (!env.SLACK_CLIENT_ID) {
     return new Response("Slack not configured\n", { status: 503 })
   }
-  const authorizeUrl = await buildSlackAuthorizeUrl(env)
+
+  const rawInstallationId = new URL(request.url).searchParams.get("installation_id")
+  let stateRecord: SlackOAuthStateRecord | undefined
+  if (rawInstallationId !== null) {
+    const installationId = Number(rawInstallationId)
+    if (!Number.isSafeInteger(installationId) || installationId <= 0) {
+      return portalRedirect(env, { slackError: "invalid_installation" })
+    }
+    // Org-linked install: the caller must be a signed-in admin of the exact
+    // installation (mirrors linear-config-route's admin gate).
+    const session = await requireSession(request, env, ctx)
+    if (!session) {
+      return new Response(null, { status: 302, headers: { location: `${portalUrl(env)}/login` } })
+    }
+    if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) {
+      return portalRedirect(env, { slackError: "misconfigured" })
+    }
+    let accessToken: string
+    try {
+      accessToken = await decryptAccessToken(
+        { encryptedAccessToken: session.record.encryptedAccessToken, iv: session.record.iv },
+        session.sessionId,
+        env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+      )
+    } catch {
+      return portalRedirect(env, { slackError: "session_invalid" })
+    }
+    if (!(await isAdminOfInstallation(accessToken, session.record.login, installationId))) {
+      return portalRedirect(env, { slackError: "forbidden" })
+    }
+    stateRecord = { installationId, login: session.record.login }
+  }
+
+  const authorizeUrl = await buildSlackAuthorizeUrl(env, stateRecord ? { stateRecord } : undefined)
   return new Response(null, {
     status: 302,
     headers: { location: authorizeUrl },
@@ -109,6 +177,25 @@ export async function handleSlackOAuthCallback(request: Request, env: Env): Prom
   const stateValue = await env.OPENCLAW_STATE.get(`${STATE_KV_PREFIX}${state}`)
   if (stateValue === null) {
     return new Response("invalid or expired state\n", { status: 400 })
+  }
+
+  // Org identity threaded through the state (portal-initiated installs). The
+  // legacy anonymous flow stores "1" — treated as "no org linkage".
+  let orgLink: SlackOAuthStateRecord | null = null
+  if (stateValue !== "1") {
+    try {
+      const parsedState = JSON.parse(stateValue) as Partial<SlackOAuthStateRecord>
+      if (
+        Number.isSafeInteger(parsedState.installationId) &&
+        Number(parsedState.installationId) > 0 &&
+        typeof parsedState.login === "string" &&
+        parsedState.login
+      ) {
+        orgLink = { installationId: Number(parsedState.installationId), login: parsedState.login }
+      }
+    } catch {
+      // Unparseable state record — proceed without org linkage.
+    }
   }
 
   // 2. Code must be present before we consume the nonce (replay-safe: a
@@ -182,6 +269,25 @@ export async function handleSlackOAuthCallback(request: Request, env: Env): Prom
   } catch {
     console.error("slack oauth.v2.access: failed to persist install")
     return new Response("OAuth exchange failed\n", { status: 502 })
+  }
+
+  // Portal-initiated install: link the Slack team to the initiating Sigilix
+  // org in D1, then bounce back to the portal's Slack page (channel picker).
+  if (orgLink) {
+    try {
+      await upsertSlackWorkspace(env, {
+        teamId,
+        installationId: orgLink.installationId,
+        installedBy: orgLink.login,
+        nowIso: new Date().toISOString(),
+      })
+    } catch {
+      // Org linkage failed (DB unbound / migration 0019 not applied). The bot
+      // token IS stored, but the portal can't bind channels yet — surface it.
+      console.error("slack oauth.v2.access: failed to link workspace to installation")
+      return portalRedirect(env, { slackError: "org_link_failed" })
+    }
+    return portalRedirect(env, { slackConnected: "1" })
   }
 
   const base = env.OPENCLAW_BASE_URL ?? "https://app.sigilix.ai"

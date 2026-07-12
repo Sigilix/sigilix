@@ -131,7 +131,7 @@ async function runDeferredWork(
   const threadTs = typeof event.thread_ts === "string" ? event.thread_ts : typeof event.ts === "string" ? event.ts : ""
 
   // ── Scope check ─────────────────────────────────────────────────────────────
-  const scopeResult = resolveSlackScope(env, { teamId, channelId })
+  const scopeResult = await resolveSlackScope(env, { teamId, channelId })
   if (!scopeResult.ok) {
     if (mode === "on") {
       // Best-effort: try to post a "not connected" message via the bot token.

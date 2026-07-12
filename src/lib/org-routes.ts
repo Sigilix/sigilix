@@ -20,6 +20,7 @@ import { handleOrgOverviewRoute } from "@/src/lib/org-overview-route"
 import { handleOrgSeatRoute } from "@/src/lib/org-seat-route"
 import { handleGetReviewConfig, handleSetReviewConfig } from "@/src/lib/review-config-route"
 import { handleGetLinearConfig, handleSetLinearConfig } from "@/src/lib/linear-config-route"
+import { handleGetSlackConfig, handleSetSlackConfig } from "@/src/lib/slack-config-route"
 import { handleLinearTenantInstall } from "@/src/lib/linear-agent-oauth"
 import { handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
 import type { Env } from "@/src/shared/types/env"
@@ -31,6 +32,7 @@ const DATA_CONSENT_PATH_RE = /^\/v1\/org\/([^/]+)\/data-consent$/
 const REVIEW_CONFIG_PATH_RE = /^\/v1\/org\/([^/]+)\/review-config$/
 const LINEAR_CONFIG_PATH_RE = /^\/v1\/org\/([^/]+)\/linear-config$/
 const LINEAR_INSTALL_PATH_RE = /^\/v1\/org\/([^/]+)\/linear\/install$/
+const SLACK_CONFIG_PATH_RE = /^\/v1\/org\/([^/]+)\/slack-config$/
 
 /** True for a path this surface serves — overview, seat, data-consent, or review-config. */
 function isOrgPath(pathname: string): boolean {
@@ -40,7 +42,8 @@ function isOrgPath(pathname: string): boolean {
     DATA_CONSENT_PATH_RE.test(pathname) ||
     REVIEW_CONFIG_PATH_RE.test(pathname) ||
     LINEAR_CONFIG_PATH_RE.test(pathname) ||
-    LINEAR_INSTALL_PATH_RE.test(pathname)
+    LINEAR_INSTALL_PATH_RE.test(pathname) ||
+    SLACK_CONFIG_PATH_RE.test(pathname)
   )
 }
 
@@ -97,6 +100,17 @@ export async function handleOrgRoutes(request: Request, env: Env, ctx: Execution
     }
     if (request.method === "PUT") {
       return withPortalCors(request, await handleSetLinearConfig(request, env, ctx, iid), env)
+    }
+  }
+  // Slack channel→repo binding settings (admin-gated) — slack-config-route.ts
+  const slackConfigMatch = SLACK_CONFIG_PATH_RE.exec(url.pathname)
+  if (slackConfigMatch) {
+    const iid = Number(decodeURIComponent(slackConfigMatch[1]!))
+    if (request.method === "GET") {
+      return withPortalCors(request, await handleGetSlackConfig(request, env, ctx, iid), env)
+    }
+    if (request.method === "PUT") {
+      return withPortalCors(request, await handleSetSlackConfig(request, env, ctx, iid), env)
     }
   }
   const linearInstallMatch = LINEAR_INSTALL_PATH_RE.exec(url.pathname)

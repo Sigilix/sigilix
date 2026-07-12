@@ -6,6 +6,7 @@
 // Fetch is stubbed via vi.spyOn(globalThis, "fetch") following the pattern in
 // auth-oauth-github.test.ts.
 
+import { readFileSync } from "node:fs"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   putSlackInstall,
@@ -14,7 +15,14 @@ import {
   buildSlackAuthorizeUrl,
   handleSlackInstall,
 } from "@/src/lib/slack/slack-install"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import type { Env } from "@/src/shared/types/env"
+
+const BASE_SQL = readFileSync(new URL("../../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
+const SLACK_SQL = readFileSync(
+  new URL("../../../migrations/0019_create_slack_channel_repo.sql", import.meta.url),
+  "utf8",
+)
 
 // ─── Map-backed fake KVNamespace ────────────────────────────────────────────
 
@@ -385,5 +393,166 @@ describe("handleSlackInstall", () => {
     const res = await handleSlackInstall(new Request("https://app.sigilix.ai/slack/install"), env)
 
     expect(res.status).toBe(503)
+  })
+})
+
+// ─── Org-linked install (installation id threaded through OAuth state) ───────
+
+describe("org-linked install → slack_workspace linkage", () => {
+  const NOW = "2026-07-11T00:00:00.000Z"
+
+  async function makeDb(): Promise<D1Database> {
+    const db = makeD1()
+    await db.exec(BASE_SQL)
+    await db.exec(SLACK_SQL)
+    return db
+  }
+
+  function callbackReq(params: Record<string, string>): Request {
+    const url = new URL("https://api.sigilix.ai/slack/oauth/callback")
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
+    return new Request(url.toString())
+  }
+
+  function mockSlackExchangeOk(teamId = "TCUST"): void {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: true, access_token: "xoxb-cust", team: { id: teamId } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    )
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("links the Slack team to the initiating installation and bounces to the portal", async () => {
+    const kv = makeFakeKV()
+    const db = await makeDb()
+    const env = makeEnv(kv, {
+      SLACK_CLIENT_ID: "clientid",
+      SLACK_CLIENT_SECRET: "secret",
+      OPENCLAW_BASE_URL: "https://api.sigilix.ai",
+      OPENCLAW_PORTAL_URL: "https://app.sigilix.ai",
+      SIGILIX_PLATFORM_DB: db,
+    })
+    kv._store.set("slack-oauth-state:org-state", JSON.stringify({ installationId: 42, login: "octocat" }))
+    mockSlackExchangeOk("TCUST")
+
+    const res = await handleSlackOAuthCallback(callbackReq({ code: "code123", state: "org-state" }), env)
+
+    expect(res.status).toBe(302)
+    expect(res.headers.get("location")).toBe("https://app.sigilix.ai/apps/slack?slackConnected=1")
+    // Bot token stored in KV as before…
+    expect(kv._store.get("slack-install:TCUST")).toContain("xoxb-cust")
+    // …and the workspace linked to installation 42 in D1.
+    const row = await db
+      .prepare("SELECT installation_id, installed_by FROM slack_workspace WHERE team_id = 'TCUST'")
+      .first<{ installation_id: number; installed_by: string }>()
+    expect(row).toEqual({ installation_id: 42, installed_by: "octocat" })
+  })
+
+  it("legacy anonymous state ('1') stores the install with NO org linkage", async () => {
+    const kv = makeFakeKV()
+    const db = await makeDb()
+    const env = makeEnv(kv, {
+      SLACK_CLIENT_ID: "clientid",
+      SLACK_CLIENT_SECRET: "secret",
+      OPENCLAW_BASE_URL: "https://api.sigilix.ai",
+      SIGILIX_PLATFORM_DB: db,
+    })
+    kv._store.set("slack-oauth-state:anon-state", "1")
+    mockSlackExchangeOk("TANON")
+
+    const res = await handleSlackOAuthCallback(callbackReq({ code: "code123", state: "anon-state" }), env)
+
+    expect(res.status).toBe(302)
+    expect(res.headers.get("location")).toBe("https://api.sigilix.ai/slack/installed")
+    const row = await db.prepare("SELECT team_id FROM slack_workspace WHERE team_id = 'TANON'").first()
+    expect(row).toBeNull()
+  })
+
+  it("surfaces org_link_failed (portal redirect) when the workspace linkage cannot be written", async () => {
+    const kv = makeFakeKV()
+    const env = makeEnv(kv, {
+      SLACK_CLIENT_ID: "clientid",
+      SLACK_CLIENT_SECRET: "secret",
+      OPENCLAW_PORTAL_URL: "https://app.sigilix.ai",
+      // No SIGILIX_PLATFORM_DB bound → upsert throws → org_link_failed.
+    })
+    kv._store.set("slack-oauth-state:org-state", JSON.stringify({ installationId: 42, login: "octocat" }))
+    mockSlackExchangeOk("TFAIL")
+
+    const res = await handleSlackOAuthCallback(callbackReq({ code: "code123", state: "org-state" }), env)
+
+    expect(res.status).toBe(302)
+    expect(res.headers.get("location")).toBe("https://app.sigilix.ai/apps/slack?slackError=org_link_failed")
+  })
+
+  it("handleSlackInstall with ?installation_id and no session redirects to the portal login", async () => {
+    const kv = makeFakeKV()
+    const env = makeEnv(kv, {
+      SLACK_CLIENT_ID: "cid",
+      OPENCLAW_PORTAL_URL: "https://app.sigilix.ai",
+    })
+
+    const res = await handleSlackInstall(new Request("https://api.sigilix.ai/slack/install?installation_id=42"), env)
+
+    expect(res.status).toBe(302)
+    expect(res.headers.get("location")).toBe("https://app.sigilix.ai/login")
+    // No OAuth state minted for an unauthenticated org-linked request.
+    expect([...kv._store.keys()].some((k) => k.startsWith("slack-oauth-state:"))).toBe(false)
+  })
+
+  it("handleSlackInstall rejects a malformed installation_id with a portal error redirect", async () => {
+    const kv = makeFakeKV()
+    const env = makeEnv(kv, {
+      SLACK_CLIENT_ID: "cid",
+      OPENCLAW_PORTAL_URL: "https://app.sigilix.ai",
+    })
+
+    const res = await handleSlackInstall(new Request("https://api.sigilix.ai/slack/install?installation_id=-5"), env)
+
+    expect(res.status).toBe(302)
+    expect(res.headers.get("location")).toBe("https://app.sigilix.ai/apps/slack?slackError=invalid_installation")
+  })
+
+  it("re-install by a DIFFERENT installation takes over the team and clears old bindings", async () => {
+    const kv = makeFakeKV()
+    const db = await makeDb()
+    const env = makeEnv(kv, {
+      SLACK_CLIENT_ID: "clientid",
+      SLACK_CLIENT_SECRET: "secret",
+      OPENCLAW_PORTAL_URL: "https://app.sigilix.ai",
+      SIGILIX_PLATFORM_DB: db,
+    })
+    // Existing linkage: team TSWAP belongs to installation 42 with one binding.
+    await db
+      .prepare(
+        "INSERT INTO slack_workspace (team_id, installation_id, installed_by, installed_at, updated_at)" +
+          " VALUES ('TSWAP', 42, 'octocat', ?, ?)",
+      )
+      .bind(NOW, NOW)
+      .run()
+    await db
+      .prepare(
+        "INSERT INTO slack_channel_binding (team_id, channel_id, installation_id, use_all_repos, created_at, updated_at)" +
+          " VALUES ('TSWAP', 'C1', 42, 1, ?, ?)",
+      )
+      .bind(NOW, NOW)
+      .run()
+    kv._store.set("slack-oauth-state:org-state", JSON.stringify({ installationId: 77, login: "hubot" }))
+    mockSlackExchangeOk("TSWAP")
+
+    const res = await handleSlackOAuthCallback(callbackReq({ code: "code123", state: "org-state" }), env)
+
+    expect(res.status).toBe(302)
+    const workspace = await db
+      .prepare("SELECT installation_id FROM slack_workspace WHERE team_id = 'TSWAP'")
+      .first<{ installation_id: number }>()
+    expect(workspace).toEqual({ installation_id: 77 })
+    const bindings = await db.prepare("SELECT channel_id FROM slack_channel_binding WHERE team_id = 'TSWAP'").all()
+    expect(bindings.results).toEqual([])
   })
 })

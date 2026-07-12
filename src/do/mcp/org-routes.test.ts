@@ -541,6 +541,20 @@ describe("tenant-key MCP runtime", () => {
     expect(body.apps).toContainEqual(
       expect.objectContaining({ id: "github", canonicalMention: "@GitHub", aliases: ["@gh"], surfaces: [] }),
     )
+    expect(body.apps).toContainEqual(
+      expect.objectContaining({
+        id: "datadog",
+        canonicalMention: "@Datadog",
+        surfaces: ["chat", "deep-research", "cli"],
+      }),
+    )
+    expect(body.apps).toContainEqual(
+      expect.objectContaining({
+        id: "netlify",
+        canonicalMention: "@Netlify",
+        surfaces: ["chat", "deep-research", "cli"],
+      }),
+    )
     expect(JSON.stringify(body)).not.toMatch(/serverId|grant|https?:\/\//)
     expect(idFromNameCalls).toEqual([])
   })

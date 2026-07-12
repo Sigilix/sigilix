@@ -40,6 +40,62 @@ describe("resolveGovernedSkill", () => {
   })
 
   it.each([
+    ["supabase-platform-workflows", "Audit this Supabase Auth session flow"],
+    ["cloudflare-wrangler", "Check this wrangler jsonc configuration"],
+    ["cloudflare-agents-sdk", "Design this Cloudflare Agents SDK state flow"],
+    ["openai-sentry-investigation", "Investigate this Sentry error"],
+    ["openai-notion-research", "Compare these Notion research pages"],
+    ["openai-browser-qa", "Run browser QA on this responsive web flow"],
+    ["openai-security-ownership-analysis", "Analyze the security ownership bus factor in this repository"],
+  ] as const)("resolves the new %s guidance from a matching task", (skillId, task) => {
+    const result = resolveGovernedSkill({
+      policies: [policy(skillId)],
+      surface: "chat",
+      task,
+    })
+    expect(result.status).toBe("resolved")
+    if (result.status === "resolved") {
+      expect(result.context.provenance.id).toBe(skillId)
+    }
+  })
+
+  it("prefers Wrangler guidance when generic Worker guidance is also installed", () => {
+    const result = resolveGovernedSkill({
+      policies: [policy("cloudflare-workers-best-practices"), policy("cloudflare-wrangler")],
+      surface: "chat",
+      task: "Review this wrangler configuration",
+    })
+    expect(result.status).toBe("resolved")
+    if (result.status === "resolved") {
+      expect(result.context.provenance.id).toBe("cloudflare-wrangler")
+    }
+  })
+
+  it("prefers Agents SDK guidance when generic Worker guidance is also installed", () => {
+    const result = resolveGovernedSkill({
+      policies: [policy("cloudflare-workers-best-practices"), policy("cloudflare-agents-sdk")],
+      surface: "chat",
+      task: "Review this Cloudflare Worker useAgentChat state flow",
+    })
+    expect(result.status).toBe("resolved")
+    if (result.status === "resolved") {
+      expect(result.context.provenance.id).toBe("cloudflare-agents-sdk")
+    }
+  })
+
+  it("does not inject Sentry guidance into a generic production-error task", () => {
+    const result = resolveGovernedSkill({
+      policies: [policy("openai-sentry-investigation")],
+      surface: "chat",
+      task: "Investigate this production error",
+    })
+    expect(result.status).toBe("empty")
+    if (result.status === "empty") {
+      expect(result.reasons.trigger_miss).toBe(1)
+    }
+  })
+
+  it.each([
     ["disabled", policy("supabase-postgres-best-practices", { enabled: false })],
     ["revoked", policy("supabase-postgres-best-practices", { status: "revoked", revokedAt: 30 })],
     ["surface_disabled", policy("supabase-postgres-best-practices", { surfaces: disabledSkillSurfaces() })],

@@ -635,6 +635,22 @@ describe("McpConnectionsAgent — policy + safe runtime", () => {
       blockedTool: "update-feature-flag",
       arguments: { projectKey: "checkout", featureFlagKey: "new-payment-flow" },
     },
+    {
+      vendor: "datadog",
+      url: "https://mcp.datadoghq.com/v1/mcp",
+      name: "Datadog",
+      readTool: "analyze_datadog_logs",
+      blockedTool: "create_datadog_notebook",
+      arguments: { query: "SELECT service, count(*) FROM logs GROUP BY service" },
+    },
+    {
+      vendor: "netlify",
+      url: "https://netlify-mcp.netlify.app/mcp",
+      name: "Netlify",
+      readTool: "netlify-deploy-services-reader",
+      blockedTool: "netlify-deploy-services-updater",
+      arguments: { action: "list-deploys", siteId: "site-1" },
+    },
   ])(
     "routes an explicitly enabled $vendor reader while blocking provider writes",
     async ({ vendor, url, name, readTool, blockedTool, arguments: toolArguments }) => {

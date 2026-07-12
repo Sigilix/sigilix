@@ -86,6 +86,8 @@ describe("runtime app registry", () => {
     expect(isToolCompatibleWithRuntimeApp("unknown", "linear", "list_comments")).toBe(false)
     expect(isToolCompatibleWithRuntimeApp("grafana", "grafana", "query_prometheus")).toBe(true)
     expect(isToolCompatibleWithRuntimeApp("launchdarkly", "launchdarkly", "get-feature-flag")).toBe(true)
+    expect(isToolCompatibleWithRuntimeApp("datadog", "datadog", "search_datadog_logs")).toBe(true)
+    expect(isToolCompatibleWithRuntimeApp("netlify", "netlify", "netlify-project-services-reader")).toBe(true)
   })
 
   it("publishes stable human-safe rejection copy for every public error code", () => {
@@ -129,6 +131,18 @@ describe("parseLeadingRuntimeAppMention", () => {
       appId: "launchdarkly",
       mention: "@LD",
       task: "show the checkout flag",
+    })
+    expect(parseLeadingRuntimeAppMention("@Datadog find production errors")).toEqual({
+      kind: "resolved",
+      appId: "datadog",
+      mention: "@Datadog",
+      task: "find production errors",
+    })
+    expect(parseLeadingRuntimeAppMention("@Netlify list recent deploys")).toEqual({
+      kind: "resolved",
+      appId: "netlify",
+      mention: "@Netlify",
+      task: "list recent deploys",
     })
   })
 

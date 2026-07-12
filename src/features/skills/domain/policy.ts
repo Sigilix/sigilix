@@ -203,6 +203,8 @@ export function publicSkillManifest(skill: GovernedSkillManifest): Record<string
     id: skill.id,
     name: skill.name,
     description: skill.description,
+    category: skill.category,
+    explanation: skill.explanation,
     instructionVersion: skill.instructionVersion,
     instructionSha256: skill.instructionSha256,
     source: skill.source,

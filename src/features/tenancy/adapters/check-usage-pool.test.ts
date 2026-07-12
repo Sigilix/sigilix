@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
 import { checkUsagePool } from "@/src/features/tenancy/adapters/check-usage-pool"
+import { TIER_COST_BUDGET_USD } from "@/src/features/tenancy/domain/rate-limit"
 import { appendUsageEvent } from "@/src/features/tenancy/adapters/d1-usage-events"
 import type { Env } from "@/src/shared/types/env"
 
@@ -170,9 +171,11 @@ describe("checkUsagePool — cost budget (free CLI/chatbot capped)", () => {
 
   it("FREE seat pool blocks on COST while UNDER the count cap (chatbot spend)", async () => {
     const now = Date.now()
-    // One chatbot run at $0.50 > free session budget $0.375, with no count cap set →
-    // count is fine (1 run), but the dollar budget is exceeded → blocked on cost.
-    await seedSeatCost(db, "gh:9", "chatbot", 0.5, new Date(now).toISOString())
+    // One chatbot run priced just OVER the free session budget, with no count cap set →
+    // the count is fine (1 run), but the dollar budget is exceeded → blocked on cost.
+    // Seeded RELATIVE to the budget so retuning free-tier generosity can't rot this test.
+    const overBudget = TIER_COST_BUDGET_USD.free.session! + 0.25
+    await seedSeatCost(db, "gh:9", "chatbot", overBudget, new Date(now).toISOString())
     const env: CheckEnv = {
       SIGILIX_PLATFORM_DB: db,
       SIGILIX_USAGE_METER_MODE: "enforce",
@@ -180,8 +183,8 @@ describe("checkUsagePool — cost budget (free CLI/chatbot capped)", () => {
       SIGILIX_USAGE_CAP_SEAT_WEEKLY: "-1",
     }
     const d = await checkUsagePool(env, { pool: "seat", userKey: "gh:9", nowMs: now, tier: "free" })
-    expect(d.session.usedCostUsd).toBeCloseTo(0.5, 6)
-    expect(d.session.costBudgetUsd).toBeCloseTo(0.375, 6)
+    expect(d.session.usedCostUsd).toBeCloseTo(overBudget, 6)
+    expect(d.session.costBudgetUsd).toBeCloseTo(TIER_COST_BUDGET_USD.free.session!, 6)
     expect(d.allowed).toBe(false)
   })
 

@@ -244,7 +244,19 @@ export type CostBudgetWindow = "session" | "weekly"
 export const TIER_COST_BUDGET_USD: Readonly<
   Record<"free" | "pro" | "teams" | "max" | "ultra" | "enterprise", Record<CostBudgetWindow, number | null>>
 > = {
-  free: { session: 0.375, weekly: 1.5 },
+  // sig-launch-generosity: free is an ACQUISITION budget, not a margin line. At the
+  // measured ~$0.25/review this is ~8 reviews per 5h burst and ~20/week — enough for a
+  // developer to evaluate Sigilix on a real repo and hit the "it caught something I'd
+  // have missed" moment. The prior 0.375/1.50 allowed ~1 review before the wall, which
+  // reads as "broken", not "free tier", and would have burned every launch visitor.
+  // Worst case is hard-bounded at $5/wk (~$21/mo) per free org, and both numbers are
+  // tunable live via SIGILIX_COST_BUDGET_FREE_{SESSION,WEEKLY} with no code change.
+  //
+  // CEILING ON `session`: free is the FLOOR a trial can never fall below, so it must stay
+  // strictly BELOW a halved Pro trial or the ladder inverts and Free beats a paying
+  // trialer. Pro session halves to $1.875 — hence 1.50, not 2.00. (Weekly is safe: Pro
+  // halves to $7.50 > 5.00.) Raising Pro is the only way to raise free session further.
+  free: { session: 1.5, weekly: 5.0 },
   pro: { session: 3.75, weekly: 15.0 },
   teams: { session: 5.5, weekly: 22.0 }, // per-seat volume play → above Pro (intended)
   max: { session: 10.0, weekly: 40.0 },

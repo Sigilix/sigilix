@@ -30,35 +30,42 @@ export interface SlackChannelBinding {
   repos: SlackRepoRef[]
 }
 
-/** Link a Slack workspace to the Sigilix org that installed it. Idempotent; a
- *  re-install by a DIFFERENT installation takes over the team and clears the
- *  previous org's channel bindings (stale bindings must never leak across orgs). */
+export type UpsertSlackWorkspaceResult = { ok: true } | { ok: false; reason: "team-linked-to-other-installation" }
+
+/** Link a Slack workspace to the Sigilix org that installed it. Idempotent for
+ *  the SAME installation (re-installs refresh the row). A team already linked
+ *  to a DIFFERENT installation is REFUSED — never taken over — because the
+ *  install flow only proves the caller admins the installation they named, not
+ *  the workspace's current owner. Unlinking is an explicit owner-side action.
+ *  The guard is atomic: the conditional upsert and the verify read tolerate
+ *  concurrent callbacks (last-writer for the same installation only). */
 export async function upsertSlackWorkspace(
   env: StoreEnv,
   args: { teamId: string; installationId: number; installedBy: string; nowIso: string },
-): Promise<void> {
+): Promise<UpsertSlackWorkspaceResult> {
   const db = env.SIGILIX_PLATFORM_DB
   if (!db) throw new Error("SIGILIX_PLATFORM_DB unbound")
-  const existing = await db
+  // Insert a fresh link, or refresh the row ONLY when the team already belongs
+  // to this same installation. A conflicting row owned by another installation
+  // is left untouched (the WHERE clause makes the update a no-op).
+  await db
+    .prepare(
+      "INSERT INTO slack_workspace (team_id, installation_id, installed_by, installed_at, updated_at)" +
+        " VALUES (?, ?, ?, ?, ?)" +
+        " ON CONFLICT(team_id) DO UPDATE SET" +
+        " installed_by = excluded.installed_by, updated_at = excluded.updated_at" +
+        " WHERE slack_workspace.installation_id = excluded.installation_id",
+    )
+    .bind(args.teamId, args.installationId, args.installedBy, args.nowIso, args.nowIso)
+    .run()
+  const row = await db
     .prepare("SELECT installation_id FROM slack_workspace WHERE team_id = ?")
     .bind(args.teamId)
     .first<{ installation_id: number }>()
-  const statements: D1PreparedStatement[] = []
-  if (existing && existing.installation_id !== args.installationId) {
-    statements.push(db.prepare("DELETE FROM slack_channel_repo WHERE team_id = ?").bind(args.teamId))
-    statements.push(db.prepare("DELETE FROM slack_channel_binding WHERE team_id = ?").bind(args.teamId))
+  if (!row || row.installation_id !== args.installationId) {
+    return { ok: false, reason: "team-linked-to-other-installation" }
   }
-  statements.push(
-    db
-      .prepare(
-        "INSERT INTO slack_workspace (team_id, installation_id, installed_by, installed_at, updated_at)" +
-          " VALUES (?, ?, ?, ?, ?)" +
-          " ON CONFLICT(team_id) DO UPDATE SET installation_id = excluded.installation_id," +
-          " installed_by = excluded.installed_by, updated_at = excluded.updated_at",
-      )
-      .bind(args.teamId, args.installationId, args.installedBy, args.nowIso, args.nowIso),
-  )
-  await db.batch(statements)
+  return { ok: true }
 }
 
 /** The installation's connected Slack workspace, or null. */
@@ -125,8 +132,10 @@ export async function listSlackChannelBindings(env: StoreEnv, installationId: nu
 }
 
 /** Atomically replace the installation's channel bindings (delete + insert in
- *  one batch). The caller has already validated channel ids and repo ownership;
- *  this only writes rows scoped to (installationId, teamId). */
+ *  one batch). The caller has already validated channel ids and repo ownership.
+ *  Deletes are scoped by installation ONLY (not team) so the delete scope
+ *  matches `listSlackChannelBindings` exactly — removing a channel in the UI
+ *  removes it even if the org's workspace link moved to a new team since. */
 export async function replaceSlackChannelBindings(
   env: StoreEnv,
   args: { installationId: number; teamId: string; bindings: SlackChannelBinding[]; nowIso: string },
@@ -134,12 +143,8 @@ export async function replaceSlackChannelBindings(
   const db = env.SIGILIX_PLATFORM_DB
   if (!db) throw new Error("SIGILIX_PLATFORM_DB unbound")
   const statements: D1PreparedStatement[] = [
-    db
-      .prepare("DELETE FROM slack_channel_repo WHERE team_id = ? AND installation_id = ?")
-      .bind(args.teamId, args.installationId),
-    db
-      .prepare("DELETE FROM slack_channel_binding WHERE team_id = ? AND installation_id = ?")
-      .bind(args.teamId, args.installationId),
+    db.prepare("DELETE FROM slack_channel_repo WHERE installation_id = ?").bind(args.installationId),
+    db.prepare("DELETE FROM slack_channel_binding WHERE installation_id = ?").bind(args.installationId),
   ]
   for (const binding of args.bindings) {
     statements.push(
@@ -179,6 +184,37 @@ export async function replaceSlackChannelBindings(
     }
   }
   await db.batch(statements)
+}
+
+/** Best-effort registration of an installation's live GitHub repos into the
+ *  shared `repo` table. `repo` rows are otherwise webhook-lazy, so a fresh
+ *  installation has none — which would leave the picker empty and make a
+ *  `useAllRepos` binding expand to nothing at resolve time. Failures (e.g. a
+ *  missing `tenant` row for the FK) are swallowed: callers fall back to
+ *  whatever is already registered. */
+export async function registerInstallationRepos(
+  env: StoreEnv,
+  installationId: number,
+  repos: Array<{ repoId: number; fullName: string }>,
+  nowIso: string,
+): Promise<void> {
+  const db = env.SIGILIX_PLATFORM_DB
+  if (!db || repos.length === 0) return
+  try {
+    await db.batch(
+      repos.map((repo) =>
+        db
+          .prepare(
+            "INSERT INTO repo (repo_id, installation_id, full_name, updated_at) VALUES (?, ?, ?, ?)" +
+              " ON CONFLICT(repo_id) DO UPDATE SET installation_id = excluded.installation_id," +
+              " full_name = excluded.full_name, updated_at = excluded.updated_at",
+          )
+          .bind(repo.repoId, installationId, repo.fullName, nowIso),
+      ),
+    )
+  } catch {
+    // Best-effort — the caller intersects against the existing rows regardless.
+  }
 }
 
 /** Repos registered for an installation (shared `repo` table) — the candidate

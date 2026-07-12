@@ -18,7 +18,7 @@
 // A bare GET /slack/install (no param) keeps the original anonymous behavior.
 
 import { requireSession } from "@/src/lib/auth-middleware"
-import { decryptAccessToken } from "@/src/lib/auth-session"
+import { decryptAccessToken, type SessionRecord } from "@/src/lib/auth-session"
 import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
 import { upsertSlackWorkspace } from "@/src/lib/slack/slack-binding-store"
 import type { Env } from "@/src/shared/types/env"
@@ -30,10 +30,22 @@ export interface SlackInstall {
 }
 
 /** Org identity carried through the OAuth `state` KV record. The legacy
- *  anonymous flow stores the literal "1" instead (no org linkage). */
+ *  anonymous flow stores the literal "1" instead (no org linkage). The state
+ *  is bound to the SAME signed-in portal user who began the install (`userKey`)
+ *  and the callback re-verifies the session against it — a forwarded authorize
+ *  link cannot link a victim's workspace to the initiator's installation. */
 interface SlackOAuthStateRecord {
   installationId: number
   login: string
+  userKey: string
+}
+
+/** Stable per-user key for state↔session binding — mirrors the GitLab
+ *  connector's `connectUserKey`. */
+function sessionUserKey(record: SessionRecord): string {
+  if (record.userId) return record.userId
+  if (typeof record.githubUserId === "number") return `gh:${record.githubUserId}`
+  return `login:${record.login}`
 }
 
 const KV_PREFIX = "slack-install:"
@@ -147,7 +159,11 @@ export async function handleSlackInstall(request: Request, env: Env, ctx?: Execu
     if (!(await isAdminOfInstallation(accessToken, session.record.login, installationId))) {
       return portalRedirect(env, { slackError: "forbidden" })
     }
-    stateRecord = { installationId, login: session.record.login }
+    stateRecord = {
+      installationId,
+      login: session.record.login,
+      userKey: sessionUserKey(session.record),
+    }
   }
 
   const authorizeUrl = await buildSlackAuthorizeUrl(env, stateRecord ? { stateRecord } : undefined)
@@ -166,7 +182,7 @@ export async function handleSlackInstall(request: Request, env: Env, ctx?: Execu
  *  → exchange → persist. The nonce is never consumed for a missing-code 400.
  *
  *  NEVER logs the token-exchange response body or the bot token. */
-export async function handleSlackOAuthCallback(request: Request, env: Env): Promise<Response> {
+export async function handleSlackOAuthCallback(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   const url = new URL(request.url)
 
   // 1. CSRF state verification — must happen before the code exchange.
@@ -189,12 +205,34 @@ export async function handleSlackOAuthCallback(request: Request, env: Env): Prom
         Number.isSafeInteger(parsedState.installationId) &&
         Number(parsedState.installationId) > 0 &&
         typeof parsedState.login === "string" &&
-        parsedState.login
+        parsedState.login &&
+        typeof parsedState.userKey === "string" &&
+        parsedState.userKey
       ) {
-        orgLink = { installationId: Number(parsedState.installationId), login: parsedState.login }
+        orgLink = {
+          installationId: Number(parsedState.installationId),
+          login: parsedState.login,
+          userKey: parsedState.userKey,
+        }
+      } else {
+        // A structured state that fails validation is rejected outright —
+        // never silently downgraded to an unlinked install.
+        return portalRedirect(env, { slackError: "state_invalid" })
       }
     } catch {
-      // Unparseable state record — proceed without org linkage.
+      return portalRedirect(env, { slackError: "state_invalid" })
+    }
+  }
+
+  // Session binding: the callback must arrive in the SAME signed-in browser
+  // that began the org-linked install. Without this, a forwarded authorize
+  // link could let a workspace member unknowingly link their Slack team to the
+  // initiator's installation. Checked BEFORE the nonce is consumed so the
+  // legitimate user can retry after signing in.
+  if (orgLink) {
+    const session = await requireSession(request, env, ctx)
+    if (!session || sessionUserKey(session.record) !== orgLink.userKey) {
+      return portalRedirect(env, { slackError: "session_mismatch" })
     }
   }
 
@@ -274,8 +312,9 @@ export async function handleSlackOAuthCallback(request: Request, env: Env): Prom
   // Portal-initiated install: link the Slack team to the initiating Sigilix
   // org in D1, then bounce back to the portal's Slack page (channel picker).
   if (orgLink) {
+    let linked: Awaited<ReturnType<typeof upsertSlackWorkspace>>
     try {
-      await upsertSlackWorkspace(env, {
+      linked = await upsertSlackWorkspace(env, {
         teamId,
         installationId: orgLink.installationId,
         installedBy: orgLink.login,
@@ -286,6 +325,12 @@ export async function handleSlackOAuthCallback(request: Request, env: Env): Prom
       // token IS stored, but the portal can't bind channels yet — surface it.
       console.error("slack oauth.v2.access: failed to link workspace to installation")
       return portalRedirect(env, { slackError: "org_link_failed" })
+    }
+    if (!linked.ok) {
+      // The team already belongs to ANOTHER installation — takeover refused
+      // (the installer proved admin of their own org, not the current owner's).
+      console.error("slack oauth.v2.access: team already linked to another installation")
+      return portalRedirect(env, { slackError: "workspace_already_linked" })
     }
     return portalRedirect(env, { slackConnected: "1" })
   }

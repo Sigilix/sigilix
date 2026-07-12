@@ -23,6 +23,7 @@ import {
   getSlackWorkspaceForInstallation,
   listSlackChannelBindings,
   listSlackInstallationRepos,
+  registerInstallationRepos,
   replaceSlackChannelBindings,
   type SlackChannelBinding,
 } from "@/src/lib/slack/slack-binding-store"
@@ -31,6 +32,10 @@ import type { Env } from "@/src/shared/types/env"
 // Slack channel ids look like C0BEL8ZAARE / G… (private groups). Closed charset,
 // bounded length — rejects anything that isn't a plausible Slack channel id.
 const CHANNEL_ID_RE = /^[A-Z][A-Z0-9]{4,31}$/
+
+// Bounds on one PUT — keeps the replace batch far under D1's statement limits.
+const MAX_CHANNEL_BINDINGS = 100
+const MAX_REPOS_PER_CHANNEL = 200
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
@@ -74,7 +79,10 @@ interface EligibleRepo {
 }
 
 /** The live intersection of the session user's exact GitHub installation repos
- *  and the installation's registered `repo` rows — mirrors the Linear route. */
+ *  and the installation's registered `repo` rows — mirrors the Linear route.
+ *  Live repos are first registered (best-effort) into the `repo` table because
+ *  its rows are otherwise webhook-lazy: a fresh install would see an empty
+ *  picker and a `useAllRepos` binding would expand to nothing at resolve time. */
 async function listEligibleRepos(
   env: Env,
   installationId: number,
@@ -82,10 +90,15 @@ async function listEligibleRepos(
 ): Promise<EligibleRepo[] | null> {
   const githubScope = await listGithubUserInstallationRepos(accessToken)
   if (!githubScope.ok) return null
-  const current = new Map(
-    githubScope.repos
-      .filter((repo) => repo.installationId === installationId)
-      .map((repo) => [`${repo.owner}/${repo.repo}`.toLowerCase(), repo]),
+  const live = githubScope.repos.filter((repo) => repo.installationId === installationId)
+  const current = new Map(live.map((repo) => [`${repo.owner}/${repo.repo}`.toLowerCase(), repo]))
+  await registerInstallationRepos(
+    env,
+    installationId,
+    live.flatMap((repo) =>
+      repo.repoId !== undefined ? [{ repoId: repo.repoId, fullName: `${repo.owner}/${repo.repo}` }] : [],
+    ),
+    new Date().toISOString(),
   )
   const registered = await listSlackInstallationRepos(env, installationId)
   return registered.flatMap((repo) => {
@@ -156,6 +169,7 @@ interface ParsedChannelBinding {
  * Returns null on any malformed entry or a duplicate channel id.
  */
 function parseChannelBindings(raw: unknown[]): ParsedChannelBinding[] | null {
+  if (raw.length > MAX_CHANNEL_BINDINGS) return null
   const out: ParsedChannelBinding[] = []
   for (const binding of raw) {
     if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return null
@@ -163,7 +177,12 @@ function parseChannelBindings(raw: unknown[]): ParsedChannelBinding[] | null {
     const item = binding as { channelId?: unknown; githubRepoIds?: unknown; useAllRepos?: unknown }
     if (typeof item.channelId !== "string" || !CHANNEL_ID_RE.test(item.channelId)) return null
     if (keys === "channelId,githubRepoIds") {
-      if (!Array.isArray(item.githubRepoIds) || item.githubRepoIds.length === 0) return null
+      if (
+        !Array.isArray(item.githubRepoIds) ||
+        item.githubRepoIds.length === 0 ||
+        item.githubRepoIds.length > MAX_REPOS_PER_CHANNEL
+      )
+        return null
       const repoIds = item.githubRepoIds.map((id) => Number(id))
       if (repoIds.some((id) => !Number.isSafeInteger(id) || id <= 0) || new Set(repoIds).size !== repoIds.length) {
         return null
@@ -221,6 +240,11 @@ export async function handleSetSlackConfig(
   const reposById = new Map(repositories.map((repo) => [repo.githubRepoId, repo]))
   const resolvedBindings: SlackChannelBinding[] = []
   for (const binding of parsedBindings) {
+    // A `useAllRepos` binding over an empty eligible set would be a live-looking
+    // dead binding (it expands to nothing at resolve time) — reject it too.
+    if (binding.useAllRepos && repositories.length === 0) {
+      return json({ error: "slack_channel_repo_binding_invalid", channelId: binding.channelId }, 409)
+    }
     const repos: SlackChannelBinding["repos"] = []
     for (const repoId of binding.repoIds) {
       const repo = reposById.get(repoId)

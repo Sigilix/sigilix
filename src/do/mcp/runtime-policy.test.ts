@@ -212,6 +212,41 @@ const VERIFIED_VENDOR_CASES = [
       "get-audit-log-entries",
     ],
   },
+  {
+    vendor: "datadog",
+    url: "https://mcp.datadoghq.com/v1/mcp",
+    tools: [
+      "search_datadog_events",
+      "get_datadog_incident",
+      "get_datadog_metric",
+      "get_datadog_metric_context",
+      "search_datadog_monitors",
+      "get_datadog_trace",
+      "search_datadog_dashboards",
+      "get_datadog_dashboard",
+      "get_datadog_notebook",
+      "search_datadog_notebooks",
+      "search_datadog_hosts",
+      "search_datadog_incidents",
+      "search_datadog_metrics",
+      "search_datadog_services",
+      "search_datadog_service_dependencies",
+      "search_datadog_spans",
+      "analyze_datadog_logs",
+      "search_datadog_logs",
+    ],
+  },
+  {
+    vendor: "netlify",
+    url: "https://netlify-mcp.netlify.app/mcp",
+    tools: [
+      "netlify-user-services-reader",
+      "netlify-team-services-reader",
+      "netlify-deploy-services-reader",
+      "netlify-project-services-reader",
+      "netlify-extension-services-reader",
+    ],
+  },
 ] as const
 
 describe("MCP server-owned runtime policy", () => {
@@ -241,6 +276,12 @@ describe("MCP server-owned runtime policy", () => {
     expect(vendorPolicyForUrl("https://mcp.grafana.com/mcp/extra")).toBeNull()
     expect(vendorPolicyForUrl("https://mcp.launchdarkly.com/mcp/launchdarkly-v2")).toBeNull()
     expect(vendorPolicyForUrl("https://mcp.launchdarkly.com/mcp/launchdarkly?scope=write")).toBeNull()
+    expect(vendorPolicyForUrl("https://mcp.datadoghq.com/v1/mcp")?.vendor).toBe("datadog")
+    expect(vendorPolicyForUrl("https://mcp.datadoghq.com/v1/mcp/")?.vendor).toBe("datadog")
+    expect(vendorPolicyForUrl("https://mcp.datadoghq.com/v1/mcp?toolsets=all")).toBeNull()
+    expect(vendorPolicyForUrl("https://netlify-mcp.netlify.app/mcp")?.vendor).toBe("netlify")
+    expect(vendorPolicyForUrl("https://netlify-mcp.netlify.app/mcp/")?.vendor).toBe("netlify")
+    expect(vendorPolicyForUrl("https://netlify-mcp.netlify.app/mcp/extra")).toBeNull()
   })
 
   it.each(VERIFIED_VENDOR_CASES)(

@@ -45,6 +45,8 @@ describe("resolveGovernedSkill", () => {
     ["cloudflare-agents-sdk", "Design this Cloudflare Agents SDK state flow"],
     ["openai-sentry-investigation", "Investigate this Sentry error"],
     ["openai-notion-research", "Compare these Notion research pages"],
+    ["openai-browser-qa", "Run browser QA on this responsive web flow"],
+    ["openai-security-ownership-analysis", "Analyze the security ownership bus factor in this repository"],
   ] as const)("resolves the new %s guidance from a matching task", (skillId, task) => {
     const result = resolveGovernedSkill({
       policies: [policy(skillId)],

@@ -2,9 +2,12 @@
 // this narrow barrel; instruction content cannot grant a runtime capability.
 export {
   GOVERNED_SKILL_CATALOG,
+  SKILL_CATEGORIES,
   SKILL_SURFACES,
   governedSkillById,
   type GovernedSkillManifest,
+  type SkillCategory,
+  type SkillPublicExplanation,
   type SkillSurface,
 } from "./domain/catalog"
 export {

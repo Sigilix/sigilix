@@ -3,10 +3,15 @@ import { GOVERNED_SKILL_CATALOG } from "./catalog"
 
 describe("governed skill catalog", () => {
   it("contains only pinned, permissively licensed, guidance-only sources", () => {
-    expect(GOVERNED_SKILL_CATALOG).toHaveLength(10)
-    expect(new Set(GOVERNED_SKILL_CATALOG.map((skill) => skill.id)).size).toBe(10)
+    expect(GOVERNED_SKILL_CATALOG).toHaveLength(12)
+    expect(new Set(GOVERNED_SKILL_CATALOG.map((skill) => skill.id)).size).toBe(12)
     for (const skill of GOVERNED_SKILL_CATALOG) {
       expect(skill.schemaVersion).toBe(1)
+      expect(["engineering", "security", "data", "operations", "knowledge"]).toContain(skill.category)
+      expect(skill.explanation.purpose.trim().length).toBeGreaterThan(40)
+      expect(skill.explanation.useCases.length).toBeGreaterThan(0)
+      expect(skill.explanation.useCases.every((useCase) => useCase.trim().length > 10)).toBe(true)
+      expect(skill.explanation.guardrails.trim().length).toBeGreaterThan(30)
       expect(skill.source.commit).toMatch(/^[a-f0-9]{40}$/)
       expect(skill.source.skillFileSha256).toMatch(/^[a-f0-9]{64}$/)
       expect(["Apache-2.0", "MIT"]).toContain(skill.source.license)
@@ -44,6 +49,8 @@ describe("governed skill catalog", () => {
         "openai-notion-research": "e88a46da978cf6f088a788fa92ee736df699a355a72f41f14bdc258bf3ef57e7",
         "openai-security-threat-model": "1283c0dd62a8104d9edda4583569b5d8510b4ddaa45120687c999250fd96bad2",
         "openai-security-best-practices": "7b3dae1ffc5434d890f3c65c8f552af52d0307fab3b35dec13013c9ca3844c4f",
+        "openai-browser-qa": "0ffaabcc8e0990627c4725f18bf1c7955534a796c1c199e872909de2013ce6a8",
+        "openai-security-ownership-analysis": "f06c1a59247569326702c945f397af163ea96cf2ecfdf2dde280605bf89a3ec8",
       },
     )
   })
@@ -55,6 +62,8 @@ describe("governed skill catalog", () => {
       "cloudflare-agents-sdk": ["cloudflare"],
       "openai-sentry-investigation": ["sentry"],
       "openai-notion-research": ["notion"],
+      "openai-browser-qa": [],
+      "openai-security-ownership-analysis": [],
     })
   })
 })

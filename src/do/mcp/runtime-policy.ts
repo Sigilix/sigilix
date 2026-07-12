@@ -47,6 +47,8 @@ const OFFICIAL_ENDPOINTS: readonly OfficialEndpoint[] = [
   { vendor: "intercom", hostname: "mcp.intercom.com", pathname: "/mcp" },
   { vendor: "grafana", hostname: "mcp.grafana.com", pathname: "/mcp" },
   { vendor: "launchdarkly", hostname: "mcp.launchdarkly.com", pathname: "/mcp/launchdarkly" },
+  { vendor: "datadog", hostname: "mcp.datadoghq.com", pathname: "/v1/mcp" },
+  { vendor: "netlify", hostname: "netlify-mcp.netlify.app", pathname: "/mcp" },
 ]
 
 /**
@@ -198,6 +200,38 @@ const CURATED_READ_TOOLS: Readonly<Record<OfficialMcpVendor, readonly CuratedRea
     "get-flag-status-across-environments",
     "get-environments",
     "get-audit-log-entries",
+  ]),
+  // Core-tool names are published in Datadog's provider-owned MCP tool
+  // reference. Query-selected toolsets stay denied because endpoint queries
+  // are not part of the reviewed trust identity.
+  datadog: reviewedReadTools("Datadog", [
+    "search_datadog_events",
+    "get_datadog_incident",
+    "get_datadog_metric",
+    "get_datadog_metric_context",
+    "search_datadog_monitors",
+    "get_datadog_trace",
+    "search_datadog_dashboards",
+    "get_datadog_dashboard",
+    "get_datadog_notebook",
+    "search_datadog_notebooks",
+    "search_datadog_hosts",
+    "search_datadog_incidents",
+    "search_datadog_metrics",
+    "search_datadog_services",
+    "search_datadog_service_dependencies",
+    "search_datadog_spans",
+    "analyze_datadog_logs",
+    "search_datadog_logs",
+  ]),
+  // Netlify's official server groups reviewed read operations into one reader
+  // per domain. Updater siblings remain outside this allowlist.
+  netlify: reviewedReadTools("Netlify", [
+    "netlify-user-services-reader",
+    "netlify-team-services-reader",
+    "netlify-deploy-services-reader",
+    "netlify-project-services-reader",
+    "netlify-extension-services-reader",
   ]),
 }
 

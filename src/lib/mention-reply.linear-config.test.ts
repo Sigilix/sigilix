@@ -50,11 +50,11 @@ const BASE_CONFIG: LinearConfig = {
   writeback: { comments: true, status: false, labels: true },
 }
 
-function manifest(): string {
+function manifest(repo = "api"): string {
   return JSON.stringify({
     v: 1,
     owner: "acme",
-    repo: "api",
+    repo,
     headSha: "abc123",
     runId: "run-1",
     fileCount: 1,
@@ -69,8 +69,8 @@ function manifest(): string {
   })
 }
 
-function makeEnv(): { env: Env; get: ReturnType<typeof vi.fn> } {
-  const store = new Map([["repo-index-manifest:acme/api", manifest()]])
+function makeEnv(repos: string[] = ["api"]): { env: Env; get: ReturnType<typeof vi.fn> } {
+  const store = new Map(repos.map((repo) => [`repo-index-manifest:acme/${repo}`, manifest(repo)]))
   const get = vi.fn(async (key: string) => store.get(key) ?? null)
   return {
     env: {
@@ -212,5 +212,101 @@ describe("handleMention tenant Linear settings", () => {
     const arg = mocks.retrieveChunks.mock.calls[0]?.[0] as { namespace?: string; crossRepoNamespaces?: string[] }
     expect(arg.namespace).toBe("acme/api")
     expect(arg.crossRepoNamespaces).toEqual(["acme/web"])
+  })
+
+  it("keeps indexed sibling repos available to the agent tool and linked-PR fetch", async () => {
+    mocks.getLinearConfig.mockResolvedValue({ ...BASE_CONFIG, contextMode: "enabled" })
+    mocks.resolveLinearTeamBinding.mockResolvedValue({
+      organizationId: "org-a",
+      installationId: 11,
+      teamId: "team-a",
+      accessState: "allowed",
+      githubRepoId: 101,
+      githubRepoFullName: "acme/api",
+      useAllRepos: false,
+      repos: [
+        { githubRepoId: 101, githubRepoFullName: "acme/api" },
+        { githubRepoId: 102, githubRepoFullName: "acme/web" },
+      ],
+    })
+    mocks.getCommentWithIssue.mockResolvedValue({
+      id: "comment-a",
+      body: "@sigilix inspect https://github.com/acme/web/pull/12",
+      user: { name: "daniel", displayName: "daniel" },
+      parent: null,
+      issue: {
+        id: "issue-a",
+        identifier: "SIG-242",
+        title: "Tenant settings",
+        description: "Make each control real.",
+        team: { id: "team-a", key: "SIG" },
+        comments: { nodes: [] },
+      },
+    })
+    const { env } = makeEnv(["api", "web"])
+
+    await handleMention("comment-a", env, { tenant: TENANT })
+
+    expect(mocks.fetchPullRequestContext).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: "acme", repo: "web", number: 12 }),
+    )
+    const args = mocks.runAgentLoop.mock.calls[0]?.[0] as {
+      initialUserMessage: string
+      tools: Array<{
+        name: string
+        execute: (
+          input: Record<string, unknown>,
+          signal: AbortSignal,
+          context: Map<string, unknown>,
+        ) => Promise<unknown>
+      }>
+    }
+    expect(args.initialUserMessage).toContain("'acme/web'")
+    const retrieve = args.tools.find((tool) => tool.name === "retrieve_codebase")
+    expect(retrieve).toBeDefined()
+    await expect(
+      retrieve!.execute({ query: "session settings", repo: "acme/web" }, new AbortController().signal, new Map()),
+    ).resolves.toMatchObject({ ok: true, repo: "acme/web" })
+  })
+
+  it("does not advertise an unindexed configured sibling to the agent", async () => {
+    mocks.getLinearConfig.mockResolvedValue({ ...BASE_CONFIG, contextMode: "enabled" })
+    mocks.resolveLinearTeamBinding.mockResolvedValue({
+      organizationId: "org-a",
+      installationId: 11,
+      teamId: "team-a",
+      accessState: "allowed",
+      githubRepoId: 101,
+      githubRepoFullName: "acme/api",
+      useAllRepos: false,
+      repos: [
+        { githubRepoId: 101, githubRepoFullName: "acme/api" },
+        { githubRepoId: 102, githubRepoFullName: "acme/web" },
+      ],
+    })
+    mocks.getCommentWithIssue.mockResolvedValue({
+      id: "comment-a",
+      body: "@sigilix inspect https://github.com/acme/web/pull/12",
+      user: { name: "daniel", displayName: "daniel" },
+      parent: null,
+      issue: {
+        id: "issue-a",
+        identifier: "SIG-242",
+        title: "Tenant settings",
+        description: "Make each control real.",
+        team: { id: "team-a", key: "SIG" },
+        comments: { nodes: [] },
+      },
+    })
+    const { env } = makeEnv(["api"])
+
+    await handleMention("comment-a", env, { tenant: TENANT })
+
+    const args = mocks.runAgentLoop.mock.calls[0]?.[0] as { initialUserMessage: string }
+    expect(args.initialUserMessage).toContain("'acme/api'")
+    expect(args.initialUserMessage).not.toContain("'acme/web'")
+    expect(mocks.fetchPullRequestContext).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: "acme", repo: "web", number: 12 }),
+    )
   })
 })

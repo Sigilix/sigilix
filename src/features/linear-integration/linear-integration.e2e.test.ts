@@ -8,6 +8,7 @@ import {
   getLinearConfig,
   getLinearIntegrationSnapshot,
   resolveLinearTeamBinding,
+  resolveLinearTeamBindingForRepo,
   resolveLinearTeamEffectiveRepos,
   updateLinearConfig,
 } from "@/src/features/linear-integration"
@@ -299,6 +300,23 @@ describe("SIG-242 Linear tenant boundary", () => {
     const effective = await resolveLinearTeamEffectiveRepos({ SIGILIX_PLATFORM_DB: db }, team!)
     expect(effective.map((r) => r.githubRepoFullName)).toEqual(["acme/api", "acme/web"])
 
+    // A PR in the secondary repo must resolve the same team binding. The
+    // legacy primary column still names acme/api; membership in acme/web lives
+    // only in linear_team_repo.
+    const secondary = await resolveLinearTeamBindingForRepo({ SIGILIX_PLATFORM_DB: db }, 11, "ACME/WEB")
+    expect(secondary?.teamId).toBe("team-a")
+    expect(secondary?.repos.map((repo) => repo.githubRepoFullName).sort()).toEqual(["acme/api", "acme/web"])
+    await expect(resolveLinearTeamBindingForRepo({ SIGILIX_PLATFORM_DB: db }, 11, "../acme/web")).resolves.toBeNull()
+    await expect(resolveLinearTeamBindingForRepo({ SIGILIX_PLATFORM_DB: db }, 11, "acme/web/extra")).resolves.toBeNull()
+
+    // Even the same full name registered under another installation cannot
+    // satisfy this team's explicit membership or cross the installation key.
+    await db
+      .prepare("INSERT INTO repo (repo_id, installation_id, full_name, updated_at) VALUES (?, ?, ?, ?)")
+      .bind(203, 22, "acme/web", "2026-07-10T00:01:00.000Z")
+      .run()
+    await expect(resolveLinearTeamBindingForRepo({ SIGILIX_PLATFORM_DB: db }, 22, "acme/web")).resolves.toBeNull()
+
     // Tenant isolation: the other org's single binding is untouched.
     const other = await getLinearIntegrationSnapshot({ SIGILIX_PLATFORM_DB: db }, 22)
     expect(other.teams[0]?.repos.map((r) => r.githubRepoFullName)).toEqual(["globex/web"])
@@ -324,6 +342,13 @@ describe("SIG-242 Linear tenant boundary", () => {
     // use-all expands to EVERY repo registered under installation 11.
     const effective = await resolveLinearTeamEffectiveRepos({ SIGILIX_PLATFORM_DB: db }, team!)
     expect(effective.map((r) => r.githubRepoFullName)).toEqual(["acme/api", "acme/infra", "acme/web"])
+
+    // useAllRepos stores an empty legacy primary and no explicit rows. Repo
+    // membership is therefore proven by the installation's repo table.
+    const allRepoMember = await resolveLinearTeamBindingForRepo({ SIGILIX_PLATFORM_DB: db }, 11, "AcMe/InFrA")
+    expect(allRepoMember?.teamId).toBe("team-a")
+    expect(allRepoMember?.useAllRepos).toBe(true)
+    await expect(resolveLinearTeamBindingForRepo({ SIGILIX_PLATFORM_DB: db }, 11, "globex/web")).resolves.toBeNull()
   })
 
   it("rejects a repo id that is not in the installation (atomic guard fails closed)", async () => {

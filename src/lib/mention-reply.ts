@@ -44,6 +44,9 @@ import {
   type LinearTenantContext,
 } from "@/src/features/linear-integration"
 import { resolveBindingRepoScope } from "@/src/lib/cross-repo-context"
+import { resolveTenantLinearRepoScope, type LinearAgentRepoScope } from "@/src/lib/mention-reply-repo-scope"
+
+export type { LinearAgentRepoScope } from "@/src/lib/mention-reply-repo-scope"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 // Note: no HTML-comment marker in the rendered body. Linear renders
@@ -59,13 +62,6 @@ const LIMITS = {
   questionChars: 4_000,
 }
 const MAX_PROMPT_VISIBLE_NAMESPACES = 50
-
-export interface LinearAgentRepoScope {
-  repo: string | null
-  mappedRepo: string | null
-  availableRepos: string[]
-  status: "unmapped" | "mapped_indexed" | "mapped_not_indexed" | "mapped_default_not_indexed"
-}
 
 export function linearRetrievalTeamKey(teamRepo: { owner: string; repo: string } | null): string | null {
   return teamRepo ? indexNamespace(teamRepo.owner, teamRepo.repo) : null
@@ -157,19 +153,6 @@ export async function resolveLinearAgentRepoScope(
         ? "mapped_default_not_indexed"
         : "mapped_not_indexed",
   }
-}
-
-async function resolveTenantLinearRepoScope(
-  env: Env,
-  teamRepo: { owner: string; repo: string } | null,
-): Promise<LinearAgentRepoScope> {
-  if (!teamRepo) return { repo: null, mappedRepo: null, availableRepos: [], status: "unmapped" }
-  const namespace = indexNamespace(teamRepo.owner, teamRepo.repo)
-  const manifest = await readRepoIndexManifest(env, teamRepo.owner, teamRepo.repo)
-  if (manifest.kind !== "ok") {
-    return { repo: null, mappedRepo: namespace, availableRepos: [], status: "mapped_not_indexed" }
-  }
-  return { repo: namespace, mappedRepo: namespace, availableRepos: [namespace], status: "mapped_indexed" }
 }
 
 interface MentionVerdict {
@@ -384,17 +367,20 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
   const contextToolsEnabled = !tenantConfig || codebaseToolsEnabled(tenantConfig)
   const repoScope = contextEnabled
     ? tenant
-      ? await resolveTenantLinearRepoScope(env, teamRepo)
+      ? await resolveTenantLinearRepoScope(env, teamRepo, tenantSiblingNamespaces)
       : await resolveLinearAgentRepoScope(env, teamRepo)
     : { repo: null, mappedRepo: null, availableRepos: [], status: "unmapped" as const }
   const inferRepo = (): { owner: string; repo: string } | null => teamRepo
+  // Linked PR context comes from GitHub directly and does not require an index
+  // manifest. Authorize it from the tenant-verified binding set; only the
+  // retrieval tool narrows further to the indexed subset in `repoScope`.
+  const allowedPrRepos = new Set([
+    ...(teamRepo ? [indexNamespace(teamRepo.owner, teamRepo.repo)] : []),
+    ...tenantSiblingNamespaces,
+  ])
   const prRefs = contextEnabled
     ? extractPullRequestRefs(fullQuestion, inferRepo).filter(
-        (ref) =>
-          !tenant ||
-          (teamRepo !== null &&
-            ref.owner.toLowerCase() === teamRepo.owner.toLowerCase() &&
-            ref.repo.toLowerCase() === teamRepo.repo.toLowerCase()),
+        (ref) => !tenant || allowedPrRepos.has(indexNamespace(ref.owner, ref.repo)),
       )
     : []
   const { contexts: linkedPrs, failures: linkedPrFailures } = contextEnabled

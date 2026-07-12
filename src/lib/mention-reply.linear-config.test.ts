@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   getLinearConfig: vi.fn(),
   resolveLinearTeamBinding: vi.fn(),
   getInstallationToken: vi.fn(),
+  getFileContent: vi.fn(),
 }))
 
 vi.mock("@/src/shared/adapters/model", () => ({ generate: mocks.generate }))
@@ -20,6 +21,11 @@ vi.mock("@/src/lib/retrieval", async (importOriginal) => {
 })
 vi.mock("@/src/lib/github-pr-context", () => ({ fetchPullRequestContext: mocks.fetchPullRequestContext }))
 vi.mock("@/src/shared/adapters/github/github-app", () => ({ getInstallationToken: mocks.getInstallationToken }))
+vi.mock("@/src/shared/adapters/github", () => ({
+  GitHubClient: vi.fn().mockImplementation(() => ({
+    getFileContent: mocks.getFileContent,
+  })),
+}))
 vi.mock("@/src/lib/linear", () => ({
   buildLinearClient: vi.fn(async () => ({
     getCommentWithIssue: mocks.getCommentWithIssue,
@@ -117,6 +123,8 @@ beforeEach(() => {
   })
   mocks.retrieveChunks.mockResolvedValue([])
   mocks.fetchPullRequestContext.mockResolvedValue({ ok: false, reason: "not_found" })
+  mocks.getInstallationToken.mockResolvedValue("github-token")
+  mocks.getFileContent.mockResolvedValue("one\ntwo\nthree")
   mocks.generate.mockResolvedValue({
     text: JSON.stringify({ answer: "Handled from bounded context.", confidence: 5, abstain: false }),
     usage: { promptTokens: 1, completionTokens: 1 },
@@ -174,6 +182,38 @@ describe("handleMention tenant Linear settings", () => {
     expect(mocks.fetchPullRequestContext).toHaveBeenCalledOnce()
     expect(mocks.runAgentLoop).not.toHaveBeenCalled()
     expect(mocks.generate).toHaveBeenCalledOnce()
+    expect(mocks.getInstallationToken).not.toHaveBeenCalled()
+    expect(mocks.createComment.mock.calls[0]?.[1]).not.toContain("```verification")
+  })
+
+  it("puts exact citation metadata and the structured-only contract in the single-shot prompt", async () => {
+    const ref = "d".repeat(40)
+    mocks.getLinearConfig.mockResolvedValue(BASE_CONFIG)
+    mocks.retrieveChunks.mockResolvedValue([
+      {
+        path: "src/context.ts",
+        lineStart: 4,
+        lineEnd: 8,
+        score: 0.9,
+        content: "export const context = true",
+        indexedHeadSha: ref,
+      },
+    ])
+    const { env } = makeEnv()
+
+    await handleMention("comment-a", env, { tenant: TENANT })
+
+    const prompt = (mocks.generate.mock.calls[0]?.[0] as { prompt: string }).prompt
+    expect(prompt).toContain(
+      `[citation_metadata] ${JSON.stringify({
+        repo: "acme/api",
+        path: "src/context.ts",
+        lineStart: 4,
+        lineEnd: 8,
+        ref,
+      })}`,
+    )
+    expect(prompt).toContain("Do not write `path:line` references in prose")
   })
 
   it("enabled adds the exact-bound repo tool to the agent loop", async () => {
@@ -308,5 +348,77 @@ describe("handleMention tenant Linear settings", () => {
     expect(mocks.fetchPullRequestContext).toHaveBeenCalledWith(
       expect.objectContaining({ owner: "acme", repo: "web", number: 12 }),
     )
+  })
+
+  it("verifies structured citations across the exact D1-bound repo set through handleMention", async () => {
+    const shaA = "a".repeat(40)
+    const shaB = "b".repeat(40)
+    mocks.getLinearConfig.mockResolvedValue(BASE_CONFIG)
+    mocks.resolveLinearTeamBinding.mockResolvedValue({
+      organizationId: "org-a",
+      installationId: 11,
+      teamId: "team-a",
+      accessState: "allowed",
+      githubRepoId: 101,
+      githubRepoFullName: "acme/api",
+      useAllRepos: false,
+      repos: [
+        { githubRepoId: 101, githubRepoFullName: "acme/api" },
+        { githubRepoId: 102, githubRepoFullName: "acme/web" },
+      ],
+    })
+    mocks.generate.mockResolvedValueOnce({
+      text: JSON.stringify({
+        answer: "Both handlers use the same path.",
+        confidence: 5,
+        abstain: false,
+        citations: [
+          { repo: "acme/api", path: "src/handler.ts", lineStart: 1, lineEnd: 2, ref: shaA },
+          { repo: "acme/web", path: "src/handler.ts", lineStart: 2, lineEnd: 3, ref: shaB },
+        ],
+      }),
+      usage: { promptTokens: 1, completionTokens: 1 },
+    })
+    const { env } = makeEnv(["api", "web"])
+    env.GITHUB_APP_ID = "1"
+    env.GITHUB_PRIVATE_KEY = "private"
+
+    await handleMention("comment-a", env, { tenant: TENANT })
+
+    expect(mocks.getInstallationToken).toHaveBeenCalledOnce()
+    expect(mocks.getFileContent.mock.calls).toEqual([
+      ["acme", "api", "src/handler.ts", shaA],
+      ["acme", "web", "src/handler.ts", shaB],
+    ])
+    const posted = mocks.createComment.mock.calls[0]?.[1] as string
+    expect(posted).toContain("```verification")
+    expect(posted).toContain("repo=acme/api")
+    expect(posted).toContain("repo=acme/web")
+  })
+
+  it("does no GitHub file IO for foreign or traversal structured citations", async () => {
+    mocks.getLinearConfig.mockResolvedValue(BASE_CONFIG)
+    mocks.generate.mockResolvedValueOnce({
+      text: JSON.stringify({
+        answer: "Untrusted sidecar.",
+        confidence: 3,
+        abstain: false,
+        citations: [
+          { repo: "evil/private", path: "src/x.ts", lineStart: 1, lineEnd: 1, ref: "a".repeat(40) },
+          { repo: "acme/api", path: "../secret", lineStart: 1, lineEnd: 1, ref: "a".repeat(40) },
+        ],
+      }),
+      usage: { promptTokens: 1, completionTokens: 1 },
+    })
+    const { env } = makeEnv()
+    env.GITHUB_APP_ID = "1"
+    env.GITHUB_PRIVATE_KEY = "private"
+
+    await handleMention("comment-a", env, { tenant: TENANT })
+
+    expect(mocks.getFileContent).not.toHaveBeenCalled()
+    const posted = mocks.createComment.mock.calls[0]?.[1] as string
+    expect(posted).toContain("reason=repository-not-allowed")
+    expect(posted).toContain("reason=invalid-metadata")
   })
 })

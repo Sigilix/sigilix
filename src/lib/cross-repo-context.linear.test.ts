@@ -199,6 +199,7 @@ describe("resolveBindingRepoScope", () => {
     expect(scope!.primary).toEqual({ owner: "acme", repo: "api" })
     expect(scope!.primaryNamespace).toBe("acme/api")
     expect(scope!.siblingNamespaces).toEqual(["acme/web"])
+    expect(scope!.allNamespaces).toEqual(["acme/api", "acme/web"])
     expect(scope!.truncated).toBe(0)
   })
 

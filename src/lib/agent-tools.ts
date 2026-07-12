@@ -30,6 +30,7 @@ import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { withTimeout } from "@/src/shared/util/with-timeout"
 import type { Env } from "@/src/shared/types/env"
+import { linearCitationMetadataForChunk } from "./linear-mention-citations"
 
 const READ_FILE_MAX_LINES = 200
 const READ_FILE_LOOP_BUDGET_BYTES = 50_000
@@ -90,7 +91,9 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
   return {
     name: "retrieve_codebase",
     description:
-      "Semantic retrieval over the indexed codebase. Returns top-K relevant chunks with file path, line range, content, and indexed ref/freshness when available. Prefer current default-branch chunks for citations, and refine your query if the first call returns irrelevant chunks.",
+      ctx.surface === "linear-mention"
+        ? "Semantic retrieval over the indexed codebase. Returns top-K relevant chunks with file path, line range, content, indexed ref/freshness, and a structured citation object when available. Copy exact citation objects into the final citations array; do not invent or alter them."
+        : "Semantic retrieval over the indexed codebase. Returns top-K relevant chunks with file path, line range, content, and indexed ref/freshness when available. Prefer current default-branch chunks for citations, and refine your query if the first call returns irrelevant chunks.",
     parameters: {
       type: "object",
       properties: {
@@ -224,17 +227,21 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
       return {
         ok: true,
         repo: namespace,
-        chunks: chunks.map((c) => ({
-          path: c.path,
-          lineStart: c.lineStart,
-          lineEnd: c.lineEnd,
-          score: c.score,
-          content: c.content,
-          ...(c.indexedRef ? { indexedRef: c.indexedRef } : {}),
-          ...(c.indexedHeadSha ? { indexedHeadSha: c.indexedHeadSha } : {}),
-          ...(c.indexRunId ? { indexRunId: c.indexRunId } : {}),
-          ...(c.indexFreshness ? { indexFreshness: c.indexFreshness } : {}),
-        })),
+        chunks: chunks.map((c) => {
+          const citation = ctx.surface === "linear-mention" ? linearCitationMetadataForChunk(namespace, c) : null
+          return {
+            path: c.path,
+            lineStart: c.lineStart,
+            lineEnd: c.lineEnd,
+            score: c.score,
+            content: c.content,
+            ...(c.indexedRef ? { indexedRef: c.indexedRef } : {}),
+            ...(c.indexedHeadSha ? { indexedHeadSha: c.indexedHeadSha } : {}),
+            ...(c.indexRunId ? { indexRunId: c.indexRunId } : {}),
+            ...(c.indexFreshness ? { indexFreshness: c.indexFreshness } : {}),
+            ...(citation ? { citation } : {}),
+          }
+        }),
         count: chunks.length,
         ...(noChunksMessage ? { message: noChunksMessage } : {}),
         ...(symbolContext ? { symbolContext } : {}),

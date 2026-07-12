@@ -56,42 +56,42 @@ describe("resolveRateLimitMode", () => {
 
 describe("resolveRateLimitCap", () => {
   it('returns 2 for "oss"', () => {
-    expect(resolveRateLimitCap("oss")).toBe(2)
+    expect(resolveRateLimitCap("oss")).toBe(8)
   })
 
   it('returns 2 for "cli"', () => {
-    expect(resolveRateLimitCap("cli")).toBe(2)
+    expect(resolveRateLimitCap("cli")).toBe(8)
   })
 
   it('returns 2 for "free"', () => {
-    expect(resolveRateLimitCap("free")).toBe(2)
+    expect(resolveRateLimitCap("free")).toBe(8)
   })
 
   it('returns 5 for "pro" (the ladder base)', () => {
-    expect(resolveRateLimitCap("pro")).toBe(5)
+    expect(resolveRateLimitCap("pro")).toBe(20)
   })
 
   it('returns 10 for "teams" (2× pro)', () => {
-    expect(resolveRateLimitCap("teams")).toBe(10)
+    expect(resolveRateLimitCap("teams")).toBe(40)
   })
 
   it('returns 25 for "max" (5× pro)', () => {
-    expect(resolveRateLimitCap("max")).toBe(25)
+    expect(resolveRateLimitCap("max")).toBe(100)
   })
 
   it('returns 250 for "ultra" (10× max, the highest self-serve paid tier)', () => {
-    expect(resolveRateLimitCap("ultra")).toBe(250)
+    expect(resolveRateLimitCap("ultra")).toBe(1000)
   })
 
   it('returns 500 for "enterprise" (2× ultra — the contract TOP tier, highest cap of all)', () => {
-    expect(resolveRateLimitCap("enterprise")).toBe(500)
+    expect(resolveRateLimitCap("enterprise")).toBe(2000)
     // enterprise is strictly the top: at or above ultra (in fact above it).
     expect(resolveRateLimitCap("enterprise")).toBeGreaterThanOrEqual(resolveRateLimitCap("ultra"))
   })
 
   it("the paid ladder is base × multiplier: pro 1× / teams 2× / max 5× / ultra 50× / enterprise 100×", () => {
     const base = resolveRateLimitCap("pro")
-    expect(base).toBe(5)
+    expect(base).toBe(20)
     expect(resolveRateLimitCap("teams")).toBe(base * 2)
     expect(resolveRateLimitCap("max")).toBe(base * 5)
     expect(resolveRateLimitCap("ultra")).toBe(base * 50)
@@ -110,17 +110,17 @@ describe("resolveRateLimitCap", () => {
   })
 
   it("is case-insensitive: 'ULTRA' → 250, 'TEAMS' → 10, 'ENTERPRISE' → 500", () => {
-    expect(resolveRateLimitCap("ULTRA")).toBe(250)
-    expect(resolveRateLimitCap("TEAMS")).toBe(10)
-    expect(resolveRateLimitCap("  Enterprise  ")).toBe(500)
+    expect(resolveRateLimitCap("ULTRA")).toBe(1000)
+    expect(resolveRateLimitCap("TEAMS")).toBe(40)
+    expect(resolveRateLimitCap("  Enterprise  ")).toBe(2000)
   })
 
-  it('returns 10 for "pro_plus"', () => {
-    expect(resolveRateLimitCap("pro_plus")).toBe(10)
+  it('returns 40 for "pro_plus" (2x the base — legacy tier stays ABOVE pro)', () => {
+    expect(resolveRateLimitCap("pro_plus")).toBe(40)
   })
 
-  it('returns 10 for "pro+"', () => {
-    expect(resolveRateLimitCap("pro+")).toBe(10)
+  it('returns 40 for "pro+" (2x the base — legacy tier stays ABOVE pro)', () => {
+    expect(resolveRateLimitCap("pro+")).toBe(40)
   })
 
   it("returns DEFAULT_RATE_LIMIT_CAP for an unknown tier", () => {
@@ -136,13 +136,13 @@ describe("resolveRateLimitCap", () => {
   })
 
   it("is case-insensitive: 'PRO' → 5", () => {
-    expect(resolveRateLimitCap("PRO")).toBe(5)
+    expect(resolveRateLimitCap("PRO")).toBe(20)
   })
 
   it("trialing=false is byte-identical to omitting the flag (full tier volume)", () => {
     expect(resolveRateLimitCap("pro", false)).toBe(resolveRateLimitCap("pro"))
-    expect(resolveRateLimitCap("ultra", false)).toBe(250)
-    expect(resolveRateLimitCap("enterprise", false)).toBe(500)
+    expect(resolveRateLimitCap("ultra", false)).toBe(1000)
+    expect(resolveRateLimitCap("enterprise", false)).toBe(2000)
   })
 })
 
@@ -150,10 +150,10 @@ describe("resolveRateLimitCap", () => {
 
 describe("resolveRateLimitCap — trialing (half volume)", () => {
   it("halves each paid tier deterministically: pro 5→3, teams 10→5, max 25→13, ultra 250→125", () => {
-    expect(resolveRateLimitCap("pro", true)).toBe(3)
-    expect(resolveRateLimitCap("teams", true)).toBe(5)
-    expect(resolveRateLimitCap("max", true)).toBe(13)
-    expect(resolveRateLimitCap("ultra", true)).toBe(125)
+    expect(resolveRateLimitCap("pro", true)).toBe(10)
+    expect(resolveRateLimitCap("teams", true)).toBe(20)
+    expect(resolveRateLimitCap("max", true)).toBe(50)
+    expect(resolveRateLimitCap("ultra", true)).toBe(500)
   })
 
   it("a trial cap is NEVER below the Free floor (pro 5→3 ≥ free 2)", () => {
@@ -182,9 +182,9 @@ describe("resolveRateLimitCap — trialing (half volume)", () => {
   it("enterprise NEVER halves: it is the contract tier and can never be on a trial (500 either way)", () => {
     // Enterprise is set on tenant.tier by contract, never sold via Stripe, so it can
     // never be 'trialing' — even a stray trialing=true keeps its full top cap.
-    expect(resolveRateLimitCap("enterprise", true)).toBe(500)
+    expect(resolveRateLimitCap("enterprise", true)).toBe(2000)
     expect(resolveRateLimitCap("enterprise", true)).toBe(resolveRateLimitCap("enterprise", false))
-    expect(resolveRateLimitCap("  ENTERPRISE  ", true)).toBe(500)
+    expect(resolveRateLimitCap("  ENTERPRISE  ", true)).toBe(2000)
   })
 })
 
@@ -396,5 +396,34 @@ describe("resolveTierCostBudgetUsd", () => {
     const paid = resolveTierCostBudgetUsd({ SIGILIX_COST_BUDGET_PRO_SESSION: "0.10" }, "pro", "session", false)
     expect(trial).toBeLessThanOrEqual(paid as number)
     expect(trial).toBe(0.1)
+  })
+})
+
+// ─── sig-cost-primary: the two resolvers must AGREE on the same tier string ───
+//
+// resolveRateLimitCap (count) and resolveTierCostBudgetUsd (dollars) both key off
+// tenant.tier — a HAND-SET column. If they disagree on an alias, a paying tenant gets
+// one tier's budget and another tier's cap, and the backstop blocks them well inside
+// the volume they pay for. Latent while the gate ran in shadow; real under enforce.
+
+describe("tier aliasing — count cap and cost budget must not disagree", () => {
+  it('"team" resolves to the TEAMS cap, matching the teams budget it already got', () => {
+    expect(resolveRateLimitCap("team")).toBe(resolveRateLimitCap("teams"))
+    expect(resolveRateLimitCap("team")).toBe(40)
+    // The budget side already aliased "team" -> "teams"; prove both sides now agree.
+    expect(resolveTierCostBudgetUsd({}, "team", "session")).toBe(resolveTierCostBudgetUsd({}, "teams", "session"))
+  })
+
+  it('legacy "pro_plus" stays ABOVE pro on count and gets PRO dollars, never Free', () => {
+    // At base 5 pro_plus was a hardcoded 10 = 2x pro. With base 20 a bare `return 10`
+    // would make it HALF of pro — inverting the tier it exists to reward.
+    expect(resolveRateLimitCap("pro_plus")).toBeGreaterThan(resolveRateLimitCap("pro"))
+    expect(resolveRateLimitCap("pro+")).toBe(resolveRateLimitCap("pro_plus"))
+    // And it must NOT fall through to the Free budget, which under enforce would block
+    // a paying legacy tenant after ~2 reviews.
+    expect(resolveTierCostBudgetUsd({}, "pro_plus", "session")).toBe(resolveTierCostBudgetUsd({}, "pro", "session"))
+    expect(resolveTierCostBudgetUsd({}, "pro_plus", "session")).not.toBe(
+      resolveTierCostBudgetUsd({}, "free", "session"),
+    )
   })
 })

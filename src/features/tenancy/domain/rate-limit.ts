@@ -44,13 +44,24 @@ export function resolveRateLimitMode(env: Pick<Env, "SIGILIX_RATE_LIMIT_MODE">):
  * Rolling window duration (5 hours in ms).
  *
  * Free-launch retune (2026-06-30): SIG-38 originally shipped at 1h/cap-3 (the
- * "CodeRabbit way" steer). The free-tier spec is 5h window / 1-2 reviews per
- * developer; `DEFAULT_RATE_LIMIT_CAP` below is the upper end (2) of that range.
+ * "CodeRabbit way" steer). The window stayed at 5h; the free COUNT cap has since been
+ * raised to an anti-abuse backstop (`DEFAULT_RATE_LIMIT_CAP`) because the free tier is
+ * now bounded by DOLLARS (`TIER_COST_BUDGET_USD.free`), not by a review count.
  */
 export const RATE_LIMIT_WINDOW_MS = 18_000_000
 
-/** Default per-window review cap (free / OSS / CLI tier). */
-export const DEFAULT_RATE_LIMIT_CAP = 2
+/**
+ * Default per-window review cap (free / OSS / CLI tier).
+ *
+ * sig-cost-primary: this is an anti-abuse BACKSTOP, not the real gate. Spend scales
+ * with review SIZE, not review COUNT — measured per-review cost ranges $0.047–$0.83
+ * (a 17x spread), so a count cap over-blocks a dev pushing small PRs and under-blocks
+ * one pushing monsters. TIER_COST_BUDGET_USD is the binding constraint; these counts
+ * sit deliberately ABOVE it so dollars bite first and the count only catches
+ * pathological spam (e.g. a loop opening hundreds of trivial PRs, which is cheap per
+ * review and would otherwise never trip the budget).
+ */
+export const DEFAULT_RATE_LIMIT_CAP = 8
 
 /**
  * Burst allowance: the number of reviews above `cap` a tenant may consume
@@ -86,15 +97,15 @@ export const DEFAULT_TRIAGE_RATE_LIMIT_CAP = 3
  * other paid tier is expressed as an integer MULTIPLE of this base, so the founder's
  * confirmed ratios stay obvious in code rather than hidden in magic numbers.
  */
-export const RATE_LIMIT_CAP_BASE = 5
+export const RATE_LIMIT_CAP_BASE = 20
 
 /**
  * Per-tier multiplier of `RATE_LIMIT_CAP_BASE` — the founder-confirmed usage ladder:
- *   pro         1×  → 5      (base)
- *   teams       2×  → 10     (2× pro; feature-complete, top-tier entitlements)
- *   max         5×  → 25     (5× pro)
- *   ultra       50× → 250    (10× max = 50× pro — the highest self-serve paid tier)
- *   enterprise 100× → 500    (2× ultra — the CONTRACT tier, the highest cap of all)
+ *   pro         1×  → 20     (base)
+ *   teams       2×  → 40     (2× pro; feature-complete, top-tier entitlements)
+ *   max         5×  → 100    (5× pro)
+ *   ultra       50× → 1000   (10× max = 50× pro — the highest self-serve paid tier)
+ *   enterprise 100× → 2000   (2× ultra — the CONTRACT tier, the highest cap of all)
  * `enterprise` is set on tenant.tier manually when a team signs a contract (never via
  * self-serve Stripe); it sits ABOVE ultra as the top of the ladder.
  * (Free is the DEFAULT_RATE_LIMIT_CAP floor, not a multiple of the base.)
@@ -123,28 +134,37 @@ const TIER_CAP_MULTIPLIER: Record<"pro" | "teams" | "max" | "ultra" | "enterpris
  * with a hard `DEFAULT_RATE_LIMIT_CAP` floor so a trial is NEVER worse than Free and
  * never resolves to zero/negative. When the trial converts to `active`, the caller
  * passes `trialing = false` and the FULL tier cap is restored. Halved caps:
- * pro 5→3, teams 10→5, max 25→13, ultra 250→125 (free 2→2, floored).
+ * pro 20→10, teams 40→20, max 100→50, ultra 1000→500 (free 8→8, floored).
  *
  * ENTERPRISE is the CONTRACT tier: set manually on tenant.tier when a team signs, never
  * sold via self-serve Stripe, so it can NEVER be on a trial. It therefore ignores the
- * `trialing` flag entirely and always resolves to its full top cap (500 = 2× ultra) —
+ * `trialing` flag entirely and always resolves to its full top cap (2000 = 2× ultra) —
  * this keeps enterprise at full volume even if a stray `trialing = true` is passed when
  * the contract tenant has no Stripe `active` status row.
  *
  * TODO (SIG-41): replace the static map with Stripe entitlement lookup.
  */
 export function resolveRateLimitCap(tier?: string | null, trialing = false): number {
-  const t = tier?.trim().toLowerCase()
+  // "team" is an accepted alias of "teams" (PLAN_NAMES carries both, and tenant.tier is
+  // hand-set for contract tenants — a typed "team" is exactly the input that lands here).
+  // `normalizeBudgetTier` ALREADY aliases it, so without this the two resolvers disagree
+  // on the same string: a "team" tenant would get the Teams USD budget but the FREE count
+  // cap, and the backstop would block them well inside the budget they pay for.
+  const raw = tier?.trim().toLowerCase()
+  const t = raw === "team" ? "teams" : raw
   const full = ((): number => {
     if (t === "pro" || t === "teams" || t === "max" || t === "ultra" || t === "enterprise") {
       return RATE_LIMIT_CAP_BASE * TIER_CAP_MULTIPLIER[t]
     }
     switch (t) {
       // Legacy, non-Stripe-writable tiers kept for back-compat (billing only ever
-      // writes free/pro/teams/max/ultra); explicit values, outside the base ladder.
+      // writes free/pro/teams/max/ultra). pro_plus was "better than pro" — express it
+      // as 2x the base so it tracks the ladder instead of a frozen literal (at base 5
+      // it was 10 = 2x pro; a bare `return 10` would now be HALF of pro's 20, inverting
+      // the tier it exists to reward).
       case "pro_plus":
       case "pro+":
-        return 10
+        return RATE_LIMIT_CAP_BASE * 2
       // oss / cli / free / unknown / null / undefined → the Free floor.
       default:
         return DEFAULT_RATE_LIMIT_CAP
@@ -254,8 +274,12 @@ function normalizeBudgetTier(tier?: string | null): "free" | "pro" | "teams" | "
   const t = tier?.trim().toLowerCase()
   if (t === "pro" || t === "teams" || t === "max" || t === "ultra" || t === "enterprise") return t
   if (t === "team") return "teams" // PLAN_NAMES carries both "team" and "teams" — same budget row.
-  // oss / cli / free / pro_plus / unknown / null → the Free floor (pro_plus is a
-  // legacy count-cap tier with no cost-budget row; treat as Free for cost).
+  // pro_plus is a legacy PAID tier (historically "better than pro"). It has no cost-budget
+  // row of its own, so it borrows Pro's. It must NOT fall through to Free: under enforce
+  // that would hand a paying legacy tenant the $0.375 free budget and block them after
+  // ~2 reviews. Pro is the correct floor for it — never Free.
+  if (t === "pro_plus" || t === "pro+") return "pro"
+  // oss / cli / free / unknown / null → the Free floor.
   return "free"
 }
 

@@ -178,7 +178,7 @@ describe("checkRateLimit", () => {
   // ── shadow mode ───────────────────────────────────────────────────────────────
 
   it("mode=shadow, used UNDER cap+burst (used=1) → allowed:true, rate-limit-ok", async () => {
-    // cap=2, burst=0; used=1 → 1 < 2+0=2 → allowed
+    // burst=0; used=1 → 1 < cap+0 → allowed
     for (let i = 0; i < 1; i++) {
       await insertReview(db, 10, "alice", i, recentIso(0.5))
     }
@@ -192,12 +192,19 @@ describe("checkRateLimit", () => {
     expect(decision.cap).toBe(DEFAULT_RATE_LIMIT_CAP)
     const ok = eventsByName("rate-limit-ok")
     expect(ok).toHaveLength(1)
-    expect(ok[0]).toMatchObject({ event: "rate-limit-ok", installationId: 10, mode: "shadow", used: 1, cap: 2 })
+    expect(ok[0]).toMatchObject({
+      event: "rate-limit-ok",
+      installationId: 10,
+      mode: "shadow",
+      used: 1,
+      cap: DEFAULT_RATE_LIMIT_CAP,
+    })
   })
 
-  it("mode=shadow, used OVER cap+burst (used=2) → allowed:true (shadow never blocks), rate-limit-would-skip, footer + resetMs set", async () => {
-    // cap=2, burst=0; used=2 → 2 < 2+0=2 = false → over limit; shadow still allows
-    for (let i = 0; i < 2; i++) {
+  it("mode=shadow, used AT cap+burst → allowed:true (shadow never blocks), rate-limit-would-skip, footer + resetMs set", async () => {
+    // burst=0; used=cap → used < cap+0 = false → over limit; shadow still allows.
+    // Seeded relative to the cap so a product retune of the ladder can't rot this test.
+    for (let i = 0; i < DEFAULT_RATE_LIMIT_CAP; i++) {
       await insertReview(db, 11, "bob", i, recentIso(0.5))
     }
     // rows seeded at NOW-1800000 (30min ago); resetMs = (NOW-1800000)+18000000-NOW = 16200000
@@ -208,14 +215,19 @@ describe("checkRateLimit", () => {
     })
     expect(decision.allowed).toBe(true)
     expect(decision.mode).toBe("shadow")
-    expect(decision.used).toBe(2)
+    expect(decision.used).toBe(DEFAULT_RATE_LIMIT_CAP)
     expect(decision.cap).toBe(DEFAULT_RATE_LIMIT_CAP)
     expect(decision.resetMs).toBe(16_200_000)
-    expect(decision.footer).toContain("2 of 2 reviews used")
+    expect(decision.footer).toContain(`${DEFAULT_RATE_LIMIT_CAP} of ${DEFAULT_RATE_LIMIT_CAP} reviews used`)
     expect(decision.footer).toContain("resets in")
     const wouldSkip = eventsByName("rate-limit-would-skip")
     expect(wouldSkip).toHaveLength(1)
-    expect(wouldSkip[0]).toMatchObject({ event: "rate-limit-would-skip", installationId: 11, used: 2, cap: 2 })
+    expect(wouldSkip[0]).toMatchObject({
+      event: "rate-limit-would-skip",
+      installationId: 11,
+      used: DEFAULT_RATE_LIMIT_CAP,
+      cap: DEFAULT_RATE_LIMIT_CAP,
+    })
     expect((wouldSkip[0]?.["resetMs"] as number | undefined) ?? 0).toBe(16_200_000)
   })
 
@@ -236,9 +248,9 @@ describe("checkRateLimit", () => {
     expect(eventsByName("rate-limit-skip")).toHaveLength(0)
   })
 
-  it("mode=enforce, used OVER cap+burst (used=2) → allowed:false, rate-limit-skip, resetMs>0, footer set", async () => {
-    // cap=2, burst=0; used=2 → 2 < 2+0=2 = false → denied
-    for (let i = 0; i < 2; i++) {
+  it("mode=enforce, used AT cap+burst → allowed:false, rate-limit-skip, resetMs>0, footer set", async () => {
+    // burst=0; used=cap → used < cap+0 = false → denied
+    for (let i = 0; i < DEFAULT_RATE_LIMIT_CAP; i++) {
       await insertReview(db, 21, "dave", i, recentIso(0.5))
     }
     // rows seeded at NOW-1800000 (30min ago); resetMs = (NOW-1800000)+18000000-NOW = 16200000
@@ -249,14 +261,19 @@ describe("checkRateLimit", () => {
     })
     expect(decision.allowed).toBe(false)
     expect(decision.mode).toBe("enforce")
-    expect(decision.used).toBe(2)
+    expect(decision.used).toBe(DEFAULT_RATE_LIMIT_CAP)
     expect(decision.cap).toBe(DEFAULT_RATE_LIMIT_CAP)
     expect(decision.resetMs).toBe(16_200_000)
-    expect(decision.footer).toContain("2 of 2 reviews used")
+    expect(decision.footer).toContain(`${DEFAULT_RATE_LIMIT_CAP} of ${DEFAULT_RATE_LIMIT_CAP} reviews used`)
     expect(decision.footer).toContain("resets in")
     const skip = eventsByName("rate-limit-skip")
     expect(skip).toHaveLength(1)
-    expect(skip[0]).toMatchObject({ event: "rate-limit-skip", installationId: 21, used: 2, cap: 2 })
+    expect(skip[0]).toMatchObject({
+      event: "rate-limit-skip",
+      installationId: 21,
+      used: DEFAULT_RATE_LIMIT_CAP,
+      cap: DEFAULT_RATE_LIMIT_CAP,
+    })
     expect((skip[0]?.["resetMs"] as number | undefined) ?? 0).toBe(16_200_000)
   })
 
@@ -291,8 +308,8 @@ describe("checkRateLimit", () => {
     expect(d2.allowed).toBe(true)
     expect(d2.used).toBe(1)
 
-    // Part B: used=2 → 2 < 2 = false → denied
-    for (let i = 0; i < 2; i++) {
+    // Part B: used=cap → used < cap = false → denied
+    for (let i = 0; i < DEFAULT_RATE_LIMIT_CAP; i++) {
       await insertReview(db, 41, "frank", i, recentIso(0.5))
     }
     const d3 = await checkRateLimit(makeEnv(db, "enforce"), {
@@ -301,7 +318,7 @@ describe("checkRateLimit", () => {
       nowMs: NOW,
     })
     expect(d3.allowed).toBe(false)
-    expect(d3.used).toBe(2)
+    expect(d3.used).toBe(DEFAULT_RATE_LIMIT_CAP)
   })
 
   // ── window roll (5h retune) ───────────────────────────────────────────────────
@@ -333,10 +350,10 @@ describe("checkRateLimit", () => {
 
   // ── tier seam ─────────────────────────────────────────────────────────────────
 
-  it("tier=pro → cap=5; used=4 → allowed, used=5 → denied (enforce)", async () => {
-    // Exercises resolveRateLimitCap("pro") = 5 through the full orchestrator path.
-    // Part A: 4 reviews under the pro cap → allowed.
-    for (let i = 0; i < 4; i++) {
+  it("tier=pro → cap=20; used=19 → allowed, used=20 → denied (enforce)", async () => {
+    // Exercises resolveRateLimitCap("pro") = 20 through the full orchestrator path.
+    // Part A: 19 reviews under the pro cap → allowed.
+    for (let i = 0; i < 19; i++) {
       await insertReview(db, 50, "grace", i, recentIso(0.5))
     }
     const d4 = await checkRateLimit(makeEnv(db, "enforce"), {
@@ -345,12 +362,12 @@ describe("checkRateLimit", () => {
       nowMs: NOW,
       tier: "pro",
     })
-    expect(d4.cap).toBe(5)
+    expect(d4.cap).toBe(20)
     expect(d4.allowed).toBe(true)
-    expect(d4.used).toBe(4)
+    expect(d4.used).toBe(19)
 
-    // Part B: 5 reviews at the pro cap → denied (5 < 5 = false).
-    for (let i = 0; i < 5; i++) {
+    // Part B: 20 reviews at the pro cap → denied (20 < 20 = false).
+    for (let i = 0; i < 20; i++) {
       await insertReview(db, 51, "grace", i, recentIso(0.5))
     }
     const d5 = await checkRateLimit(makeEnv(db, "enforce"), {
@@ -359,16 +376,16 @@ describe("checkRateLimit", () => {
       nowMs: NOW,
       tier: "pro",
     })
-    expect(d5.cap).toBe(5)
+    expect(d5.cap).toBe(20)
     expect(d5.allowed).toBe(false)
-    expect(d5.used).toBe(5)
+    expect(d5.used).toBe(20)
   })
 
   // ── trial cap seam (sig-trial-cap) ──────────────────────────────────────────
 
-  it("tier=pro trialing → HALF cap=3 (full pro is 5); active → full cap=5 restored", async () => {
-    // Trialing pro: cap halved to 3. 3 reviews at the trial cap → denied (3 < 3 = false).
-    for (let i = 0; i < 3; i++) {
+  it("tier=pro trialing → HALF cap=10 (full pro is 20); active → full cap=20 restored", async () => {
+    // Trialing pro: cap halved to 10. 10 reviews at the trial cap → denied (10 < 10 = false).
+    for (let i = 0; i < 10; i++) {
       await insertReview(db, 52, "heidi", i, recentIso(0.5))
     }
     const trial = await checkRateLimit(makeEnv(db, "enforce"), {
@@ -378,12 +395,12 @@ describe("checkRateLimit", () => {
       tier: "pro",
       trialing: true,
     })
-    expect(trial.cap).toBe(3)
+    expect(trial.cap).toBe(10)
     expect(trial.allowed).toBe(false)
-    expect(trial.used).toBe(3)
+    expect(trial.used).toBe(10)
 
-    // Same tenant, same 3 reviews, but now ACTIVE (trial converted) → full pro cap 5,
-    // and 3 < 5 → allowed. Proves converting restores the full volume, no lingering half.
+    // Same tenant, same 10 reviews, but now ACTIVE (trial converted) → full pro cap 20,
+    // and 10 < 20 → allowed. Proves converting restores the full volume, no lingering half.
     const active = await checkRateLimit(makeEnv(db, "enforce"), {
       installationId: 52,
       authorLogin: "heidi",
@@ -391,12 +408,12 @@ describe("checkRateLimit", () => {
       tier: "pro",
       trialing: false,
     })
-    expect(active.cap).toBe(5)
+    expect(active.cap).toBe(20)
     expect(active.allowed).toBe(true)
-    expect(active.used).toBe(3)
+    expect(active.used).toBe(10)
   })
 
-  it("tier=teams → active cap=10 (2× pro); trialing → half cap=5", async () => {
+  it("tier=teams → active cap=40 (2× pro); trialing → half cap=20", async () => {
     const active = await checkRateLimit(makeEnv(db, "enforce"), {
       installationId: 55,
       authorLogin: "judy",
@@ -404,7 +421,7 @@ describe("checkRateLimit", () => {
       tier: "teams",
       trialing: false,
     })
-    expect(active.cap).toBe(10)
+    expect(active.cap).toBe(40)
     expect(active.allowed).toBe(true)
 
     const trial = await checkRateLimit(makeEnv(db, "enforce"), {
@@ -414,10 +431,10 @@ describe("checkRateLimit", () => {
       tier: "teams",
       trialing: true,
     })
-    expect(trial.cap).toBe(5)
+    expect(trial.cap).toBe(20)
   })
 
-  it("a Pro trial's halved cap (3) is still ≥ the Free cap (2) — a trial is never worse than Free", async () => {
+  it("a Pro trial's halved cap (10) is still ≥ the Free cap (8) — a trial is never worse than Free", async () => {
     const proTrial = await checkRateLimit(makeEnv(db, "enforce"), {
       installationId: 53,
       authorLogin: "ivan",
@@ -432,8 +449,8 @@ describe("checkRateLimit", () => {
       tier: "free",
     })
     expect(proTrial.cap).toBeGreaterThanOrEqual(free.cap)
-    expect(proTrial.cap).toBe(3)
-    expect(free.cap).toBe(2)
+    expect(proTrial.cap).toBe(10)
+    expect(free.cap).toBe(DEFAULT_RATE_LIMIT_CAP)
   })
 })
 

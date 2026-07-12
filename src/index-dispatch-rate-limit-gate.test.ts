@@ -41,8 +41,12 @@ vi.mock("@/src/features/entitlements", async (importActual) => {
 // the real getInstallationToken short-circuits the cache path without any HTTP call.
 // This avoids relying on module-level mock hoisting for a deeply-nested import.
 
-const { createIssueCommentMock, GitHubClientMock } = vi.hoisted(() => ({
-  createIssueCommentMock: vi.fn(async () => undefined),
+const { createIssueCommentMock, listIssueCommentsMock, GitHubClientMock } = vi.hoisted(() => ({
+  createIssueCommentMock: vi.fn<(owner: string, repo: string, prNumber: number, body: string) => Promise<void>>(
+    async () => undefined,
+  ),
+  // The gate dedupes its over-cap notice by scanning existing PR comments for a marker.
+  listIssueCommentsMock: vi.fn<() => Promise<Array<{ body: string }>>>(async () => []),
   // Hoisted so we can re-establish mockImplementation in beforeEach after
   // vi.restoreAllMocks() clears it (restoreAllMocks resets ALL tracked vi.fn
   // implementations, not just spies).
@@ -121,6 +125,7 @@ function denied(): RateLimitDecision {
     costBudgetUsd: null,
     costRemainingUsd: null,
     footer: "",
+    limitedBy: "count",
   }
 }
 
@@ -136,6 +141,7 @@ function allowed(): RateLimitDecision {
     costBudgetUsd: null,
     costRemainingUsd: null,
     footer: "",
+    limitedBy: "count",
   }
 }
 
@@ -152,11 +158,13 @@ beforeEach(() => {
   // Default: no recorded subscription status (null) → fail-safe trialing unless overridden.
   readTenantSubscriptionStatusMock.mockResolvedValue(null)
   createIssueCommentMock.mockClear()
+  listIssueCommentsMock.mockClear()
   attachExistingCheckRunMock.mockClear()
   completeCheckRunMock.mockClear()
   GitHubClientMock.mockClear()
   // Re-establish defaults after mockClear/restoreAllMocks clear implementations.
   createIssueCommentMock.mockResolvedValue(undefined)
+  listIssueCommentsMock.mockResolvedValue([])
   attachExistingCheckRunMock.mockResolvedValue({ _tag: "fake-handle" })
   completeCheckRunMock.mockResolvedValue(undefined)
   // Re-establish GitHubClient constructor — vi.restoreAllMocks() (called in
@@ -164,6 +172,7 @@ beforeEach(() => {
   // must restore it here for every test.
   GitHubClientMock.mockImplementation(() => ({
     createIssueComment: createIssueCommentMock,
+    listIssueComments: listIssueCommentsMock,
   }))
   vi.spyOn(console, "log").mockImplementation(() => undefined)
   warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
@@ -315,5 +324,99 @@ describe("runRateLimitGate", () => {
     expect(checkRateLimitMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tier: null }))
     const events = warnEvents()
     expect(events.some((e) => e["event"] === "rate-limit-tier-read-failed")).toBe(true)
+  })
+})
+
+// ─── sig-cost-primary: fail-open + truthful notice ───────────────────────────
+//
+// These pin the two P0s found reviewing the shadow→enforce flip. Both were latent
+// while the gate ran in shadow (nothing blocked, so nothing could block WRONGLY);
+// enforcing the cost budget is what made them reachable.
+
+describe("runRateLimitGate — tier-read fault must FAIL OPEN (never downgrade to Free)", () => {
+  it("readInstallationPlan THROWS → gate is BYPASSED, review runs, no comment posted", async () => {
+    // The trap: catching the throw and passing tier=null does NOT disable the gate —
+    // null normalizes to the FREE tier on BOTH dimensions (free count cap AND the
+    // $0.375 free USD budget). The usage read is a SEPARATE D1 statement that can
+    // still succeed, so a Max customer mid-window would be measured against Free's
+    // budget and BLOCKED. An unknown tier is an infra fault, not a free plan.
+    readInstallationPlanMock.mockRejectedValue(new Error("D1_ERROR: network"))
+    // checkRateLimit is mocked here, so it cannot honour the bypass itself; the real
+    // one short-circuits to allowed:true on any bypassReason. We assert the gate ASKS
+    // for the bypass (below) and that it lets the review through.
+    checkRateLimitMock.mockResolvedValue(allowed())
+
+    const res = await runRateLimitGate(makeEnv(), makeArgs())
+
+    expect(res.skipped).toBe(false) // review RUNS
+    expect(createIssueCommentMock).not.toHaveBeenCalled()
+    // The bypass must be requested explicitly — that is what short-circuits
+    // checkRateLimit to allowed:true BEFORE it ever reads usage or compares a budget.
+    expect(checkRateLimitMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ bypassReason: "tier-read-failed" }),
+    )
+  })
+
+  it("readInstallationPlan RESOLVES null (genuinely no plan row) → gate still applies, NOT bypassed", async () => {
+    // Guards the fix from over-reaching: a real free tenant must still be gated.
+    readInstallationPlanMock.mockResolvedValue(null)
+    checkRateLimitMock.mockResolvedValue(allowed())
+
+    await runRateLimitGate(makeEnv(), makeArgs())
+
+    expect(checkRateLimitMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.not.objectContaining({ bypassReason: "tier-read-failed" }),
+    )
+  })
+})
+
+describe("runRateLimitGate — the over-cap notice must be TRUE and posted ONCE", () => {
+  it("limitedBy=cost → explains the BUDGET; never claims a count cap or a ~1m reset", async () => {
+    // resetMs is COUNT-based and is 0 when cost binds (cost is designed to bind first,
+    // so the count is still under cap). Rendering the count numbers there would claim
+    // "3 of 3 reviews used ... next slot in ~1m" — all three parts false.
+    checkRateLimitMock.mockResolvedValue({
+      ...denied(),
+      limitedBy: "cost",
+      used: 15,
+      cap: 20,
+      resetMs: 0,
+      usedCostUsd: 3.9,
+      costBudgetUsd: 3.75,
+      costRemainingUsd: 0,
+    })
+
+    const res = await runRateLimitGate(makeEnv(), makeArgs())
+
+    expect(res.skipped).toBe(true)
+    const body = createIssueCommentMock.mock.calls[0]?.[3] as string
+    expect(body).toContain("Usage budget reached")
+    expect(body).toContain("model spend, not PR count")
+    expect(body).not.toContain("15 of 20")
+    expect(body).not.toContain("~1m")
+  })
+
+  it("limitedBy=count → still reports the real count numbers", async () => {
+    checkRateLimitMock.mockResolvedValue({ ...denied(), limitedBy: "count", used: 8, cap: 8, resetMs: 600_000 })
+
+    await runRateLimitGate(makeEnv(), makeArgs())
+
+    const body = createIssueCommentMock.mock.calls[0]?.[3] as string
+    expect(body).toContain("Rate limit reached")
+    expect(body).toContain("8 of 8 reviews used")
+  })
+
+  it("a notice already exists on the PR → does NOT post a second one, but still skips the review", async () => {
+    // A blocked author keeps pushing; every push re-enters this gate. Without the
+    // dedupe each push stacks another "budget reached" comment on the PR.
+    listIssueCommentsMock.mockResolvedValue([{ body: "<!-- sigilix:rate-limit-notice -->\n**Sigilix · ...**" }])
+    checkRateLimitMock.mockResolvedValue({ ...denied(), limitedBy: "cost" })
+
+    const res = await runRateLimitGate(makeEnv(), makeArgs())
+
+    expect(createIssueCommentMock).not.toHaveBeenCalled()
+    expect(res.skipped).toBe(true) // already told → still enforce the skip
   })
 })

@@ -39,8 +39,10 @@ vi.mock("@/src/do/consumer-wrapper", () => ({
 }))
 
 // Control comment posting and PR-open check through the GitHub client.
-const { createIssueCommentMock, getPullRequestMock } = vi.hoisted(() => ({
+const { createIssueCommentMock, listIssueCommentsMock, getPullRequestMock } = vi.hoisted(() => ({
   createIssueCommentMock: vi.fn(async () => {}),
+  // The gate dedupes its over-cap notice by scanning existing PR comments for a marker.
+  listIssueCommentsMock: vi.fn<() => Promise<Array<{ body: string }>>>(async () => []),
   getPullRequestMock: vi.fn(async () => ({ state: "open" as const, merged_at: null })),
 }))
 
@@ -51,6 +53,7 @@ vi.mock("@/src/shared/adapters/github/github-app", () => ({
 vi.mock("@/src/shared/adapters/github", () => ({
   GitHubClient: vi.fn().mockImplementation(() => ({
     createIssueComment: createIssueCommentMock,
+    listIssueComments: listIssueCommentsMock,
     getPullRequest: getPullRequestMock,
   })),
   GitHubHttpError: class GitHubHttpError extends Error {},
@@ -119,6 +122,7 @@ function denied(): RateLimitDecision {
     costBudgetUsd: null,
     costRemainingUsd: null,
     footer: "",
+    limitedBy: "count",
   }
 }
 
@@ -134,6 +138,7 @@ function allowed(mode: "enforce" | "shadow" | "off" = "enforce"): RateLimitDecis
     costBudgetUsd: null,
     costRemainingUsd: null,
     footer: "",
+    limitedBy: "count",
   }
 }
 
@@ -141,12 +146,14 @@ beforeEach(() => {
   checkRateLimitMock.mockClear()
   ensembleMock.mockClear()
   createIssueCommentMock.mockClear()
+  listIssueCommentsMock.mockClear()
   getPullRequestMock.mockClear()
   attachExistingCheckRunMock.mockClear()
   completeCheckRunMock.mockClear()
   startInProgressCheckRunMock.mockClear()
   // Reset defaults (mockClear keeps the implementation, so re-establish per test).
   createIssueCommentMock.mockResolvedValue(undefined)
+  listIssueCommentsMock.mockResolvedValue([])
   getPullRequestMock.mockResolvedValue({ state: "open", merged_at: null })
   completeCheckRunMock.mockResolvedValue(undefined)
   attachExistingCheckRunMock.mockResolvedValue({ _tag: "fake-handle" })

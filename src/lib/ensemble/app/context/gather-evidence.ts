@@ -19,7 +19,7 @@
 import type { Env } from "@/src/shared/types/env"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { retrieveChunks, formatChunksForPrompt, type RetrievedChunk } from "@/src/lib/retrieval"
-import { resolveCrossRepoNamespaces } from "@/src/lib/cross-repo-context"
+import { resolveReviewCrossRepoNamespaces } from "@/src/lib/cross-repo-context"
 import {
   multiCorpusEnabled,
   retrieveMultiCorpus,
@@ -91,6 +91,9 @@ export interface GatherEvidenceArgs {
   client: GitHubClient
   owner: string
   repo: string
+  /** SIG cross-repo context: the GitHub App installation, used to resolve the
+   * Linear team's EXPLICITLY configured repo set for the review's namespace fan-out. */
+  installationId: number
   prNumber: number
   headSha: string
   ensembleConfig: EnsembleConfig
@@ -130,6 +133,7 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
     client,
     owner,
     repo,
+    installationId,
     prNumber,
     headSha,
     ensembleConfig,
@@ -147,10 +151,13 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
     maxCalls: ensembleConfig.tunables.maxRetrieveCallsPerPr,
   })
   const namespace = indexNamespace(owner, repo)
-  // Cross-repo context (flag ON only). Resolved ONCE here with hard tenant
-  // isolation (same-installation siblings from the owner-scoped manifest set);
-  // `[]` when the flag is off (no KV cost) ⇒ unchanged single-repo retrieval.
-  const crossRepoNamespaces = await resolveCrossRepoNamespaces(env, owner, repo)
+  // Cross-repo context. Resolved ONCE here as the UNION of (a) the flag-gated
+  // auto-discovery siblings (same-installation, owner-scoped manifest set) and
+  // (b) the Linear team's EXPLICITLY configured repo set for this repo (always
+  // honored — explicit config is the admin's opt-in, not gated behind the
+  // auto-discovery flag). `[]` ⇒ unchanged single-repo retrieval; capped +
+  // truncation-logged inside the resolver.
+  const crossRepoNamespaces = await resolveReviewCrossRepoNamespaces(env, installationId, owner, repo)
   const preflightQuery = `${meta.title}\n\n${meta.body ?? ""}`
   // Phase 4a.1: cap the pre-flight Vectorize round-trip so a slow
   // retrieval can't silently consume the synth budget. Failure here

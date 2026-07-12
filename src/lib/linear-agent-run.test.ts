@@ -62,7 +62,11 @@ import {
   type LinearIssue,
 } from "@/src/lib/linear"
 import { dispatchAgentRun, type AgentRunTaskInput } from "@/src/lib/agent-runner/dispatch"
+import { readFileSync } from "node:fs"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import type { Env } from "@/src/shared/types/env"
+
+const BASE_SQL = readFileSync(new URL("../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
 
 // ── typed mock handles ────────────────────────────────────────────────────────
 const mockBuildLinearAuth = vi.mocked(buildLinearAuth)
@@ -340,6 +344,8 @@ describe("runLinearAgentRun", () => {
       accessState: "allowed",
       githubRepoId: 101,
       githubRepoFullName: "Sigilix/sigilix",
+      useAllRepos: false,
+      repos: [{ githubRepoId: 101, githubRepoFullName: "Sigilix/sigilix" }],
     })
 
     await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1", {
@@ -372,6 +378,8 @@ describe("runLinearAgentRun", () => {
       accessState: "allowed",
       githubRepoId: 101,
       githubRepoFullName: "Sigilix/sigilix",
+      useAllRepos: false,
+      repos: [{ githubRepoId: 101, githubRepoFullName: "Sigilix/sigilix" }],
     })
 
     await runLinearAgentRun(ISSUE_ID, makeEnv(), "agent-session-1", {
@@ -384,6 +392,57 @@ describe("runLinearAgentRun", () => {
     const activities = mockCreateAgentActivity.mock.calls as ActivityCall[]
     expect(activities).toHaveLength(1)
     expect(activities[0]?.[2]).toBe("response")
+  })
+
+  it("a use-all-repos team dispatches to its resolved primary repo (no longer fails closed)", async () => {
+    // Effective repo set expands from the installation's `repo` table, so seed one.
+    const db = makeD1()
+    await db.exec(BASE_SQL)
+    await db
+      .prepare(
+        "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
+          " VALUES (11, 'sigilix', 'Organization', '2026-07-10T00:00:00.000Z', '2026-07-10T00:00:00.000Z')",
+      )
+      .run()
+    await db
+      .prepare(
+        "INSERT INTO repo (repo_id, installation_id, full_name, updated_at)" +
+          " VALUES (101, 11, 'Sigilix/sigilix', '2026-07-10T00:00:00.000Z')",
+      )
+      .run()
+    linearConfigMocks.getLinearConfig.mockResolvedValue({
+      revision: 1,
+      contextMode: "enabled",
+      scope: { mode: "explicit", teamIds: ["team-uuid"] },
+      prValidation: false,
+      createIssue: "manual",
+      planning: true,
+      writeback: { comments: true, status: false, labels: true },
+    })
+    // use-all binding: PRIMARY column is empty (id 0) — the pre-change guard
+    // (`githubRepoId > 0`) failed closed here; now it resolves via the effective set.
+    linearConfigMocks.resolveLinearTeamBinding.mockResolvedValue({
+      organizationId: "org-a",
+      installationId: 11,
+      teamId: "team-uuid",
+      accessState: "allowed",
+      githubRepoId: 0,
+      githubRepoFullName: "",
+      useAllRepos: true,
+      repos: [],
+    })
+
+    await runLinearAgentRun(ISSUE_ID, makeEnv({ SIGILIX_PLATFORM_DB: db }), undefined, {
+      organizationId: "org-a",
+      installationId: 11,
+      teamId: "team-uuid",
+    })
+
+    expect(mockDispatchAgentRun).toHaveBeenCalledOnce()
+    const input = mockDispatchAgentRun.mock.calls[0]![1] as AgentRunTaskInput
+    expect(input.owner).toBe("Sigilix")
+    expect(input.repo).toBe("sigilix")
+    expect(input.installationId).toBe(11)
   })
 
   // ── SIG-145b: milestone thought stream (live progress instead of a silent "Working…") ──

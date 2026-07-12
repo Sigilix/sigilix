@@ -112,6 +112,8 @@ beforeEach(() => {
     accessState: "allowed",
     githubRepoId: 101,
     githubRepoFullName: "acme/api",
+    useAllRepos: false,
+    repos: [{ githubRepoId: 101, githubRepoFullName: "acme/api" }],
   })
   mocks.retrieveChunks.mockResolvedValue([])
   mocks.fetchPullRequestContext.mockResolvedValue({ ok: false, reason: "not_found" })
@@ -184,5 +186,31 @@ describe("handleMention tenant Linear settings", () => {
     const args = mocks.runAgentLoop.mock.calls[0]?.[0] as { tools: Array<{ name: string }> }
     expect(args.tools.map((tool) => tool.name)).toContain("retrieve_codebase")
     expect(mocks.generate).not.toHaveBeenCalled()
+  })
+
+  it("fans retrieval across the team's full repo set (primary + cross-repo siblings)", async () => {
+    mocks.getLinearConfig.mockResolvedValue(BASE_CONFIG)
+    // A multi-repo binding: primary acme/api + sibling acme/web.
+    mocks.resolveLinearTeamBinding.mockResolvedValue({
+      organizationId: "org-a",
+      installationId: 11,
+      teamId: "team-a",
+      accessState: "allowed",
+      githubRepoId: 101,
+      githubRepoFullName: "acme/api",
+      useAllRepos: false,
+      repos: [
+        { githubRepoId: 101, githubRepoFullName: "acme/api" },
+        { githubRepoId: 102, githubRepoFullName: "acme/web" },
+      ],
+    })
+    const { env } = makeEnv()
+
+    await handleMention("comment-a", env, { tenant: TENANT })
+
+    expect(mocks.retrieveChunks).toHaveBeenCalledOnce()
+    const arg = mocks.retrieveChunks.mock.calls[0]?.[0] as { namespace?: string; crossRepoNamespaces?: string[] }
+    expect(arg.namespace).toBe("acme/api")
+    expect(arg.crossRepoNamespaces).toEqual(["acme/web"])
   })
 })

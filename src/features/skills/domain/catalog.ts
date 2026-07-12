@@ -688,6 +688,22 @@ Do not claim that an ownership analysis was executed unless the required reposit
   ...DELIVERY_WORK_SKILLS,
 ] as const satisfies readonly GovernedSkillManifest[]
 
+/** Agent-eligible skills whose guidance assumes an INTERACTIVE, tool-using loop:
+ * ask the user which item to act on, read-then-write through a connected app,
+ * resolve a thread. The Slack agent is such a loop. The Linear triage pipeline
+ * is NOT — it is a single-shot, non-interactive JSON classifier with no tools,
+ * no write path, and nobody to ask. Injecting "wait for the user's selection"
+ * into a classifier is nonsense, so triage resolves against a narrowed catalog. */
+const INTERACTIVE_ONLY_AGENT_SKILL_IDS: ReadonlySet<string> = new Set([
+  "openai-linear-workflows",
+  "openai-pr-comment-resolution",
+])
+
+/** The catalog the Linear triage pipeline resolves against. */
+export const TRIAGE_SKILL_CATALOG: readonly GovernedSkillManifest[] = GOVERNED_SKILL_CATALOG.filter(
+  (skill) => !INTERACTIVE_ONLY_AGENT_SKILL_IDS.has(skill.id),
+)
+
 export function governedSkillById(id: string): GovernedSkillManifest | null {
   return GOVERNED_SKILL_CATALOG.find((skill) => skill.id === id) ?? null
 }

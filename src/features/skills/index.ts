@@ -4,6 +4,7 @@ export {
   GOVERNED_SKILL_CATALOG,
   SKILL_CATEGORIES,
   SKILL_SURFACES,
+  TRIAGE_SKILL_CATALOG,
   governedSkillById,
   type GovernedSkillManifest,
   type SkillCategory,

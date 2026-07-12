@@ -4,7 +4,7 @@ import {
   type ResolvedSkillContext,
   type SkillResolutionReason,
 } from "@/src/features/skills/domain/policy"
-import type { SkillSurface } from "@/src/features/skills/domain/catalog"
+import type { GovernedSkillManifest, SkillSurface } from "@/src/features/skills/domain/catalog"
 import type { Env } from "@/src/shared/types/env"
 
 export type RuntimeSkillResult =
@@ -21,6 +21,11 @@ interface ResolveRuntimeSkillArgs {
   surface: SkillSurface
   task: string
   runId: string
+  /** Optional NARROWING of the server-owned catalog for a caller whose runtime
+   * cannot honor some agent-eligible guidance (e.g. the single-shot triage
+   * classifier). It can only remove entries — a caller can never introduce a
+   * skill the reviewed catalog does not contain. */
+  catalog?: readonly GovernedSkillManifest[]
 }
 
 /** Resolve one static guidance skill from exact installation-scoped policy.
@@ -44,6 +49,7 @@ export async function resolveRuntimeSkill(
     policies: stored.policies,
     surface: args.surface,
     task: args.task,
+    ...(args.catalog ? { catalog: args.catalog } : {}),
   })
   if (resolved.status === "resolved") {
     console.log(

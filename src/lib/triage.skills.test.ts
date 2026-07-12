@@ -87,6 +87,7 @@ vi.mock("@/src/lib/retrieval", () => ({
 
 import { triageIssue } from "@/src/lib/triage"
 import { configureSkillPolicy, disabledSkillSurfaces } from "@/src/features/skills"
+import { ISSUE_TRIAGE_PROMPT } from "@/src/prompts/issue-triage"
 import { connectLinearOrganization, updateLinearConfig } from "@/src/features/linear-integration"
 
 const NOW_ISO = "2026-07-12T00:00:00.000Z"
@@ -153,12 +154,13 @@ async function makeDb(): Promise<D1Database> {
 async function install(
   db: D1Database,
   surfaces: Partial<Record<"chat" | "agent", boolean>> = { agent: true },
+  skillId = "anthropic-debugging-workflow",
 ): Promise<void> {
   const result = await configureSkillPolicy(
     { SIGILIX_PLATFORM_DB: db },
     {
       installationId: 42,
-      skillId: "anthropic-debugging-workflow",
+      skillId,
       expectedVersion: 0,
       enabled: true,
       surfaces: { ...disabledSkillSurfaces(), ...surfaces },
@@ -226,17 +228,40 @@ describe("triageIssue — governed skill guidance (agent surface)", () => {
   })
 
   it("keeps the prompt byte-identical to today's when no skill is installed", async () => {
+    // Today's exact bytes: the system section is the bare triage prompt, and the
+    // issue metadata follows it directly.
+    const todaysPrefix = `[SYSTEM INSTRUCTIONS]\n${ISSUE_TRIAGE_PROMPT.trim()}\n\n[ISSUE METADATA]`
+
     const dbToday = await makeDb()
-    // Today's behavior: the global skills mode is not set at all.
+    // Skills mode not set at all — the pre-change deployment.
     await triageIssue("issue-abc", makeEnv(dbToday, null), TENANT)
     const todaysPrompt = capturedPrompt()
+    expect(todaysPrompt.startsWith(todaysPrefix)).toBe(true)
     expect(todaysPrompt).not.toContain("<sigilix_organization_skill")
 
     generateMock.mockClear()
     const dbNoInstall = await makeDb()
     await triageIssue("issue-abc", makeEnv(dbNoInstall), TENANT)
 
+    // Mode on, nothing installed → the same bytes.
     expect(capturedPrompt()).toBe(todaysPrompt)
+  })
+
+  it("never injects an interactive-only agent skill — triage is a single-shot classifier", async () => {
+    const db = await makeDb()
+    // Installed, enabled, agent-surface, and the issue text matches its triggers
+    // ("review comments" / "pr feedback" are common inside real issue bodies) —
+    // it is excluded by TRIAGE_SKILL_CATALOG, not by a trigger miss.
+    await install(db, { agent: true }, "openai-pr-comment-resolution")
+    getIssueMock.mockResolvedValueOnce({
+      ...ISSUE,
+      title: "Address the review comments on the checkout PR",
+      description: "There is pr feedback in the review threads we still need to resolve.",
+    })
+
+    await triageIssue("issue-abc", makeEnv(db), TENANT)
+
+    expect(capturedPrompt()).not.toContain("<sigilix_organization_skill")
   })
 
   it("does not inject a skill whose policy enables only the chat surface", async () => {

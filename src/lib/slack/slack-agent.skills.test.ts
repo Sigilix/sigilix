@@ -57,6 +57,23 @@ vi.mock("@/src/lib/agent-telemetry-kv", () => ({
   makeKvTelemetrySink: vi.fn(() => ({ record: vi.fn(async () => {}) })),
 }))
 
+// B3c offer state: drive the pending offer so the revise path (the SECOND
+// injection site) is exercised; keep the real classifyOfferReply.
+const { getImplementOfferMock, setImplementOfferMock, clearImplementOfferMock } = vi.hoisted(() => ({
+  getImplementOfferMock: vi.fn(async () => null as { plan: string; title: string } | null),
+  setImplementOfferMock: vi.fn(async () => {}),
+  clearImplementOfferMock: vi.fn(async () => {}),
+}))
+vi.mock("@/src/lib/slack/slack-implement-offer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/src/lib/slack/slack-implement-offer")>()
+  return {
+    ...actual,
+    getImplementOffer: getImplementOfferMock,
+    setImplementOffer: setImplementOfferMock,
+    clearImplementOffer: clearImplementOfferMock,
+  }
+})
+
 const { extractLearningMock } = vi.hoisted(() => ({
   extractLearningMock: vi.fn(async () => null),
 }))
@@ -139,6 +156,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.spyOn(console, "log").mockImplementation(() => undefined)
   vi.spyOn(console, "warn").mockImplementation(() => undefined)
+  getImplementOfferMock.mockResolvedValue(null)
   runAgentLoopMock.mockResolvedValue({
     ok: true,
     answer: {
@@ -179,11 +197,17 @@ describe("runSlackAgent — governed skill guidance (agent surface)", () => {
     expect(capturedSystemPrompt()).toBe(AGENT_SYSTEM_PROMPT)
   })
 
-  it("keeps the system prompt byte-identical when the global skills mode is not exactly on", async () => {
+  it.each([
+    { name: "unset", mode: null },
+    { name: "off", mode: "off" },
+    // Fail-closed: a case-shifted value must never turn guidance on.
+    { name: "case-shifted On", mode: "On" },
+    { name: "case-shifted ON", mode: "ON" },
+  ])("keeps the system prompt byte-identical when the global skills mode is $name", async ({ mode }) => {
     const db = await makeSkillDb()
     await install(db)
 
-    await runSlackAgent(makeEnv(db, null), makeCtx())
+    await runSlackAgent(makeEnv(db, mode), makeCtx())
 
     expect(capturedSystemPrompt()).toBe(AGENT_SYSTEM_PROMPT)
   })
@@ -202,6 +226,37 @@ describe("runSlackAgent — governed skill guidance (agent surface)", () => {
     await install(db)
 
     await runSlackAgent(makeEnv(db), makeCtx({ mentionText: "how does the auth flow work?" }))
+
+    expect(capturedSystemPrompt()).toBe(AGENT_SYSTEM_PROMPT)
+  })
+
+  it("applies the skill on the offer-revise path too (the second injection site)", async () => {
+    const db = await makeSkillDb()
+    await install(db)
+    getImplementOfferMock.mockResolvedValue({ plan: "1. patch the retry loop", title: "Fix checkout retry" })
+    const env = makeEnv(db)
+    env.OPENCLAW_LINEAR_AGENT_RUN_MODE = "on"
+    runAgentLoopMock.mockResolvedValue({
+      ok: true,
+      answer: { reply: "Good call.", plan: "1. reproduce, 2. patch", title: "Fix checkout retry" },
+      stats: { toolTurns: 1, totalMs: 500, toolCallCount: 1 },
+    })
+
+    const result = await runSlackAgent(env, makeCtx({ mentionText: "please reproduce the bug before patching" }))
+
+    expect(result.action.kind).toBe("implement-revise")
+    const systemPrompt = capturedSystemPrompt()
+    expect(systemPrompt.startsWith(AGENT_SYSTEM_PROMPT)).toBe(true)
+    expect(systemPrompt).toContain('<sigilix_organization_skill id="anthropic-debugging-workflow"')
+  })
+
+  it("keeps the offer-revise prompt byte-identical when no skill is installed", async () => {
+    const db = await makeSkillDb()
+    getImplementOfferMock.mockResolvedValue({ plan: "1. patch the retry loop", title: "Fix checkout retry" })
+    const env = makeEnv(db)
+    env.OPENCLAW_LINEAR_AGENT_RUN_MODE = "on"
+
+    await runSlackAgent(env, makeCtx({ mentionText: "please reproduce the bug before patching" }))
 
     expect(capturedSystemPrompt()).toBe(AGENT_SYSTEM_PROMPT)
   })

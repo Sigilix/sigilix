@@ -31,6 +31,7 @@ import {
 } from "@/src/features/linear-integration"
 import { resolveBindingRepoScope, type BindingRepoScope } from "@/src/lib/cross-repo-context"
 import {
+  TRIAGE_SKILL_CATALOG,
   applySkillGuidance,
   renderSkillProvenanceNote,
   resolveRuntimeSkill,
@@ -213,6 +214,9 @@ export async function triageIssue(issueId: string, env: Env, tenant?: LinearTena
         surface: "agent",
         task: retrievalText,
         runId: issue.id,
+        // Triage is a single-shot classifier: exclude the agent-eligible skills
+        // whose guidance assumes an interactive, tool-using loop.
+        catalog: TRIAGE_SKILL_CATALOG,
       })
       if (resolved.status === "resolved") {
         skillContext = resolved.context

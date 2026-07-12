@@ -812,7 +812,12 @@ async function loadAgentSkillContext(
     const resolved = await resolveRuntimeSkill(env, { installationId, surface: "agent", task, runId })
     if (resolved.status !== "resolved") return undefined
     console.log(
-      JSON.stringify({ event: "slack-agent-skill-applied", note: renderSkillProvenanceNote(resolved.context) }),
+      JSON.stringify({
+        event: "slack-agent-skill-applied",
+        installationId,
+        runId,
+        note: renderSkillProvenanceNote(resolved.context),
+      }),
     )
     return resolved.context
   } catch {

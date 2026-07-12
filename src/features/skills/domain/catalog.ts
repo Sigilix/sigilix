@@ -4,6 +4,7 @@
 // bounded guidance rather than executable package content.
 
 import { CONNECTED_WORK_SKILLS } from "./catalog-connected-work"
+import { DELIVERY_WORK_SKILLS } from "./catalog-delivery-work"
 
 export const SKILL_SURFACES = ["chat", "deep-research", "cli", "pr-review", "agent"] as const
 export type SkillSurface = (typeof SKILL_SURFACES)[number]
@@ -64,6 +65,11 @@ export interface GovernedSkillManifest {
 }
 
 const CHAT_RESEARCH_SURFACES = ["chat", "deep-research"] as const satisfies readonly SkillSurface[]
+// "agent" — the Slack agent + the Linear issue-triage pipeline (the
+// installation-scoped automation surfaces). Granted only where the guidance
+// holds without MCP tools the agent surface does not have (its tools are
+// GitHub codebase retrieval and Linear issue creation).
+const CHAT_RESEARCH_AGENT_SURFACES = ["chat", "deep-research", "agent"] as const satisfies readonly SkillSurface[]
 
 const REVIEW: SkillReviewProvenance = {
   status: "approved-guidance-only",
@@ -111,7 +117,7 @@ Only make claims supported by the task context. Present proposed SQL as a review
     },
     review: REVIEW,
     appIds: ["supabase"],
-    eligibleSurfaces: CHAT_RESEARCH_SURFACES,
+    eligibleSurfaces: CHAT_RESEARCH_AGENT_SURFACES,
     requiredCapabilities: [],
     dataSensitivity: "public-guidance",
     triggerPhrases: [
@@ -165,7 +171,7 @@ Use only task-visible evidence. Do not claim a dashboard setting, grant, policy,
     },
     review: REVIEW,
     appIds: ["supabase"],
-    eligibleSurfaces: CHAT_RESEARCH_SURFACES,
+    eligibleSurfaces: CHAT_RESEARCH_AGENT_SURFACES,
     requiredCapabilities: [],
     dataSensitivity: "public-guidance",
     triggerPhrases: [
@@ -218,7 +224,7 @@ Ground recommendations in the visible code and configuration. Distinguish an exi
     },
     review: REVIEW,
     appIds: ["cloudflare"],
-    eligibleSurfaces: CHAT_RESEARCH_SURFACES,
+    eligibleSurfaces: CHAT_RESEARCH_AGENT_SURFACES,
     requiredCapabilities: [],
     dataSensitivity: "public-guidance",
     triggerPhrases: ["durable object", "durable objects", "stateful coordination", "websocket hibernation", "do alarm"],
@@ -264,7 +270,7 @@ Flag only concrete, context-supported risks. Do not invent a platform limit or c
     },
     review: REVIEW,
     appIds: ["cloudflare"],
-    eligibleSurfaces: CHAT_RESEARCH_SURFACES,
+    eligibleSurfaces: CHAT_RESEARCH_AGENT_SURFACES,
     requiredCapabilities: [],
     dataSensitivity: "public-guidance",
     triggerPhrases: ["cloudflare worker", "cloudflare workers", "wrangler", "workers binding", "worker binding"],
@@ -310,7 +316,7 @@ Ground every command or configuration field in visible project evidence or curre
     },
     review: REVIEW,
     appIds: ["cloudflare"],
-    eligibleSurfaces: CHAT_RESEARCH_SURFACES,
+    eligibleSurfaces: CHAT_RESEARCH_AGENT_SURFACES,
     requiredCapabilities: [],
     dataSensitivity: "public-guidance",
     triggerPhrases: ["wrangler", "wrangler jsonc", "wrangler toml", "wrangler binding", "wrangler compatibility date"],
@@ -355,7 +361,7 @@ Base recommendations on the visible configuration and code. Label experimental o
     },
     review: REVIEW,
     appIds: ["cloudflare"],
-    eligibleSurfaces: CHAT_RESEARCH_SURFACES,
+    eligibleSurfaces: CHAT_RESEARCH_AGENT_SURFACES,
     requiredCapabilities: [],
     dataSensitivity: "public-guidance",
     triggerPhrases: [
@@ -558,7 +564,7 @@ Do not turn a general code-review request into a security audit unless the user 
     },
     review: REVIEW,
     appIds: [],
-    eligibleSurfaces: CHAT_RESEARCH_SURFACES,
+    eligibleSurfaces: CHAT_RESEARCH_AGENT_SURFACES,
     requiredCapabilities: [],
     dataSensitivity: "public-guidance",
     triggerPhrases: [
@@ -679,6 +685,7 @@ Do not claim that an ownership analysis was executed unless the required reposit
     priority: 5,
   },
   ...CONNECTED_WORK_SKILLS,
+  ...DELIVERY_WORK_SKILLS,
 ] as const satisfies readonly GovernedSkillManifest[]
 
 export function governedSkillById(id: string): GovernedSkillManifest | null {

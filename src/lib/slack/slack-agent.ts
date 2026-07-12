@@ -20,6 +20,12 @@ import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
 import { recallSlackMemory, captureSlackMemory } from "@/src/lib/slack/slack-memory"
 import { captureInstructiveLearning } from "@/src/features/learnings"
 import {
+  applySkillGuidance,
+  renderSkillProvenanceNote,
+  resolveRuntimeSkill,
+  type ResolvedSkillContext,
+} from "@/src/features/skills"
+import {
   codebaseContextEnabled,
   getLinearConfig,
   getLinearConnectionByInstallation,
@@ -257,13 +263,19 @@ async function runQa(
 
   const initialUserMessage = buildInitialUserMessage(ctx, recalled)
 
+  // Governed org skills ("agent" surface): installation-scoped, reviewed
+  // guidance appended to the system prompt. Resolution soft-fails to undefined
+  // (and applySkillGuidance is the identity without a context), so the no-skill
+  // path is byte-identical to today's prompt.
+  const skillContext = await loadAgentSkillContext(env, primary.installationId, ctx.mentionText, commentId)
+
   const loopResult = await runAgentLoop({
     model,
     apiKey: env.OLLAMA_API_KEY,
     env,
     surface: "slack-mention",
     commentId,
-    systemPrompt: AGENT_SYSTEM_PROMPT,
+    systemPrompt: applySkillGuidance({ system: AGENT_SYSTEM_PROMPT, user: "" }, skillContext).system,
     initialUserMessage,
     tools,
     finalAnswerSchema: GITHUB_MENTION_SCHEMA as unknown as Record<string, unknown>,
@@ -588,13 +600,16 @@ async function runOfferRevise(
   const tools = await buildSlackAgentTools(env, ctx, primary)
   const initialUserMessage = buildReviseUserMessage(ctx, offer)
 
+  // Same governed-skill seam as runQa — identity when nothing resolves.
+  const skillContext = await loadAgentSkillContext(env, primary.installationId, ctx.mentionText, commentId)
+
   const loopResult = await runAgentLoop({
     model,
     apiKey: env.OLLAMA_API_KEY,
     env,
     surface: "slack-mention",
     commentId,
-    systemPrompt: AGENT_SYSTEM_PROMPT,
+    systemPrompt: applySkillGuidance({ system: AGENT_SYSTEM_PROMPT, user: "" }, skillContext).system,
     initialUserMessage,
     tools,
     finalAnswerSchema: IMPLEMENT_REVISE_SCHEMA as unknown as Record<string, unknown>,
@@ -778,6 +793,31 @@ function dedupeOwnerRepo(repos: Array<{ owner: string; repo: string }>): Array<{
     out.push(r)
   }
   return out
+}
+
+/**
+ * Resolve one governed org skill for the "agent" surface (installation-scoped
+ * policy, same primitives as deep research). Soft-fails to undefined on ANY
+ * error — skill guidance is optional and must never break a Slack reply. The
+ * provenance note is logged (not posted) so an applied skill is auditable
+ * without changing the user-visible reply shape.
+ */
+async function loadAgentSkillContext(
+  env: Env,
+  installationId: number,
+  task: string,
+  runId: string,
+): Promise<ResolvedSkillContext | undefined> {
+  try {
+    const resolved = await resolveRuntimeSkill(env, { installationId, surface: "agent", task, runId })
+    if (resolved.status !== "resolved") return undefined
+    console.log(
+      JSON.stringify({ event: "slack-agent-skill-applied", note: renderSkillProvenanceNote(resolved.context) }),
+    )
+    return resolved.context
+  } catch {
+    return undefined
+  }
 }
 
 /** The offer block appended to a grounded answer when an implementable change is detected. */

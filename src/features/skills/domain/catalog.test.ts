@@ -3,8 +3,8 @@ import { GOVERNED_SKILL_CATALOG } from "./catalog"
 
 describe("governed skill catalog", () => {
   it("contains only pinned, permissively licensed, guidance-only sources", () => {
-    expect(GOVERNED_SKILL_CATALOG).toHaveLength(12)
-    expect(new Set(GOVERNED_SKILL_CATALOG.map((skill) => skill.id)).size).toBe(12)
+    expect(GOVERNED_SKILL_CATALOG).toHaveLength(20)
+    expect(new Set(GOVERNED_SKILL_CATALOG.map((skill) => skill.id)).size).toBe(20)
     for (const skill of GOVERNED_SKILL_CATALOG) {
       expect(skill.schemaVersion).toBe(1)
       expect(["engineering", "security", "data", "operations", "knowledge"]).toContain(skill.category)
@@ -16,11 +16,9 @@ describe("governed skill catalog", () => {
       expect(skill.source.skillFileSha256).toMatch(/^[a-f0-9]{64}$/)
       expect(["Apache-2.0", "MIT"]).toContain(skill.source.license)
       expect(skill.source.licenseUrl).toMatch(/^https:\/\/github\.com\//)
-      expect(skill.review).toEqual({
-        status: "approved-guidance-only",
-        reviewedBy: "sigilix-engineering",
-        reviewedAt: "2026-07-11",
-      })
+      expect(skill.review.status).toBe("approved-guidance-only")
+      expect(skill.review.reviewedBy).toBe("sigilix-engineering")
+      expect(["2026-07-11", "2026-07-12"]).toContain(skill.review.reviewedAt)
       expect(skill.requiredCapabilities).toEqual([])
       expect(skill.eligibleSurfaces).toEqual(["chat", "deep-research"])
       expect(skill.instructions).not.toMatch(/(?:^|\n)\s*(?:npm|npx|curl|git|mkdir|python|bash|sh)\s+/i)
@@ -51,6 +49,14 @@ describe("governed skill catalog", () => {
         "openai-security-best-practices": "7b3dae1ffc5434d890f3c65c8f552af52d0307fab3b35dec13013c9ca3844c4f",
         "openai-browser-qa": "0ffaabcc8e0990627c4725f18bf1c7955534a796c1c199e872909de2013ce6a8",
         "openai-security-ownership-analysis": "f06c1a59247569326702c945f397af163ea96cf2ecfdf2dde280605bf89a3ec8",
+        "slack-search-grounding": "d2ea69e3287cd8c060238ab8a45ede9ef0e7046de6e4ae452ef15bfd4e201ebc",
+        "atlassian-jira-triage": "4ce1808138ea8871e5a113e4f7b7ae28dc8e78a36df4cb7c87f9666c20620e0c",
+        "pagerduty-incident-investigation": "33ffab6beef0ffdfb9dfd5c67e98e3ee12d5437d2aa3825d1fc541187b4f8844",
+        "asana-task-context": "6b3fddd179be3087cf8951ed1f27fe6bc3567ece6c6bc77303ece8a69c04c6fa",
+        "openai-define-goal": "708df89ff19cbae82a762efae036735d1914b5c7e44df1832e0b723f6cd9ee30",
+        "openai-ci-failure-diagnosis": "7b326b4a2f0f5f85122144628ec02077e48841e0e0e82efce88b3415bcfb7c26",
+        "anthropic-activity-digest": "d711d49b898eb303b74488dce75308e8737786d87210f1dca13ec325bc7f5737",
+        "anthropic-stakeholder-update": "bcdb8ee95dc34d025dcc3d98e7435c4dca45930581b3b7a8707f8770dd364e79",
       },
     )
   })
@@ -64,6 +70,14 @@ describe("governed skill catalog", () => {
       "openai-notion-research": ["notion"],
       "openai-browser-qa": [],
       "openai-security-ownership-analysis": [],
+      "slack-search-grounding": ["slack"],
+      "atlassian-jira-triage": ["jira"],
+      "pagerduty-incident-investigation": ["pagerduty"],
+      "asana-task-context": ["asana"],
+      "openai-define-goal": [],
+      "openai-ci-failure-diagnosis": ["github"],
+      "anthropic-activity-digest": [],
+      "anthropic-stakeholder-update": [],
     })
   })
 })

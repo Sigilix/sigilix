@@ -88,6 +88,27 @@ describe("runtime app registry", () => {
     expect(isToolCompatibleWithRuntimeApp("launchdarkly", "launchdarkly", "get-feature-flag")).toBe(true)
     expect(isToolCompatibleWithRuntimeApp("datadog", "datadog", "search_datadog_logs")).toBe(true)
     expect(isToolCompatibleWithRuntimeApp("netlify", "netlify", "netlify-project-services-reader")).toBe(true)
+    expect(isToolCompatibleWithRuntimeApp("slack", "slack", "slack_search_public")).toBe(true)
+    // Routing compatibility only — the curated vendor policy is what refuses
+    // write tools like slack_send_message (see runtime-policy.test.ts).
+    expect(isToolCompatibleWithRuntimeApp("slack", "slack", "slack_send_message")).toBe(true)
+    expect(isToolCompatibleWithRuntimeApp("asana", "asana", "get_task")).toBe(true)
+    expect(isToolCompatibleWithRuntimeApp("asana", "slack", "get_task")).toBe(false)
+  })
+
+  it("routes @Slack and @Asana mentions to the new runtime apps", () => {
+    expect(parseLeadingRuntimeAppMention("@Slack find the failing-preview thread")).toEqual({
+      kind: "resolved",
+      appId: "slack",
+      mention: "@Slack",
+      task: "find the failing-preview thread",
+    })
+    expect(parseLeadingRuntimeAppMention("@asana what is open in checkout?")).toEqual({
+      kind: "resolved",
+      appId: "asana",
+      mention: "@asana",
+      task: "what is open in checkout?",
+    })
   })
 
   it("publishes stable human-safe rejection copy for every public error code", () => {

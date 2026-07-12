@@ -256,7 +256,10 @@ describe("handleLinearOAuthCallback", () => {
 
     expect(res.status).toBe(200)
     expect(res.headers.get("content-type")).toContain("text/html")
-    expect(await res.text()).toContain("Sigilix agent installed")
+    const body = await res.text()
+    expect(body).toContain("Sigilix agent installed")
+    // Branded "Connected" page (oauth-connected-page.ts), not the old bare <h1>.
+    expect(body).toContain("You can safely close this tab.")
     // Nonce consumed on use to prevent replay.
     expect(kv.delete).toHaveBeenCalledWith(`linear-oauth-state:${state}`)
     expect(kv._store.has(`linear-oauth-state:${state}`)).toBe(false)

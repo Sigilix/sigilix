@@ -111,9 +111,13 @@ describe("skills route", () => {
     const body = (await response.json()) as { skills: Array<Record<string, unknown>> }
     expect(response.status).toBe(200)
     expect(response.headers.get("access-control-allow-origin")).toBe(ORIGIN)
-    expect(body.skills).toHaveLength(5)
+    expect(body.skills).toHaveLength(10)
     expect(body.skills[0]).toHaveProperty("instructionSha256")
     expect(body.skills[0]).not.toHaveProperty("instructions")
+    expect(body.skills.find((skill) => skill.id === "openai-sentry-investigation")).toMatchObject({
+      appIds: ["sentry"],
+      dataSensitivity: "public-guidance",
+    })
   })
 
   it("requires exact installation admin proof before reading policy", async () => {

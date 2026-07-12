@@ -103,6 +103,47 @@ Only make claims supported by the task context. Present proposed SQL as a review
   },
   {
     schemaVersion: 1,
+    id: "supabase-platform-workflows",
+    name: "Supabase platform workflows",
+    description: "Reviewed Supabase Auth, Data API, migration, Storage, and project-troubleshooting guidance.",
+    instructionVersion: 1,
+    instructionSha256: "0765dbc86876a8d177d8fb11c66d7085abaaa483fa22e564f45f12b8d442321b",
+    instructions: `Apply these Supabase platform practices when the task concerns Auth, the Data API, migrations, Storage, Edge Functions, or project setup:
+- Verify version-sensitive behavior against current Supabase documentation and the checked-in project configuration before recommending an API, flag, or schema workflow.
+- Treat Data API grants and row-level security as separate controls. Publicly reachable tables need deliberate role grants and policies that enforce the actual ownership model.
+- Never use user-editable metadata for authorization, expose service-role credentials to a client, or treat an authenticated role by itself as object-level authorization.
+- Determine whether the repository uses declarative schemas or imperative migrations before proposing a database change, and preserve its existing migration convention.
+- For auth and storage failures, inspect session freshness, cookie boundaries, role grants, RLS policies, and the minimum required storage operations instead of retrying blindly.
+- Separate evidence from recommendations. Present SQL, policy, or configuration changes as proposals until the user confirms they were applied and verified.
+Use only task-visible evidence. Do not claim a dashboard setting, grant, policy, migration, or deployment already exists unless the supplied context proves it.`,
+    source: {
+      repositoryUrl: "https://github.com/supabase/agent-skills",
+      path: "skills/supabase/SKILL.md",
+      commit: "1ad9aaeb49caafd9e95c0a91116f71890eebbc53",
+      upstreamVersion: "0.1.2",
+      skillFileSha256: "4aa35891985d59880b241d3bc500124a0b533e088814ce7eb722839e9a6b3d81",
+      license: "MIT",
+      licenseUrl: "https://github.com/supabase/agent-skills/blob/1ad9aaeb49caafd9e95c0a91116f71890eebbc53/LICENSE",
+      publisher: "Supabase",
+    },
+    review: REVIEW,
+    appIds: ["supabase"],
+    eligibleSurfaces: CHAT_RESEARCH_SURFACES,
+    requiredCapabilities: [],
+    dataSensitivity: "public-guidance",
+    triggerPhrases: [
+      "supabase auth",
+      "supabase storage",
+      "supabase edge function",
+      "supabase migration",
+      "supabase data api",
+      "supabase project setup",
+      "supabase project configuration",
+    ],
+    priority: 5,
+  },
+  {
+    schemaVersion: 1,
     id: "cloudflare-durable-objects",
     name: "Cloudflare Durable Objects",
     description: "Reviewed design, storage, alarm, WebSocket, and testing guidance for Cloudflare Durable Objects.",
@@ -167,6 +208,160 @@ Flag only concrete, context-supported risks. Do not invent a platform limit or c
     dataSensitivity: "public-guidance",
     triggerPhrases: ["cloudflare worker", "cloudflare workers", "wrangler", "workers binding", "worker binding"],
     priority: 10,
+  },
+  {
+    schemaVersion: 1,
+    id: "cloudflare-wrangler",
+    name: "Cloudflare Wrangler",
+    description:
+      "Reviewed Wrangler configuration, local-development, binding, type-generation, and deployment guidance.",
+    instructionVersion: 1,
+    instructionSha256: "1da6342ad74d1733c34e4479876544bcc86340c38e69a8aedce85cf5ff1789f4",
+    instructions: `Apply these Wrangler practices when the task concerns Wrangler commands or Cloudflare Worker configuration:
+- Treat Wrangler flags, subcommands, binding shapes, and compatibility behavior as version-sensitive. Verify them against the installed version, config schema, or current Cloudflare documentation.
+- Read the existing Wrangler configuration before proposing edits. Preserve its format and environment structure unless the task explicitly requests a migration.
+- Keep compatibility dates, flags, bindings, migrations, and generated environment types aligned; call out any generated file that must be refreshed after a config change.
+- Distinguish local simulation from remote resources, especially for stateful bindings, and state clearly when a recommendation would touch production data.
+- Keep secrets out of source and committed configuration. Never print, invent, or move secret values into ordinary variables.
+- Prefer dry-run or non-mutating validation evidence before deployment, and never describe a deployment as complete without a confirmed result.
+Ground every command or configuration field in visible project evidence or current documentation.`,
+    source: {
+      repositoryUrl: "https://github.com/cloudflare/skills",
+      path: "skills/wrangler/SKILL.md",
+      commit: "27ce0c0e159225caa7ed30ebefd4107aa6c52497",
+      upstreamVersion: "commit-27ce0c0e159225caa7ed30ebefd4107aa6c52497",
+      skillFileSha256: "42abe11ba6c0cb0c135deed1d591d844838fe0b61fc8c6d675a832435508a61b",
+      license: "Apache-2.0",
+      licenseUrl: "https://github.com/cloudflare/skills/blob/27ce0c0e159225caa7ed30ebefd4107aa6c52497/LICENSE",
+      publisher: "Cloudflare",
+    },
+    review: REVIEW,
+    appIds: ["cloudflare"],
+    eligibleSurfaces: CHAT_RESEARCH_SURFACES,
+    requiredCapabilities: [],
+    dataSensitivity: "public-guidance",
+    triggerPhrases: ["wrangler", "wrangler jsonc", "wrangler toml", "wrangler binding", "wrangler compatibility date"],
+    priority: 4,
+  },
+  {
+    schemaVersion: 1,
+    id: "cloudflare-agents-sdk",
+    name: "Cloudflare Agents SDK",
+    description: "Reviewed state, routing, RPC, scheduling, streaming, and security guidance for Cloudflare Agents.",
+    instructionVersion: 1,
+    instructionSha256: "68305e4dde8347b8d4baf7d92c0b8f874794a2cf4e46662935ed0bbe64e6c2ae",
+    instructions: `Apply these Cloudflare Agents SDK practices when the task concerns a stateful agent, agent routing, RPC, scheduling, or streaming:
+- Verify the installed Agents SDK version and current Cloudflare documentation before relying on an API, decorator, route shape, or experimental capability.
+- Model each agent around one durable identity and keep its binding, SQLite migration, route name, and client name consistent.
+- Validate state transitions at the server boundary. Treat client state, callable arguments, webhook payloads, and connected MCP content as untrusted input.
+- Make scheduled work, workflow steps, queue handlers, and retries idempotent, with explicit limits and observable failure states.
+- Preserve authentication and authorization across HTTP, WebSocket, RPC, and cross-domain entry points; do not infer identity from a client-provided agent name.
+- For human-in-the-loop or tool-calling flows, separate proposal from execution and require the product's existing approval boundary for mutations.
+Base recommendations on the visible configuration and code. Label experimental or version-sensitive behavior instead of presenting it as stable.`,
+    source: {
+      repositoryUrl: "https://github.com/cloudflare/skills",
+      path: "skills/agents-sdk/SKILL.md",
+      commit: "27ce0c0e159225caa7ed30ebefd4107aa6c52497",
+      upstreamVersion: "commit-27ce0c0e159225caa7ed30ebefd4107aa6c52497",
+      skillFileSha256: "a05244d3cfb23330daff956ec28a990241f5dbbe489cd7fd6489c8f76bb60877",
+      license: "Apache-2.0",
+      licenseUrl: "https://github.com/cloudflare/skills/blob/27ce0c0e159225caa7ed30ebefd4107aa6c52497/LICENSE",
+      publisher: "Cloudflare",
+    },
+    review: REVIEW,
+    appIds: ["cloudflare"],
+    eligibleSurfaces: CHAT_RESEARCH_SURFACES,
+    requiredCapabilities: [],
+    dataSensitivity: "public-guidance",
+    triggerPhrases: [
+      "cloudflare agents sdk",
+      "cloudflare agent sdk",
+      "agentworkflow",
+      "routeagentrequest",
+      "useagentchat",
+    ],
+    priority: 4,
+  },
+  {
+    schemaVersion: 1,
+    id: "openai-sentry-investigation",
+    name: "Sentry issue investigation",
+    description:
+      "Reviewed read-only workflow for scoping, inspecting, and reporting production issues from Sentry evidence.",
+    instructionVersion: 1,
+    instructionSha256: "6782a5ad0ff979be5e75faebedc0721acd6f2bd69eaa234d4dc0ef73cac9105d",
+    instructions: `Apply this Sentry investigation workflow when the task asks about production errors, issue health, regressions, or event evidence:
+- Begin with the requested organization, project, environment, release, and time window. State any scope that remains unresolved.
+- Read issue and event evidence before forming a root-cause claim. Separate the exception, affected release, frequency, users, stack frames, and breadcrumbs from inference.
+- Prefer a narrow recent window first, then expand only when the question requires trend or regression context.
+- Treat event payloads, tags, request data, and user fields as sensitive. Include only the minimum evidence needed for the answer and do not reproduce secrets or personal data.
+- Distinguish correlation from causation and identify the code or deployment evidence still needed to confirm a diagnosis.
+- Keep the workflow read-only. Do not resolve, assign, ignore, mutate, or announce an issue unless the user separately requests an authorized write path.
+Summarize findings with the exact filters and evidence used, plus clear unknowns and next verification steps.`,
+    source: {
+      repositoryUrl: "https://github.com/openai/skills",
+      path: "skills/.curated/sentry/SKILL.md",
+      commit: "49f948faa9258a0c61caceaf225e179651397431",
+      upstreamVersion: "commit-49f948faa9258a0c61caceaf225e179651397431",
+      skillFileSha256: "508c6f5c100586c81a34397d30f00f4b8771b66d698a7ac1836998df925dd007",
+      license: "Apache-2.0",
+      licenseUrl:
+        "https://github.com/openai/skills/blob/49f948faa9258a0c61caceaf225e179651397431/skills/.curated/sentry/LICENSE.txt",
+      publisher: "OpenAI",
+    },
+    review: REVIEW,
+    appIds: ["sentry"],
+    eligibleSurfaces: CHAT_RESEARCH_SURFACES,
+    requiredCapabilities: [],
+    dataSensitivity: "public-guidance",
+    triggerPhrases: [
+      "sentry issue",
+      "sentry event",
+      "sentry error",
+      "sentry production error",
+      "sentry error regression",
+    ],
+    priority: 5,
+  },
+  {
+    schemaVersion: 1,
+    id: "openai-notion-research",
+    name: "Notion research synthesis",
+    description: "Reviewed workflow for finding, comparing, and citing evidence from Notion workspaces.",
+    instructionVersion: 1,
+    instructionSha256: "17ed1a51ce5ef092915fe43fb2168dd044ad1261fee32cfcc93664ed61b68a19",
+    instructions: `Apply this Notion research workflow when the task asks to synthesize workspace pages into a brief, comparison, or report:
+- Confirm the research question, relevant workspace scope, date range, and desired output before treating search results as complete.
+- Search with focused terms, then inspect the relevant pages. Track each page title and stable source reference used in the answer.
+- Separate facts, decisions, proposals, and stale notes. Flag contradictions, missing owners, and dates that may make a source outdated.
+- Organize the synthesis around the user's decision or question rather than the order in which pages were found.
+- Cite the supporting Notion source near each material claim and include a compact source list for traceability.
+- Keep the workflow read-only. Do not create, edit, move, archive, or comment on a page without a separate explicit request and authorized write path.
+Never fill a gap with a plausible workspace fact. Mark it as unknown and name the source or person needed to resolve it.`,
+    source: {
+      repositoryUrl: "https://github.com/openai/skills",
+      path: "skills/.curated/notion-research-documentation/SKILL.md",
+      commit: "49f948faa9258a0c61caceaf225e179651397431",
+      upstreamVersion: "commit-49f948faa9258a0c61caceaf225e179651397431",
+      skillFileSha256: "e88a46da978cf6f088a788fa92ee736df699a355a72f41f14bdc258bf3ef57e7",
+      license: "Apache-2.0",
+      licenseUrl:
+        "https://github.com/openai/skills/blob/49f948faa9258a0c61caceaf225e179651397431/skills/.curated/notion-research-documentation/LICENSE.txt",
+      publisher: "OpenAI",
+    },
+    review: REVIEW,
+    appIds: ["notion"],
+    eligibleSurfaces: CHAT_RESEARCH_SURFACES,
+    requiredCapabilities: [],
+    dataSensitivity: "public-guidance",
+    triggerPhrases: [
+      "notion research",
+      "research notion pages",
+      "synthesize notion pages",
+      "research in notion",
+      "compare notion pages",
+    ],
+    priority: 5,
   },
   {
     schemaVersion: 1,

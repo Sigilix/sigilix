@@ -30,6 +30,13 @@ import {
   type LinearTenantContext,
 } from "@/src/features/linear-integration"
 import { resolveBindingRepoScope, type BindingRepoScope } from "@/src/lib/cross-repo-context"
+import {
+  TRIAGE_SKILL_CATALOG,
+  applySkillGuidance,
+  renderSkillProvenanceNote,
+  resolveRuntimeSkill,
+  type ResolvedSkillContext,
+} from "@/src/features/skills"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const MAX_LABELS = 3
@@ -195,14 +202,48 @@ export async function triageIssue(issueId: string, env: Env, tenant?: LinearTena
         })
   since("retrieval-done")
 
-  const prompt = buildPrompt({
-    identifier: issue.identifier,
-    title: issue.title,
-    body: issue.description ?? "",
-    author: issue.creator?.displayName ?? issue.creator?.name ?? null,
-    labels: issue.labels.nodes.map((l) => l.name),
-    codebaseChunks: formatChunksForPrompt(chunks),
-  })
+  // Governed org skills ("agent" surface): installation-scoped, reviewed
+  // guidance folded into the [SYSTEM INSTRUCTIONS] section. Tenant-scoped only
+  // — the legacy env-map deployment has no installation-scoped policy store.
+  // Soft-fails to undefined on ANY error; guidance must never block a triage.
+  let skillContext: ResolvedSkillContext | undefined
+  if (tenant) {
+    try {
+      const resolved = await resolveRuntimeSkill(env, {
+        installationId: tenant.installationId,
+        surface: "agent",
+        task: retrievalText,
+        runId: issue.id,
+        // Triage is a single-shot classifier: exclude the agent-eligible skills
+        // whose guidance assumes an interactive, tool-using loop.
+        catalog: TRIAGE_SKILL_CATALOG,
+      })
+      if (resolved.status === "resolved") {
+        skillContext = resolved.context
+        console.log(
+          JSON.stringify({
+            event: "linear-triage-skill-applied",
+            issueId,
+            note: renderSkillProvenanceNote(resolved.context),
+          }),
+        )
+      }
+    } catch {
+      skillContext = undefined
+    }
+  }
+
+  const prompt = buildPrompt(
+    {
+      identifier: issue.identifier,
+      title: issue.title,
+      body: issue.description ?? "",
+      author: issue.creator?.displayName ?? issue.creator?.name ?? null,
+      labels: issue.labels.nodes.map((l) => l.name),
+      codebaseChunks: formatChunksForPrompt(chunks),
+    },
+    skillContext,
+  )
 
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
   since("ollama-start")
@@ -325,10 +366,12 @@ interface PromptCtx {
   codebaseChunks: string | null
 }
 
-function buildPrompt(ctx: PromptCtx): string {
+function buildPrompt(ctx: PromptCtx, skillContext?: ResolvedSkillContext): string {
+  // applySkillGuidance is the identity without a context, so the no-skill
+  // prompt stays byte-identical to today's output.
   const sections = [
     "[SYSTEM INSTRUCTIONS]",
-    ISSUE_TRIAGE_PROMPT.trim(),
+    applySkillGuidance({ system: ISSUE_TRIAGE_PROMPT.trim(), user: "" }, skillContext).system,
     "",
     "[ISSUE METADATA]",
     `Identifier: ${ctx.identifier}`,

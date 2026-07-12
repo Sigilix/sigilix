@@ -18,7 +18,7 @@ import {
 import { buildSecurityFactManifest } from "@/src/lib/security-evidence-manifest"
 import { evaluateScanFactDismissal } from "@/src/lib/ensemble/domain/gates/validate-security-finding"
 import { buildClearedLogicCandidateTelemetry } from "@/src/lib/triage-pr-review"
-import { applyLogicPromptBudget } from "@/src/lib/logic-prompt-budget"
+import { applyLogicPromptBudgetSafe } from "@/src/lib/logic-prompt-budget"
 import {
   type LogicInputCompositionCapture,
   type LogicInputCompositionTelemetrySink,
@@ -46,6 +46,7 @@ import {
   runSpecialist,
   type SpecialistRunResult,
 } from "@/src/lib/ensemble/adapters/model-provider"
+import { resolveBedrockSpecialistConfig } from "@/src/lib/ensemble/adapters/model-provider-bedrock"
 import { type CollectSpecialistVerdictsTelemetry, collectSpecialistVerdicts } from "./specialists-collect-verdicts"
 import { SPECIALIST_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import { decideEarlyExitAction, computeDegradedCoverage } from "@/src/lib/ensemble/domain/policy"
@@ -291,32 +292,19 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     if (role === "logic") {
       // SIG-287/SIG-236: off→passthrough, shadow→measure-only, enforce→TRIM
       // the logic prompt to the cap (returns the prompt the model receives)
-      // so logic stops timing out on its uniquely-large prompt. Belt-and-
-      // suspenders try/catch (CR catch on PR #191): `applyLogicPromptBudget`
-      // already fails open internally, but instrumentation MUST NOT break the
-      // fan-out even if a future refactor removes the inner guard — on any
-      // throw, fall back to the un-trimmed prompt (logic still runs).
-      try {
-        initialMessage = applyLogicPromptBudget({
-          mode: logicPromptBudgetMode,
-          prompt: initialMessage,
-          owner,
-          repo,
-          prNumber,
-          headSha,
-        })
-      } catch (err) {
-        console.warn(
-          JSON.stringify({
-            event: "logic-prompt-budget-call-site-error",
-            owner,
-            repo,
-            prNumber,
-            headSha: headSha.slice(0, 7),
-            message: err instanceof Error ? err.message : String(err),
-          }),
-        )
-      }
+      // so logic stops timing out on its uniquely-large prompt. The `Safe`
+      // variant carries the PR-#191 belt-and-suspenders call-site guard
+      // (relocated verbatim into logic-prompt-budget.ts): on ANY throw it
+      // falls back to the un-trimmed prompt — instrumentation can never
+      // break the fan-out (logic still runs).
+      initialMessage = applyLogicPromptBudgetSafe({
+        mode: logicPromptBudgetMode,
+        prompt: initialMessage,
+        owner,
+        repo,
+        prNumber,
+        headSha,
+      })
     }
     // SIG-287: role's bounded reasoning level — empty map by default → think:false.
     const reasoningForRole = ensembleConfig.flags.reasoningByRole.get(role)
@@ -337,6 +325,15 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     })
     if (logicComposition.capture !== undefined) logicInputCompositionState.capture = logicComposition.capture
     const onInputComposition = logicComposition.onInputComposition
+    // Bedrock-ensemble migration: when SIGILIX_ENSEMBLE_PROVIDER selects Bedrock
+    // for this role (AND the AWS creds are configured), the resolved Bedrock
+    // config rides the existing modelOverride seam — retries, the cross-provider
+    // OpenRouter fallback leg, and per-attempt timeout all come from it, and
+    // runSpecialist keys each leg by model-id shape. `undefined` (the default)
+    // omits the override: byte-identical to the shipped OpenRouter lineup.
+    // Logic never resolves from the GLOBAL flag (bake-off pending — see
+    // model-provider-bedrock.ts).
+    const bedrockOverride = resolveBedrockSpecialistConfig(env, role)
     const promise = withComposedTimeout(
       // Use the composed signal `withComposedTimeout` provides (per-specialist
       // timer + orch abort + early-exit), not `orchCtrl.signal` (CR PR #42).
@@ -357,6 +354,8 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
           mcpTools,
           // SIG-369(b): logic shadow-mode input-composition observer (else omitted).
           ...(onInputComposition !== undefined ? { onInputComposition } : {}),
+          // Bedrock-ensemble migration (see resolution above; omitted = today's path).
+          ...(bedrockOverride !== undefined ? { modelOverride: bedrockOverride } : {}),
         }),
       SPECIALIST_TIMEOUT_MS,
       composedSignal,

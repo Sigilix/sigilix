@@ -395,3 +395,29 @@ export function applyLogicPromptBudget(args: MaybeEmitLogicPromptBudgetArgs): st
     return args.prompt // fail-open: logic runs with the un-trimmed prompt
   }
 }
+
+/**
+ * Bedrock-ensemble migration (line-budget relocation): the PR-#191 CALL-SITE
+ * guard, moved VERBATIM from the specialists fan-out into this module.
+ * `applyLogicPromptBudget` already fails open internally, but instrumentation
+ * MUST NOT break the fan-out even if a future refactor removes the inner
+ * guard — on ANY throw this falls back to the un-trimmed prompt (logic still
+ * runs). Behavior is byte-identical to the inlined try/catch it replaces.
+ */
+export function applyLogicPromptBudgetSafe(args: MaybeEmitLogicPromptBudgetArgs): string {
+  try {
+    return applyLogicPromptBudget(args)
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "logic-prompt-budget-call-site-error",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        headSha: args.headSha.slice(0, 7),
+        message: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    return args.prompt
+  }
+}

@@ -30,13 +30,28 @@ import {
 // unchanged; also consumed internally by `runWithRetryAndFallback`.
 // SIG-287: `wrapFailure` joined the leaf for the same budget reason (private —
 // not re-exported, only `runWithRetryAndFallback` calls it).
-import { breaksSameModelRetry, isValidProvenance, parseFailedProvider, wrapFailure } from "./model-provider-internals"
+import {
+  breaksSameModelRetry,
+  isValidProvenance,
+  parseFailedProvider,
+  sleepWithSignal,
+  wrapFailure,
+} from "./model-provider-internals"
 export { breaksSameModelRetry, isPermanentFailure, isValidProvenance } from "./model-provider-internals"
 // SIG-405/406: per-model API-key selection (key-by-id-shape) — OpenRouter id →
 // OPENROUTER_API_KEY, `:cloud` tag → OLLAMA_API_KEY. The latter lets local eval runs
 // hit Ollama Turbo (no OpenRouter spend) via a `:cloud` model override. Re-exported.
-import { selectConfigApiKey, type ModelApiKeys } from "./model-provider-routing"
-export { modelApiKeys, selectConfigApiKey, type ModelApiKeys } from "./model-provider-routing"
+// Bedrock-ensemble migration: `resolveConfigKeys` selects a key PER LEG so the
+// Bedrock lineup's cross-provider OpenRouter fallback gets ITS key (the one-key
+// `selectConfigApiKey` stays for the single-provider callers). Re-exported.
+import { resolveConfigKeys, type ModelApiKeys } from "./model-provider-routing"
+export {
+  modelApiKeys,
+  resolveConfigKeys,
+  selectConfigApiKey,
+  selectModelApiKey,
+  type ModelApiKeys,
+} from "./model-provider-routing"
 import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 import { PR_REVIEW_SCHEMA } from "@/src/shared/domain/schemas"
 import { parseFirstJsonObject } from "@/src/shared/util/json-extract"
@@ -151,33 +166,17 @@ export const SYNTHESIZER_CONFIG: ModelConfig = {
   perAttemptTimeoutMs: 150_000,
 }
 
-/**
- * SIG-276 Phase 2: the write-time claim extractor. A cheap, single-shot classifier
- * (no retry, no fallback) over the final findings — fail-open by design, so a
- * capacity blip just yields no claims rather than burning the merge path.
- * SIG-406 alpha: on OpenRouter (`deepseek/deepseek-v4-flash`).
- */
-export const CLAIM_EXTRACTOR_CONFIG: ModelConfig = {
-  primary: "deepseek/deepseek-v4-flash",
-  retries: 0,
-  fallback: null,
-}
-/** Per-attempt cap for the claim extractor. Kept well under the
- *  specialist budget — the classifier prompt is small and the call is
- *  fail-open, so a slow model must not extend customer-visible latency. */
-export const CLAIM_EXTRACTOR_TIMEOUT_MS = 25_000
-
-/**
- * SIG-104 PR-2: the conversational learning extractor. Same cheap,
- * single-shot, fail-open shape as the claim extractor; a failed call just
- * means no durable learning is minted.
- */
-export const LEARNING_EXTRACTOR_CONFIG: ModelConfig = {
-  primary: "deepseek/deepseek-v4-flash",
-  retries: 0,
-  fallback: null,
-}
-export const LEARNING_EXTRACTOR_TIMEOUT_MS = 25_000
+// Bedrock-ensemble migration: the claim/learning EXTRACTOR configs relocated
+// VERBATIM to `./model-provider-extractors` (the SIG-386 spill-sibling pattern,
+// keeping this adapter <=1k lines). Re-exported so importers are unchanged.
+// The extractors STAY on OpenRouter — the SIGILIX_ENSEMBLE_PROVIDER flag steers
+// only the four review specialists + synth.
+export {
+  CLAIM_EXTRACTOR_CONFIG,
+  CLAIM_EXTRACTOR_TIMEOUT_MS,
+  LEARNING_EXTRACTOR_CONFIG,
+  LEARNING_EXTRACTOR_TIMEOUT_MS,
+} from "./model-provider-extractors"
 
 /** @deprecated kept for telemetry compatibility — derive from SPECIALIST_CONFIGS instead */
 export const SPECIALIST_MODELS: Record<SpecialistRole, string> = {
@@ -263,8 +262,11 @@ export interface SpecialistRunArgs {
    * the override's model-id shape, so an OpenRouter override stays on the
    * OpenRouter key. Used ONLY by the second-pass recall phases (invariant-lens,
    * resweep) to route their re-runs to a cheaper reasoner behind a default-off
-   * flag. Absent → byte-identical to today (the role's shipped config). The
-   * primary specialist fan-out never passes it.
+   * flag. Absent → byte-identical to today (the role's shipped config).
+   * Bedrock-ensemble migration: the primary fan-out NOW passes it too — the
+   * resolved Bedrock role config (`resolveBedrockSpecialistConfig`) when
+   * SIGILIX_ENSEMBLE_PROVIDER selects Bedrock; still absent when the flag is
+   * off/unset, keeping the shipped OpenRouter default byte-identical.
    */
   modelOverride?: ModelConfig
   /**
@@ -303,15 +305,17 @@ export interface SpecialistRunResult {
  */
 export async function runSpecialist(args: SpecialistRunArgs): Promise<SpecialistRunResult> {
   const t0 = Date.now()
-  // SIG-406: the role's OpenRouter config; the API key is picked by model-id shape
-  // (a `:cloud` eval override → the Ollama key). Missing key → fail closed below
-  // (the other provider's key is never substituted).
-  // SIG-369(b): a per-call `modelOverride` (second-pass phases only) REPLACES the
-  // role config; absent → byte-identical to the shipped role config. The key is
-  // selected from `config` either way, so the override's model-id shape decides
-  // the provider key (an OpenRouter override → the OpenRouter key, no leak).
-  const config = args.modelOverride ?? SPECIALIST_CONFIGS[args.role]
-  const apiKey = selectConfigApiKey(config, args.apiKeys)
+  // SIG-406/369(b): a per-call `modelOverride` REPLACES the role config; absent →
+  // the shipped role config. Keys are picked by model-id shape from whichever
+  // config runs — and (Bedrock-ensemble migration) PER LEG via `resolveConfigKeys`:
+  // a Bedrock primary uses the packed Bedrock envelope while its cross-provider
+  // OpenRouter fallback leg uses the OpenRouter key; a fallback whose key is
+  // unset is STRIPPED (primary still runs). Missing primary key → fail closed
+  // below (another provider's key is never substituted).
+  const { config, apiKey, fallbackApiKey } = resolveConfigKeys(
+    args.modelOverride ?? SPECIALIST_CONFIGS[args.role],
+    args.apiKeys,
+  )
   if (!apiKey) {
     return {
       verdict: null,
@@ -332,6 +336,7 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
   return runWithRetryAndFallback({
     config,
     apiKey,
+    ...(fallbackApiKey !== undefined ? { fallbackApiKey } : {}),
     messages,
     signal: args.signal,
     chatEnabled: args.chatEnabled,
@@ -489,6 +494,11 @@ export interface AttemptCallbackInfo {
 export async function runWithRetryAndFallback<T>(args: {
   config: ModelConfig
   apiKey: string
+  /** Bedrock-ensemble migration: the FALLBACK leg's key when `config.fallback`
+   *  lives on a different provider than the primary (Bedrock primary →
+   *  OpenRouter fallback). Absent → the fallback uses `apiKey` (today's
+   *  single-provider behavior, byte-identical). */
+  fallbackApiKey?: string
   messages: ChatMessage[]
   signal: AbortSignal
   chatEnabled: "on" | "off"
@@ -670,7 +680,8 @@ export async function runWithRetryAndFallback<T>(args: {
       (perAttemptSignal) =>
         attemptChat({
           model: fallbackModel,
-          apiKey,
+          // Bedrock migration: the fallback leg's own key when providers cross.
+          apiKey: args.fallbackApiKey ?? apiKey,
           messages,
           signal: perAttemptSignal,
           chatEnabled,
@@ -735,26 +746,6 @@ export async function runWithRetryAndFallback<T>(args: {
   return wfEx
 }
 
-async function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
-  // CR + arc PR #37 catch: if the signal is already aborted on entry,
-  // the abort event has already fired and our addEventListener will
-  // never trigger — without this guard we'd sleep the full ms before
-  // returning. Closes the race between caller's abort check + our
-  // listener installation.
-  if (ms <= 0 || signal.aborted) return
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, ms)
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer)
-        resolve()
-      },
-      { once: true },
-    )
-  })
-}
-
 // ─── synthesizer runner ───────────────────────────────────────────────
 
 /**
@@ -768,6 +759,9 @@ async function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
  */
 export interface SynthesizerRunArgs {
   apiKey: string | undefined
+  /** Bedrock-ensemble migration: the cross-provider fallback leg's key (see
+   *  `runWithRetryAndFallback.fallbackApiKey`). Absent → single-key behavior. */
+  fallbackApiKey?: string
   systemPrompt: string
   userMessage: string
   chatEnabled: "on" | "off"
@@ -890,6 +884,7 @@ export async function runSynthesizer(args: SynthesizerRunArgs): Promise<Synthesi
   const outcome = await runWithRetryAndFallback<SynthParsedOutput>({
     config: effectiveConfig,
     apiKey: args.apiKey,
+    ...(args.fallbackApiKey !== undefined ? { fallbackApiKey: args.fallbackApiKey } : {}),
     messages,
     signal: args.signal,
     chatEnabled: args.chatEnabled,

@@ -27,9 +27,9 @@ import {
   resolveLinearTeamBinding,
   teamIsSelected,
   type LinearConfig,
-  type LinearTeamBinding,
   type LinearTenantContext,
 } from "@/src/features/linear-integration"
+import { resolveBindingRepoScope, type BindingRepoScope } from "@/src/lib/cross-repo-context"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const MAX_LABELS = 3
@@ -74,21 +74,21 @@ export async function triageIssue(issueId: string, env: Env, tenant?: LinearTena
   }
 
   let tenantConfig: LinearConfig | null = null
-  let tenantBinding: LinearTeamBinding | null = null
+  // Cross-repo context: the team's primary repo + capped sibling namespaces
+  // (multiple explicit repos, or every repo in the installation). Replaces the
+  // SIG-242 single `githubRepoId` binding. Null ⇒ no accessible repo ⇒ the guard
+  // below fails closed, exactly as a missing single binding did before.
+  let tenantScope: BindingRepoScope | null = null
   if (tenant) {
     const [config, binding] = await Promise.all([
       getLinearConfig(env, tenant.installationId),
       resolveLinearTeamBinding(env, tenant.organizationId, issue.team.id),
     ])
     tenantConfig = config
-    tenantBinding = binding
+    if (binding) tenantScope = await resolveBindingRepoScope(env, binding, tenant.installationId)
     const scopeInvalid =
       !tenantConfig ||
-      !tenantBinding ||
-      tenantBinding.installationId !== tenant.installationId ||
-      tenantBinding.accessState !== "allowed" ||
-      tenantBinding.githubRepoId <= 0 ||
-      !tenantBinding.githubRepoFullName ||
+      !tenantScope ||
       (tenant.teamId !== undefined && tenant.teamId !== issue.team.id) ||
       !teamIsSelected(tenantConfig, issue.team.id)
     if (scopeInvalid) {
@@ -173,6 +173,14 @@ export async function triageIssue(issueId: string, env: Env, tenant?: LinearTena
   // mapped repo — the model is instructed in the prompt to abstain
   // from inventing file references when no chunks are present.
   const retrievalText = `${issue.title}\n\n${issue.description ?? ""}`
+  // Cross-repo fan-out: the primary repo is the weighted-highest namespace; the
+  // capped siblings fold in via the SAME multi-namespace retrieval the PR-review
+  // path uses (see resolveBindingRepoScope). Truncation is logged, never silent.
+  if (tenantScope && tenantScope.truncated > 0) {
+    console.log(
+      JSON.stringify({ event: "linear-triage-cross-repo-siblings-capped", issueId, truncated: tenantScope.truncated }),
+    )
+  }
   const chunks =
     tenantConfig && !codebaseContextEnabled(tenantConfig)
       ? []
@@ -180,7 +188,10 @@ export async function triageIssue(issueId: string, env: Env, tenant?: LinearTena
           text: retrievalText,
           teamKey: issue.team?.key ?? null,
           env,
-          ...(tenantBinding ? { namespace: tenantBinding.githubRepoFullName } : {}),
+          ...(tenantScope ? { namespace: tenantScope.primaryNamespace } : {}),
+          ...(tenantScope && tenantScope.siblingNamespaces.length > 0
+            ? { crossRepoNamespaces: tenantScope.siblingNamespaces }
+            : {}),
         })
   since("retrieval-done")
 

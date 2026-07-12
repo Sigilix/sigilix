@@ -15,6 +15,11 @@ export interface LinearConnection {
   updatedAt: string
 }
 
+export interface LinearRepoRef {
+  githubRepoId: number
+  githubRepoFullName: string
+}
+
 export interface LinearTeamBinding {
   organizationId: string
   teamId: string
@@ -23,8 +28,17 @@ export interface LinearTeamBinding {
   teamName: string
   accessState: "allowed" | "revoked"
   selected: boolean
+  /** The team's PRIMARY repo (back-compat with the SIG-242 single-binding model).
+   * 0 / "" only when the team is bound via `useAllRepos` with no explicit repo. */
   githubRepoId: number
   githubRepoFullName: string
+  /** Cross-repo context: when true the effective repo set is EVERY repo in the
+   * installation (expanded from the `repo` table at read time), and `repos` is
+   * ignored. */
+  useAllRepos: boolean
+  /** The explicit multi-repo selection for this team (includes the primary).
+   * Empty when the team uses `useAllRepos` or has no repo bound. */
+  repos: LinearRepoRef[]
   syncedAt: string
   updatedAt: string
 }

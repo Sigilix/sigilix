@@ -20,6 +20,8 @@ import {
   updateLinearConfig,
   validateLinearConfigInput,
   type LinearIntegrationSnapshot,
+  type LinearRepoRef,
+  type LinearTeamRepoBinding,
 } from "@/src/features/linear-integration"
 import type { Env } from "@/src/shared/types/env"
 
@@ -69,7 +71,10 @@ function responseBody(snapshot: LinearIntegrationSnapshot, repositories: Eligibl
     connection: snapshot.connection,
     teams: snapshot.teams.map((team) => ({
       ...team,
-      warning: team.githubRepoId > 0 && team.githubRepoFullName ? null : "missing_repo_binding",
+      warning:
+        team.useAllRepos || team.repos.length > 0 || (team.githubRepoId > 0 && team.githubRepoFullName)
+          ? null
+          : "missing_repo_binding",
     })),
     repositories,
     config: snapshot.config ?? { ...DEFAULT_LINEAR_CONFIG, revision: 0 },
@@ -95,6 +100,49 @@ async function listEligibleRepos(
     if (live.repoId !== undefined && live.repoId !== repo.id) return []
     return [{ githubRepoId: repo.id, fullName: repo.fullName }]
   })
+}
+
+interface ParsedBinding {
+  teamId: string
+  /** Explicit repo ids (empty when `useAllRepos`). Resolved to full names later. */
+  repoIds: number[]
+  useAllRepos: boolean
+}
+
+/**
+ * Parse the PUT `bindings` array. Back-compatible with the SIG-242 single-repo
+ * shape `{ teamId, githubRepoId }`; also accepts the multi-repo shape
+ * `{ teamId, githubRepoIds: number[] }` and the all-repos shape
+ * `{ teamId, useAllRepos: true }`. Exact-key checks per variant keep the closed
+ * contract (a UI can't smuggle a setting the runtime silently ignores). Returns
+ * null on any malformed entry or a duplicate team id.
+ */
+function parseBindings(raw: unknown[]): ParsedBinding[] | null {
+  const out: ParsedBinding[] = []
+  for (const binding of raw) {
+    if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return null
+    const keys = Object.keys(binding).sort().join(",")
+    const item = binding as { teamId?: unknown; githubRepoId?: unknown; githubRepoIds?: unknown; useAllRepos?: unknown }
+    if (typeof item.teamId !== "string" || !item.teamId) return null
+    if (keys === "githubRepoId,teamId") {
+      if (!Number.isSafeInteger(item.githubRepoId) || Number(item.githubRepoId) <= 0) return null
+      out.push({ teamId: item.teamId, repoIds: [Number(item.githubRepoId)], useAllRepos: false })
+    } else if (keys === "githubRepoIds,teamId") {
+      if (!Array.isArray(item.githubRepoIds) || item.githubRepoIds.length === 0) return null
+      const repoIds = item.githubRepoIds.map((id) => Number(id))
+      if (repoIds.some((id) => !Number.isSafeInteger(id) || id <= 0) || new Set(repoIds).size !== repoIds.length) {
+        return null
+      }
+      out.push({ teamId: item.teamId, repoIds, useAllRepos: false })
+    } else if (keys === "teamId,useAllRepos") {
+      if (item.useAllRepos !== true) return null
+      out.push({ teamId: item.teamId, repoIds: [], useAllRepos: true })
+    } else {
+      return null
+    }
+  }
+  if (new Set(out.map((binding) => binding.teamId)).size !== out.length) return null
+  return out
 }
 
 export async function handleGetLinearConfig(
@@ -159,30 +207,9 @@ export async function handleSetLinearConfig(
   const parsed = validateLinearConfigInput(rawConfig)
   if (!parsed.ok) return json({ error: "invalid_config", reason: parsed.reason }, 400)
   if (!Array.isArray(rawBindings)) return json({ error: "invalid_bindings" }, 400)
-  const bindings: Array<{ teamId: string; githubRepoId: number }> = []
-  for (const binding of rawBindings) {
-    if (
-      typeof binding !== "object" ||
-      binding === null ||
-      Array.isArray(binding) ||
-      Object.keys(binding).sort().join(",") !== "githubRepoId,teamId"
-    ) {
-      return json({ error: "invalid_bindings" }, 400)
-    }
-    const item = binding as { teamId?: unknown; githubRepoId?: unknown }
-    if (
-      typeof item.teamId !== "string" ||
-      !item.teamId ||
-      !Number.isSafeInteger(item.githubRepoId) ||
-      Number(item.githubRepoId) <= 0
-    ) {
-      return json({ error: "invalid_bindings" }, 400)
-    }
-    bindings.push({ teamId: item.teamId, githubRepoId: Number(item.githubRepoId) })
-  }
-  if (new Set(bindings.map((binding) => binding.teamId)).size !== bindings.length) {
-    return json({ error: "invalid_bindings" }, 400)
-  }
+  const parsedBindings = parseBindings(rawBindings)
+  if (!parsedBindings) return json({ error: "invalid_bindings" }, 400)
+  const bindings = parsedBindings
 
   let snapshot: LinearIntegrationSnapshot
   try {
@@ -230,15 +257,15 @@ export async function handleSetLinearConfig(
   ) {
     return json({ error: "linear_team_access_changed" }, 409)
   }
-  const resolvedBindings: Array<{ teamId: string; githubRepoId: number; githubRepoFullName: string }> = []
+  const resolvedBindings: LinearTeamRepoBinding[] = []
   for (const binding of bindings) {
-    const repo = reposById.get(binding.githubRepoId)
-    if (!repo) return json({ error: "linear_team_repo_binding_invalid", teamId: binding.teamId }, 409)
-    resolvedBindings.push({
-      teamId: binding.teamId,
-      githubRepoId: repo.githubRepoId,
-      githubRepoFullName: repo.fullName,
-    })
+    const repos: LinearRepoRef[] = []
+    for (const repoId of binding.repoIds) {
+      const repo = reposById.get(repoId)
+      if (!repo) return json({ error: "linear_team_repo_binding_invalid", teamId: binding.teamId }, 409)
+      repos.push({ githubRepoId: repo.githubRepoId, githubRepoFullName: repo.fullName })
+    }
+    resolvedBindings.push({ teamId: binding.teamId, repos, useAllRepos: binding.useAllRepos })
   }
 
   const result = await updateLinearConfig(env, {

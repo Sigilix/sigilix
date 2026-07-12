@@ -14,6 +14,7 @@ import { buildClient, parseGithubMentionResponse } from "@/src/lib/github-mentio
 import { buildLinearClient } from "@/src/lib/linear"
 import { dispatchTicketImplementation } from "@/src/lib/linear-agent-run"
 import { resolveLinearAgentRunMode } from "@/src/lib/agent-runner/mode"
+import { resolveLinearTeamRepoScope } from "@/src/lib/cross-repo-context"
 import { triageIssue } from "@/src/lib/triage"
 import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
 import { recallSlackMemory, captureSlackMemory } from "@/src/lib/slack/slack-memory"
@@ -744,16 +745,39 @@ async function buildSlackAgentTools(
   primary: SlackScope["repos"][number],
 ): Promise<ReturnType<typeof createAgentTools>> {
   const githubClient = await buildClient(env, primary.installationId)
+  // Cross-repo context: widen the retrieve-tool repo scope to the Linear team's
+  // EXPLICITLY configured set (multi-repo or use-all) on top of the channel's own
+  // mapping, so the assistant can pull evidence from sibling repos — same tenant
+  // (all resolved repos are under this installation). Fail-soft to the channel
+  // scope alone (`resolveLinearTeamRepoScope` returns [] with no Linear binding),
+  // i.e. unchanged single-repo behavior.
+  const channelRepos = ctx.scope.repos.map((r) => ({ owner: r.owner, repo: r.repo }))
+  const linearRepos = ctx.scope.linearTeam
+    ? await resolveLinearTeamRepoScope(env, primary.installationId, ctx.scope.linearTeam)
+    : []
   return createAgentTools({
     env,
     surface: "slack-mention",
     github: {
       githubClient,
-      allowedRepos: ctx.scope.repos.map((r) => ({ owner: r.owner, repo: r.repo })),
+      allowedRepos: dedupeOwnerRepo([...channelRepos, ...linearRepos]),
       defaultRef: "main",
       installationId: primary.installationId,
     },
   })
+}
+
+/** Dedupe `{ owner, repo }` pairs case-insensitively, preserving first-seen order. */
+function dedupeOwnerRepo(repos: Array<{ owner: string; repo: string }>): Array<{ owner: string; repo: string }> {
+  const seen = new Set<string>()
+  const out: Array<{ owner: string; repo: string }> = []
+  for (const r of repos) {
+    const key = `${r.owner}/${r.repo}`.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(r)
+  }
+  return out
 }
 
 /** The offer block appended to a grounded answer when an implementable change is detected. */

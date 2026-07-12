@@ -54,6 +54,8 @@ vi.mock("@/src/lib/github-mention", () => ({
 }))
 
 import { runSlackAgent } from "@/src/lib/slack/slack-agent"
+import { createAgentTools } from "@/src/lib/agent-tools"
+import { runAgentLoop } from "@/src/lib/agent-loop"
 import {
   connectLinearOrganization,
   DEFAULT_LINEAR_CONFIG,
@@ -91,6 +93,7 @@ async function makeLinearDb(): Promise<D1Database> {
   await db.exec(
     readFileSync(new URL("../../../migrations/0016_create_linear_integration.sql", import.meta.url), "utf8"),
   )
+  await db.exec(readFileSync(new URL("../../../migrations/0018_create_linear_team_repo.sql", import.meta.url), "utf8"))
   return db
 }
 
@@ -145,7 +148,13 @@ async function makeConnectedEnv(overrides: Partial<LinearConfig> = {}): Promise<
           scope: overrides.scope ?? DEFAULT_LINEAR_CONFIG.scope,
           writeback: overrides.writeback ?? DEFAULT_LINEAR_CONFIG.writeback,
         },
-        bindings: [{ teamId: "team-uuid-1", githubRepoId: 101, githubRepoFullName: "sigilix/sigilix" }],
+        bindings: [
+          {
+            teamId: "team-uuid-1",
+            repos: [{ githubRepoId: 101, githubRepoFullName: "sigilix/sigilix" }],
+            useAllRepos: false,
+          },
+        ],
         updatedBy: "admin",
         nowIso: "2026-07-10T00:01:00.000Z",
       },
@@ -203,5 +212,84 @@ describe("runSlackAgent tenant Linear policy", () => {
     expect(result.action.kind).toBe("qa")
     expect(createIssueMock).not.toHaveBeenCalled()
     expect(dispatchMock).not.toHaveBeenCalled()
+  })
+
+  it("widens the Q&A retrieve-tool repo scope to the Linear team's full configured set", async () => {
+    const db = await makeLinearDb()
+    const nowIso = "2026-07-10T00:00:00.000Z"
+    await db
+      .prepare(
+        "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
+          " VALUES (111, 'sigilix', 'Organization', ?, ?)",
+      )
+      .bind(nowIso, nowIso)
+      .run()
+    for (const [id, name] of [
+      [101, "sigilix/sigilix"],
+      [102, "sigilix/web"],
+    ] as const) {
+      await db
+        .prepare("INSERT INTO repo (repo_id, installation_id, full_name, updated_at) VALUES (?, 111, ?, ?)")
+        .bind(id, name, nowIso)
+        .run()
+    }
+    await connectLinearOrganization(
+      { SIGILIX_PLATFORM_DB: db },
+      {
+        installationId: 111,
+        organizationId: "org-sigilix",
+        organizationName: "Sigilix",
+        appUserId: "app-sigilix",
+        source: "oauth",
+        grantedScopes: ["read", "write"],
+        canAccessAllPublicTeams: false,
+        installedByUserId: "user-1",
+        installedByLogin: "admin",
+        teams: [
+          { id: "team-uuid-1", key: "SIG", name: "Sigilix", githubRepoId: 101, githubRepoFullName: "sigilix/sigilix" },
+        ],
+        nowIso,
+      },
+    )
+    // Bind the team to BOTH repos.
+    const updated = await updateLinearConfig(
+      { SIGILIX_PLATFORM_DB: db },
+      {
+        installationId: 111,
+        input: { ...DEFAULT_LINEAR_CONFIG, revision: 1 },
+        bindings: [
+          {
+            teamId: "team-uuid-1",
+            repos: [
+              { githubRepoId: 101, githubRepoFullName: "sigilix/sigilix" },
+              { githubRepoId: 102, githubRepoFullName: "sigilix/web" },
+            ],
+            useAllRepos: false,
+          },
+        ],
+        updatedBy: "admin",
+        nowIso: "2026-07-10T00:01:00.000Z",
+      },
+    )
+    expect(updated.ok).toBe(true)
+    const env = Object.assign(makeEnv(), { SIGILIX_PLATFORM_DB: db })
+    vi.mocked(runAgentLoop).mockResolvedValue({
+      ok: true,
+      answer: { answer: "Auth lives in the api repo.", confidence: 5, abstain: false },
+      stats: { toolTurns: 0, totalMs: 1, toolCallCount: 0 },
+    } as unknown as Awaited<ReturnType<typeof runAgentLoop>>)
+
+    // A plain question routes to grounded Q&A, which builds the agent tools.
+    await runSlackAgent(env, makeCtx("how does the auth module work?"))
+
+    const toolsMock = vi.mocked(createAgentTools)
+    expect(toolsMock).toHaveBeenCalled()
+    const github = (toolsMock.mock.calls[0]![0] as { github: { allowedRepos: Array<{ owner: string; repo: string }> } })
+      .github
+    // Channel scope (sigilix/sigilix) is widened with the Linear team's sibling (sigilix/web).
+    expect(github.allowedRepos).toEqual([
+      { owner: "sigilix", repo: "sigilix" },
+      { owner: "sigilix", repo: "web" },
+    ])
   })
 })

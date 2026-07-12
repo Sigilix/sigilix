@@ -2,6 +2,7 @@ import type { LinearConfig, LinearConfigInput } from "@/src/features/linear-inte
 import type {
   LinearConnection,
   LinearIntegrationSnapshot,
+  LinearRepoRef,
   LinearTeamBinding,
 } from "@/src/features/linear-integration/domain/types"
 import type { Env } from "@/src/shared/types/env"
@@ -33,8 +34,15 @@ interface TeamRow {
   selected: number
   github_repo_id: number
   github_repo_full_name: string
+  use_all_repos: number
   synced_at: string
   updated_at: string
+}
+
+interface TeamRepoRow {
+  team_id: string
+  github_repo_id: number
+  github_repo_full_name: string
 }
 
 interface ConfigRow {
@@ -82,7 +90,7 @@ function toConnection(row: ConnectionRow): LinearConnection {
   }
 }
 
-function toTeam(row: TeamRow): LinearTeamBinding {
+function toTeam(row: TeamRow, repos: LinearRepoRef[] = []): LinearTeamBinding {
   return {
     organizationId: row.linear_organization_id,
     teamId: row.team_id,
@@ -93,9 +101,56 @@ function toTeam(row: TeamRow): LinearTeamBinding {
     selected: Number(row.selected) === 1,
     githubRepoId: Number(row.github_repo_id),
     githubRepoFullName: row.github_repo_full_name,
+    useAllRepos: Number(row.use_all_repos) === 1,
+    repos,
     syncedAt: row.synced_at,
     updatedAt: row.updated_at,
   }
+}
+
+const TEAM_COLUMNS =
+  "linear_organization_id, team_id, installation_id, team_key, team_name, access_state," +
+  " selected, github_repo_id, github_repo_full_name, use_all_repos, synced_at, updated_at"
+
+const TEAM_COLUMNS_B =
+  "b.linear_organization_id, b.team_id, b.installation_id, b.team_key, b.team_name," +
+  " b.access_state, b.selected, b.github_repo_id, b.github_repo_full_name, b.use_all_repos," +
+  " b.synced_at, b.updated_at"
+
+/**
+ * The explicit multi-repo selection for a team, always including the primary
+ * `linear_team_binding.github_repo_id` (deduped) so a team backfilled with only
+ * a legacy single binding still reports its repo. Ordered by repo id for
+ * determinism. Does NOT expand `useAllRepos` — that expansion is repo-table
+ * scoped and lives in `resolveLinearTeamEffectiveRepos`.
+ */
+async function loadTeamRepos(env: DbEnv, installationId: number): Promise<Map<string, LinearRepoRef[]>> {
+  const result = await db(env)
+    .prepare(
+      "SELECT team_id, github_repo_id, github_repo_full_name FROM linear_team_repo" +
+        " WHERE installation_id = ? ORDER BY team_id, github_repo_id",
+    )
+    .bind(installationId)
+    .all<TeamRepoRow>()
+  const byTeam = new Map<string, LinearRepoRef[]>()
+  for (const row of result.results ?? []) {
+    const id = Number(row.github_repo_id)
+    if (!Number.isSafeInteger(id) || id <= 0 || typeof row.github_repo_full_name !== "string") continue
+    const list = byTeam.get(row.team_id) ?? []
+    list.push({ githubRepoId: id, githubRepoFullName: row.github_repo_full_name })
+    byTeam.set(row.team_id, list)
+  }
+  return byTeam
+}
+
+/** Union a team's primary binding into its explicit repo set, deduped by id. */
+function withPrimaryRepo(row: TeamRow, repos: LinearRepoRef[]): LinearRepoRef[] {
+  const out = [...repos]
+  const primaryId = Number(row.github_repo_id)
+  if (Number.isSafeInteger(primaryId) && primaryId > 0 && !out.some((r) => r.githubRepoId === primaryId)) {
+    out.push({ githubRepoId: primaryId, githubRepoFullName: row.github_repo_full_name })
+  }
+  return out
 }
 
 function toConfig(row: ConfigRow, selectedTeamIds: string[]): LinearConfig {
@@ -148,15 +203,17 @@ export async function getLinearConnectionByOrganization(
 }
 
 async function listTeams(env: DbEnv, installationId: number): Promise<LinearTeamBinding[]> {
-  const result = await db(env)
-    .prepare(
-      "SELECT linear_organization_id, team_id, installation_id, team_key, team_name, access_state," +
-        " selected, github_repo_id, github_repo_full_name, synced_at, updated_at" +
-        " FROM linear_team_binding WHERE installation_id = ? ORDER BY lower(team_name), team_id",
-    )
-    .bind(installationId)
-    .all<TeamRow>()
-  return (result.results ?? []).map(toTeam)
+  const [result, reposByTeam] = await Promise.all([
+    db(env)
+      .prepare(
+        `SELECT ${TEAM_COLUMNS} FROM linear_team_binding` +
+          " WHERE installation_id = ? ORDER BY lower(team_name), team_id",
+      )
+      .bind(installationId)
+      .all<TeamRow>(),
+    loadTeamRepos(env, installationId),
+  ])
+  return (result.results ?? []).map((row) => toTeam(row, withPrimaryRepo(row, reposByTeam.get(row.team_id) ?? [])))
 }
 
 export async function getLinearConfig(env: DbEnv, installationId: number): Promise<LinearConfig | null> {
@@ -358,6 +415,30 @@ export async function connectLinearOrganization(
   return { ok: true }
 }
 
+/** The explicit repo set for one team (primary unioned in), for a resolved binding. */
+async function loadTeamReposFor(
+  env: DbEnv,
+  installationId: number,
+  organizationId: string,
+  teamId: string,
+): Promise<LinearRepoRef[]> {
+  const result = await db(env)
+    .prepare(
+      "SELECT team_id, github_repo_id, github_repo_full_name FROM linear_team_repo" +
+        " WHERE installation_id = ? AND linear_organization_id = ? AND team_id = ? ORDER BY github_repo_id",
+    )
+    .bind(installationId, organizationId, teamId)
+    .all<TeamRepoRow>()
+  const out: LinearRepoRef[] = []
+  for (const row of result.results ?? []) {
+    const id = Number(row.github_repo_id)
+    if (Number.isSafeInteger(id) && id > 0 && typeof row.github_repo_full_name === "string") {
+      out.push({ githubRepoId: id, githubRepoFullName: row.github_repo_full_name })
+    }
+  }
+  return out
+}
+
 export async function resolveLinearTeamBinding(
   env: DbEnv,
   organizationId: string,
@@ -365,8 +446,7 @@ export async function resolveLinearTeamBinding(
 ): Promise<LinearTeamBinding | null> {
   const row = await db(env)
     .prepare(
-      "SELECT b.linear_organization_id, b.team_id, b.installation_id, b.team_key, b.team_name," +
-        " b.access_state, b.selected, b.github_repo_id, b.github_repo_full_name, b.synced_at, b.updated_at" +
+      `SELECT ${TEAM_COLUMNS_B}` +
         " FROM linear_team_binding b JOIN linear_connection c" +
         " ON c.installation_id = b.installation_id AND c.linear_organization_id = b.linear_organization_id" +
         " WHERE b.linear_organization_id = ? AND b.team_id = ?" +
@@ -374,7 +454,9 @@ export async function resolveLinearTeamBinding(
     )
     .bind(organizationId, teamId)
     .first<TeamRow>()
-  return row ? toTeam(row) : null
+  if (!row) return null
+  const repos = await loadTeamReposFor(env, Number(row.installation_id), row.linear_organization_id, row.team_id)
+  return toTeam(row, withPrimaryRepo(row, repos))
 }
 
 export async function resolveLinearTeamBindingForRepo(
@@ -384,8 +466,7 @@ export async function resolveLinearTeamBindingForRepo(
 ): Promise<LinearTeamBinding | null> {
   const row = await db(env)
     .prepare(
-      "SELECT b.linear_organization_id, b.team_id, b.installation_id, b.team_key, b.team_name," +
-        " b.access_state, b.selected, b.github_repo_id, b.github_repo_full_name, b.synced_at, b.updated_at" +
+      `SELECT ${TEAM_COLUMNS_B}` +
         " FROM linear_team_binding b JOIN linear_connection c" +
         " ON c.installation_id = b.installation_id AND c.linear_organization_id = b.linear_organization_id" +
         " WHERE b.installation_id = ? AND lower(b.github_repo_full_name) = lower(?)" +
@@ -394,19 +475,86 @@ export async function resolveLinearTeamBindingForRepo(
     )
     .bind(installationId, repoFullName)
     .first<TeamRow>()
-  return row ? toTeam(row) : null
+  if (!row) return null
+  const repos = await loadTeamReposFor(env, Number(row.installation_id), row.linear_organization_id, row.team_id)
+  return toTeam(row, withPrimaryRepo(row, repos))
+}
+
+/**
+ * Resolve the EFFECTIVE GitHub repo set a Linear team grounds triage in.
+ * `useAllRepos` expands to every repo registered under the installation (the
+ * `repo` table); otherwise it is the team's explicit `repos` selection. Result
+ * is deduped by repo id and ordered so the team's designated PRIMARY repo
+ * (`binding.githubRepoId`) leads — triage weights the first namespace highest —
+ * with the remainder sorted by full name for determinism. `useAllRepos` has no
+ * designated primary (id 0), so it is purely alphabetical. Empty ⇒ the team has
+ * no accessible repo and triage must fail closed.
+ */
+export async function resolveLinearTeamEffectiveRepos(
+  env: DbEnv,
+  binding: LinearTeamBinding,
+): Promise<LinearRepoRef[]> {
+  const source = binding.useAllRepos
+    ? await listLinearInstallationRepos(env, binding.installationId).then((repos) =>
+        repos.map((r) => ({ githubRepoId: r.id, githubRepoFullName: r.fullName })),
+      )
+    : binding.repos
+  const byId = new Map<number, LinearRepoRef>()
+  for (const repo of source) {
+    if (Number.isSafeInteger(repo.githubRepoId) && repo.githubRepoId > 0 && repo.githubRepoFullName) {
+      byId.set(repo.githubRepoId, repo)
+    }
+  }
+  const primaryId = binding.githubRepoId
+  return [...byId.values()].sort((a, b) => {
+    const rankA = a.githubRepoId === primaryId ? 0 : 1
+    const rankB = b.githubRepoId === primaryId ? 0 : 1
+    return rankA - rankB || a.githubRepoFullName.localeCompare(b.githubRepoFullName)
+  })
 }
 
 export type LinearConfigUpdateResult =
   | { ok: true; config: LinearConfig }
   | { ok: false; reason: "not-connected" | "stale-revision" | "team-not-allowed" | "binding-invalid" }
 
+export interface LinearTeamRepoBinding {
+  teamId: string
+  /** Explicit repo selection (ignored when `useAllRepos` is true). */
+  repos: LinearRepoRef[]
+  /** Ground triage in EVERY repo in the installation instead of an explicit set. */
+  useAllRepos: boolean
+}
+
+/** A team's PRIMARY repo (back-compat column): the first explicit repo, or a
+ * null primary when the team is bound via `useAllRepos`. */
+function primaryRepoOf(binding: LinearTeamRepoBinding): LinearRepoRef {
+  if (binding.useAllRepos || binding.repos.length === 0) return { githubRepoId: 0, githubRepoFullName: "" }
+  return binding.repos[0]!
+}
+
+function bindingsInvalid(bindings: LinearTeamRepoBinding[], allowedTeamIds: string[]): boolean {
+  const bindingTeamIds = new Set(bindings.map((binding) => binding.teamId))
+  if (bindingTeamIds.size !== bindings.length) return true
+  if (allowedTeamIds.some((teamId) => !bindingTeamIds.has(teamId))) return true
+  return bindings.some((binding) => {
+    if (!allowedTeamIds.includes(binding.teamId)) return true
+    const repoIds = binding.repos.map((repo) => repo.githubRepoId)
+    const repoInvalid = binding.repos.some(
+      (repo) => !Number.isSafeInteger(repo.githubRepoId) || repo.githubRepoId <= 0 || !repo.githubRepoFullName,
+    )
+    if (repoInvalid || new Set(repoIds).size !== repoIds.length) return true
+    // A non-"all repos" team must bind at least one explicit repo; "all repos"
+    // ignores the explicit set entirely.
+    return !binding.useAllRepos && binding.repos.length === 0
+  })
+}
+
 export async function updateLinearConfig(
   env: DbEnv,
   args: {
     installationId: number
     input: LinearConfigInput
-    bindings: Array<{ teamId: string; githubRepoId: number; githubRepoFullName: string }>
+    bindings: LinearTeamRepoBinding[]
     updatedBy: string
     nowIso: string
   },
@@ -423,21 +571,11 @@ export async function updateLinearConfig(
     }
   }
   const allowedTeamIds = snapshot.teams.filter((team) => team.accessState === "allowed").map((team) => team.teamId)
-  const bindingTeamIds = new Set(args.bindings.map((binding) => binding.teamId))
-  if (
-    bindingTeamIds.size !== args.bindings.length ||
-    args.bindings.some(
-      (binding) =>
-        !allowedTeamIds.includes(binding.teamId) ||
-        !Number.isSafeInteger(binding.githubRepoId) ||
-        binding.githubRepoId <= 0 ||
-        !binding.githubRepoFullName,
-    ) ||
-    allowedTeamIds.some((teamId) => !bindingTeamIds.has(teamId))
-  ) {
+  if (bindingsInvalid(args.bindings, allowedTeamIds)) {
     return { ok: false, reason: "binding-invalid" }
   }
 
+  const organizationId = snapshot.connection.organizationId
   const updateToken = crypto.randomUUID()
   const store = db(env)
   const placeholders = args.input.scope.teamIds.map(() => "?").join(",")
@@ -445,8 +583,16 @@ export async function updateLinearConfig(
     args.input.scope.mode === "explicit" ? `CASE WHEN team_id IN (${placeholders}) THEN 1 ELSE 0 END` : "0"
   const selectedBinds = args.input.scope.mode === "explicit" ? args.input.scope.teamIds : []
   const bindingTeamPlaceholders = args.bindings.map(() => "?").join(",")
-  const uniqueRepoIds = [...new Set(args.bindings.map((binding) => binding.githubRepoId))]
+  // Every explicit repo id across all bindings must exist under the installation
+  // (`useAllRepos` teams contribute none — their set expands from `repo` at read
+  // time). Validated atomically so a repo revoked between snapshot and write
+  // fails the update rather than persisting a dangling binding.
+  const uniqueRepoIds = [...new Set(args.bindings.flatMap((binding) => binding.repos.map((repo) => repo.githubRepoId)))]
   const repoPlaceholders = uniqueRepoIds.map(() => "?").join(",")
+  const repoGuard =
+    uniqueRepoIds.length > 0
+      ? ` AND (SELECT COUNT(*) FROM repo r WHERE r.installation_id = ?` + ` AND r.repo_id IN (${repoPlaceholders})) = ?`
+      : ""
   const atomicGuards =
     args.bindings.length === 0
       ? " AND NOT EXISTS (SELECT 1 FROM linear_team_binding b WHERE b.installation_id = ? AND b.access_state = 'allowed')"
@@ -455,22 +601,19 @@ export async function updateLinearConfig(
         ` AND b.team_id IN (${bindingTeamPlaceholders})) = ?` +
         ` AND (SELECT COUNT(*) FROM linear_team_binding b2 WHERE b2.installation_id = ?` +
         ` AND b2.linear_organization_id = ? AND b2.access_state = 'allowed') = ?` +
-        ` AND (SELECT COUNT(*) FROM repo r WHERE r.installation_id = ?` +
-        ` AND r.repo_id IN (${repoPlaceholders})) = ?`
+        repoGuard
   const atomicGuardBinds: unknown[] =
     args.bindings.length === 0
       ? [args.installationId]
       : [
           args.installationId,
-          snapshot.connection.organizationId,
+          organizationId,
           ...args.bindings.map((binding) => binding.teamId),
           args.bindings.length,
           args.installationId,
-          snapshot.connection.organizationId,
+          organizationId,
           args.bindings.length,
-          args.installationId,
-          ...uniqueRepoIds,
-          uniqueRepoIds.length,
+          ...(uniqueRepoIds.length > 0 ? [args.installationId, ...uniqueRepoIds, uniqueRepoIds.length] : []),
         ]
   const statements: D1PreparedStatement[] = [
     store
@@ -495,7 +638,7 @@ export async function updateLinearConfig(
         args.nowIso,
         updateToken,
         args.installationId,
-        snapshot.connection.organizationId,
+        organizationId,
         args.input.revision,
         ...atomicGuardBinds,
       ),
@@ -507,26 +650,71 @@ export async function updateLinearConfig(
       )
       .bind(...selectedBinds, args.nowIso, args.installationId, args.installationId, updateToken),
   ]
+  // Every team-scoped write is gated on the freshly-written `update_token`, so a
+  // lost revision race (config UPDATE affects 0 rows) leaves the binding/join
+  // rows untouched too — the whole change is atomic, not just the config row.
   for (const binding of args.bindings) {
+    const primary = primaryRepoOf(binding)
     statements.push(
       store
         .prepare(
-          "UPDATE linear_team_binding SET github_repo_id = ?, github_repo_full_name = ?, updated_at = ?" +
+          "UPDATE linear_team_binding SET github_repo_id = ?, github_repo_full_name = ?," +
+            " use_all_repos = ?, updated_at = ?" +
             " WHERE installation_id = ? AND linear_organization_id = ? AND team_id = ?" +
             " AND access_state = 'allowed'" +
             " AND EXISTS (SELECT 1 FROM linear_config c WHERE c.installation_id = ? AND c.update_token = ?)",
         )
         .bind(
-          binding.githubRepoId,
-          binding.githubRepoFullName,
+          primary.githubRepoId,
+          primary.githubRepoFullName,
+          binding.useAllRepos ? 1 : 0,
           args.nowIso,
           args.installationId,
-          snapshot.connection.organizationId,
+          organizationId,
           binding.teamId,
           args.installationId,
           updateToken,
         ),
+      // Replace the team's explicit repo set: delete then re-insert, both gated
+      // on the update token so the set is only rewritten when the config commit won.
+      store
+        .prepare(
+          "DELETE FROM linear_team_repo" +
+            " WHERE installation_id = ? AND linear_organization_id = ? AND team_id = ?" +
+            " AND EXISTS (SELECT 1 FROM linear_config c WHERE c.installation_id = ? AND c.update_token = ?)",
+        )
+        .bind(args.installationId, organizationId, binding.teamId, args.installationId, updateToken),
     )
+    // `useAllRepos` teams keep NO explicit rows — their effective set expands
+    // from the `repo` table at read time, so any passed `repos` are ignored here
+    // for consistency with the documented contract (the DELETE above cleared them).
+    const reposToWrite = binding.useAllRepos ? [] : binding.repos
+    for (const repo of reposToWrite) {
+      statements.push(
+        store
+          .prepare(
+            "INSERT INTO linear_team_repo" +
+              " (linear_organization_id, team_id, installation_id, github_repo_id," +
+              " github_repo_full_name, synced_at, updated_at)" +
+              " SELECT ?, ?, ?, ?, ?, ?, ?" +
+              " WHERE EXISTS (SELECT 1 FROM linear_config c WHERE c.installation_id = ? AND c.update_token = ?)" +
+              " ON CONFLICT(linear_organization_id, team_id, github_repo_id) DO UPDATE SET" +
+              " github_repo_full_name = excluded.github_repo_full_name," +
+              " synced_at = excluded.synced_at, updated_at = excluded.updated_at",
+          )
+          .bind(
+            organizationId,
+            binding.teamId,
+            args.installationId,
+            repo.githubRepoId,
+            repo.githubRepoFullName,
+            args.nowIso,
+            args.nowIso,
+            args.installationId,
+            updateToken,
+          ),
+      )
+    }
   }
   const results = await store.batch(statements)
   const changes = Number((results[0]?.meta as { changes?: unknown } | undefined)?.changes ?? 0)

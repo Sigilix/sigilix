@@ -14,6 +14,7 @@ export {
 export type {
   LinearConnection,
   LinearIntegrationSnapshot,
+  LinearRepoRef,
   LinearTeamBinding,
   LinearTenantContext,
 } from "./domain/types"
@@ -30,10 +31,12 @@ export {
   releaseLinearDelivery,
   resolveLinearTeamBinding,
   resolveLinearTeamBindingForRepo,
+  resolveLinearTeamEffectiveRepos,
   updateLinearConfig,
   type ConnectLinearOrganizationInput,
   type LinearConfigUpdateResult,
   type LinearDeliveryClaim,
   type LinearInstallationRepo,
+  type LinearTeamRepoBinding,
 } from "./adapters/d1-store"
 export { fetchLinearWorkspaceIdentity, type LinearWorkspaceIdentity } from "./adapters/linear-api"

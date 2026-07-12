@@ -8,6 +8,7 @@ import {
   getLinearConfig,
   getLinearIntegrationSnapshot,
   resolveLinearTeamBinding,
+  resolveLinearTeamEffectiveRepos,
   updateLinearConfig,
 } from "@/src/features/linear-integration"
 import type { Env } from "@/src/shared/types/env"
@@ -17,12 +18,17 @@ const LINEAR_SQL = readFileSync(
   new URL("../../../migrations/0016_create_linear_integration.sql", import.meta.url),
   "utf8",
 )
+const TEAM_REPO_SQL = readFileSync(
+  new URL("../../../migrations/0018_create_linear_team_repo.sql", import.meta.url),
+  "utf8",
+)
 const SECRET = "linear-e2e-secret"
 
 async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(BASE_SQL)
   await db.exec(LINEAR_SQL)
+  await db.exec(TEAM_REPO_SQL)
   await db
     .prepare(
       "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
@@ -40,6 +46,14 @@ async function makeDb(): Promise<D1Database> {
   await db
     .prepare("INSERT INTO repo (repo_id, installation_id, full_name, updated_at) VALUES (?, ?, ?, ?)")
     .bind(101, 11, "acme/api", "2026-07-10T00:00:00.000Z")
+    .run()
+  await db
+    .prepare("INSERT INTO repo (repo_id, installation_id, full_name, updated_at) VALUES (?, ?, ?, ?)")
+    .bind(102, 11, "acme/web", "2026-07-10T00:00:00.000Z")
+    .run()
+  await db
+    .prepare("INSERT INTO repo (repo_id, installation_id, full_name, updated_at) VALUES (?, ?, ?, ?)")
+    .bind(103, 11, "acme/infra", "2026-07-10T00:00:00.000Z")
     .run()
   await db
     .prepare("INSERT INTO repo (repo_id, installation_id, full_name, updated_at) VALUES (?, ?, ?, ?)")
@@ -149,7 +163,9 @@ describe("SIG-242 Linear tenant boundary", () => {
       {
         installationId: 11,
         input: configInput(1, "team-a"),
-        bindings: [{ teamId: "team-a", githubRepoId: 101, githubRepoFullName: "acme/api" }],
+        bindings: [
+          { teamId: "team-a", repos: [{ githubRepoId: 101, githubRepoFullName: "acme/api" }], useAllRepos: false },
+        ],
         updatedBy: "alice",
         nowIso: "2026-07-10T00:01:00.000Z",
       },
@@ -166,7 +182,9 @@ describe("SIG-242 Linear tenant boundary", () => {
       {
         installationId: 11,
         input: configInput(1, "team-a"),
-        bindings: [{ teamId: "team-a", githubRepoId: 101, githubRepoFullName: "acme/api" }],
+        bindings: [
+          { teamId: "team-a", repos: [{ githubRepoId: 101, githubRepoFullName: "acme/api" }], useAllRepos: false },
+        ],
         updatedBy: "alice",
         nowIso: "2026-07-10T00:02:00.000Z",
       },
@@ -178,7 +196,9 @@ describe("SIG-242 Linear tenant boundary", () => {
       {
         installationId: 11,
         input: configInput(2, "team-b"),
-        bindings: [{ teamId: "team-b", githubRepoId: 202, githubRepoFullName: "globex/web" }],
+        bindings: [
+          { teamId: "team-b", repos: [{ githubRepoId: 202, githubRepoFullName: "globex/web" }], useAllRepos: false },
+        ],
         updatedBy: "alice",
         nowIso: "2026-07-10T00:03:00.000Z",
       },
@@ -247,6 +267,120 @@ describe("SIG-242 Linear tenant boundary", () => {
     )
 
     expect(result).toEqual({ ok: false, reason: "installation-conflict" })
+  })
+
+  it("binds one team to MULTIPLE repositories and returns the full set through snapshot + resolver", async () => {
+    const updated = await updateLinearConfig(
+      { SIGILIX_PLATFORM_DB: db },
+      {
+        installationId: 11,
+        input: configInput(1, "team-a"),
+        bindings: [
+          {
+            teamId: "team-a",
+            repos: [
+              { githubRepoId: 101, githubRepoFullName: "acme/api" },
+              { githubRepoId: 102, githubRepoFullName: "acme/web" },
+            ],
+            useAllRepos: false,
+          },
+        ],
+        updatedBy: "alice",
+        nowIso: "2026-07-10T00:01:00.000Z",
+      },
+    )
+    expect(updated.ok).toBe(true)
+
+    const snapshot = await getLinearIntegrationSnapshot({ SIGILIX_PLATFORM_DB: db }, 11)
+    const team = snapshot.teams.find((t) => t.teamId === "team-a")
+    expect(team?.useAllRepos).toBe(false)
+    expect(team?.repos.map((r) => r.githubRepoFullName).sort()).toEqual(["acme/api", "acme/web"])
+
+    const effective = await resolveLinearTeamEffectiveRepos({ SIGILIX_PLATFORM_DB: db }, team!)
+    expect(effective.map((r) => r.githubRepoFullName)).toEqual(["acme/api", "acme/web"])
+
+    // Tenant isolation: the other org's single binding is untouched.
+    const other = await getLinearIntegrationSnapshot({ SIGILIX_PLATFORM_DB: db }, 22)
+    expect(other.teams[0]?.repos.map((r) => r.githubRepoFullName)).toEqual(["globex/web"])
+  })
+
+  it("binds a team to ALL installation repositories via the use-all flag", async () => {
+    const updated = await updateLinearConfig(
+      { SIGILIX_PLATFORM_DB: db },
+      {
+        installationId: 11,
+        input: configInput(1, "team-a"),
+        bindings: [{ teamId: "team-a", repos: [], useAllRepos: true }],
+        updatedBy: "alice",
+        nowIso: "2026-07-10T00:01:00.000Z",
+      },
+    )
+    expect(updated.ok).toBe(true)
+
+    const snapshot = await getLinearIntegrationSnapshot({ SIGILIX_PLATFORM_DB: db }, 11)
+    const team = snapshot.teams.find((t) => t.teamId === "team-a")
+    expect(team?.useAllRepos).toBe(true)
+
+    // use-all expands to EVERY repo registered under installation 11.
+    const effective = await resolveLinearTeamEffectiveRepos({ SIGILIX_PLATFORM_DB: db }, team!)
+    expect(effective.map((r) => r.githubRepoFullName)).toEqual(["acme/api", "acme/infra", "acme/web"])
+  })
+
+  it("rejects a repo id that is not in the installation (atomic guard fails closed)", async () => {
+    const rejected = await updateLinearConfig(
+      { SIGILIX_PLATFORM_DB: db },
+      {
+        installationId: 11,
+        input: configInput(1, "team-a"),
+        bindings: [
+          { teamId: "team-a", repos: [{ githubRepoId: 202, githubRepoFullName: "globex/web" }], useAllRepos: false },
+        ],
+        updatedBy: "alice",
+        nowIso: "2026-07-10T00:01:00.000Z",
+      },
+    )
+    expect(rejected.ok).toBe(false)
+    // The config revision never advanced.
+    expect((await getLinearConfig({ SIGILIX_PLATFORM_DB: db }, 11))?.revision).toBe(1)
+  })
+
+  it("replaces the repo set on a subsequent save (delete-then-insert is not additive)", async () => {
+    await updateLinearConfig(
+      { SIGILIX_PLATFORM_DB: db },
+      {
+        installationId: 11,
+        input: configInput(1, "team-a"),
+        bindings: [
+          {
+            teamId: "team-a",
+            repos: [
+              { githubRepoId: 101, githubRepoFullName: "acme/api" },
+              { githubRepoId: 102, githubRepoFullName: "acme/web" },
+            ],
+            useAllRepos: false,
+          },
+        ],
+        updatedBy: "alice",
+        nowIso: "2026-07-10T00:01:00.000Z",
+      },
+    )
+    const second = await updateLinearConfig(
+      { SIGILIX_PLATFORM_DB: db },
+      {
+        installationId: 11,
+        input: configInput(2, "team-a"),
+        bindings: [
+          { teamId: "team-a", repos: [{ githubRepoId: 103, githubRepoFullName: "acme/infra" }], useAllRepos: false },
+        ],
+        updatedBy: "alice",
+        nowIso: "2026-07-10T00:02:00.000Z",
+      },
+    )
+    expect(second.ok).toBe(true)
+    const team = (await getLinearIntegrationSnapshot({ SIGILIX_PLATFORM_DB: db }, 11)).teams.find(
+      (t) => t.teamId === "team-a",
+    )
+    expect(team?.repos.map((r) => r.githubRepoFullName)).toEqual(["acme/infra"])
   })
 
   it("does not resolve a revoked team binding", async () => {

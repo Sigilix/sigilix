@@ -1,19 +1,6 @@
-// SIG-318 (PR 12h) — the residual ORCHESTRATOR of the PR-review ensemble (app
-// layer): the thin coordinator `handlePrReviewEnsemble` that PRs 12a–12g carved the
-// phase seams out of. It owns the run setup (config resolve, abort timer, telemetry
-// skeleton, the shadow-bakeoff holder), the orchestral gates that stayed god-file-side
-// (the two stale-head guards, the pre-fanout / pre-submit merged-on-approve short-
-// circuits, the label gate, the incremental empty-delta skip, the router-empty skip),
-// the `bailWithSkipNotice` closure, the carved-phase seam calls, and the catch / finally.
-//
-// Re-exported through the `triage-pr-review-ensemble` shim (the module path the 72
-// external importers + the dispatch-job `vi.mock` still use). The public type
-// contracts (`EnsembleHandlerArgs`, `EnsembleResult`) + the private
-// `EnsembleTelemetry` run-record live in the `./orchestrator-types` leaf; the pure
-// tunables + `resolveEnsembleConfig` / `validateForSubmission` / the telemetry-
-// skeleton factory live in the `./orchestrator-helpers` leaf (both splits keep this
-// file under the 1k-line cap). Dependency rule: app → domain/leaf/adapter, never
-// back into the shim.
+// SIG-318 (PR 12h): thin PR-review ensemble coordinator. Phase implementations,
+// public contracts, and helpers live in sibling modules to keep this file under
+// the 1k-line cap. Dependency rule: app -> domain/leaf/adapter, never the shim.
 
 import type { CheckRunAnnotation } from "@/src/shared/types/github"
 import { type SkipNoticeReason } from "@/src/lib/review-comment-fallback"
@@ -58,16 +45,10 @@ import {
 } from "@/src/lib/pr-review-status-phases"
 import { finalize, type ReviewMeta } from "./session"
 import type { EnsembleHandlerArgs, EnsembleTelemetry, EnsembleResult } from "./orchestrator-types"
-import { buildClient, verifyReviewPersisted } from "@/src/lib/ensemble/adapters/review-sink"
+import { verifyReviewPersisted } from "@/src/lib/ensemble/adapters/review-sink"
 import type { GitHubClient } from "@/src/shared/adapters/github"
+import { resolveReviewClient } from "./review-client"
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
-
-// SIG-318 / SIG-366: the two EXPORTED inline-overview budget thresholds
-// (SIG-216) + the pure `resolveEnsembleConfig` / `validateForSubmission` wrappers
-// moved to the `./orchestrator-helpers` leaf (so this file stays under the 1k cap
-// after Prettier). `resolveEnsembleConfig` is imported above for the handler's own
-// config resolution; the consts + `validateForSubmission` are re-exported here —
-// and through the shim — so the public surface is byte-identical.
 export {
   INLINE_OVERVIEW_MIN_BUDGET_MS,
   INLINE_OVERVIEW_MAX_BUDGET_MS,
@@ -76,10 +57,6 @@ export {
 } from "./orchestrator-helpers"
 
 // ─── public types ──────────────────────────────────────────────────────
-
-// SIG-318 (PR 12h): `EnsembleHandlerArgs` (public handler-args contract) lives in
-// `./orchestrator-types` with the private `EnsembleTelemetry` (kept under the 1k cap).
-// Re-exported here + through the shim so the public surface is byte-identical.
 export type { EnsembleHandlerArgs }
 
 // ─── orchestrator ──────────────────────────────────────────────────────
@@ -132,13 +109,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
   const deterministicErroredReviewMeta = (): ReviewMeta | undefined =>
     buildDeterministicErroredReviewMeta(deterministicCheckAnnotations)
 
-  // ARC-258: the in-progress check run is owned by `dispatchJob`,
-  // not by this orchestrator. Reason: when ensemble-post fails
-  // non-stale-head and the dispatcher falls back to Phase 3, the
-  // ensemble can't know whether to complete the check (a `failure`
-  // here would contradict a successful Phase 3 review). Lifecycle
-  // owned at the dispatcher level → single source of truth for the
-  // final outcome.
+  // ARC-258: dispatchJob owns the in-progress check-run lifecycle.
 
   // ARC-283 Phase B1b — shadow-mode bake-off state, lifted out of the try block so the
   // `finally` settles every shadow promise + emits comparison telemetry on EVERY return
@@ -155,6 +126,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
   // `createEnsembleTelemetrySkeleton` factory in `./orchestrator-helpers`
   // (`tokenUsageByModel` shared by reference, as before).
   const telemetry: EnsembleTelemetry = createEnsembleTelemetrySkeleton({
+    scmProvider: args.scmProvider,
     mode,
     owner,
     repo,
@@ -163,9 +135,17 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     tokenUsageByModel,
     startMs,
   })
-  Object.assign(telemetry, { installationId, ...(args.repoId !== undefined ? { repoId: args.repoId } : {}) }) // SIG-343
+  const statusReporter = args.scmProvider === "github" ? args.statusReporter : undefined
+  if (args.scmProvider === "github") {
+    Object.assign(telemetry, { installationId, ...(args.repoId !== undefined ? { repoId: args.repoId } : {}) })
+  }
   try {
-    const client = args.githubClient ?? (await buildClient(env, installationId)) // SIG-304: injectable for CLI
+    const client = await resolveReviewClient({
+      scmProvider: args.scmProvider,
+      env,
+      installationId,
+      ...(args.githubClient !== undefined ? { injectedClient: args.githubClient } : {}),
+    })
     clientForFetchSummary = client
 
     // SIG-366: the ARC-280 skip-notice bail moved (verbatim) to
@@ -177,6 +157,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       opts?: { dispatchedRoles?: readonly string[] },
     ): Promise<EnsembleResult> =>
       runBailWithSkipNotice({
+        scmProvider: args.scmProvider,
         reason,
         opts,
         env,
@@ -201,20 +182,22 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       // ARC-250/251: helper does structured telemetry + a sticky comment, and
       // auto-requeues the live SHA when depth < cap. We return `stale_head` so the
       // dispatcher does NOT fall through to Phase 3 (duplicate sticky / second requeue).
-      await handleStaleHead({
-        env,
-        owner,
-        repo,
-        prNumber,
-        installationId,
-        queuedHeadSha: headSha,
-        currentHeadSha: meta.head.sha,
-        baseSha: meta.base?.sha ?? null,
-        depth: staleHeadRequeueDepth,
-        source: "ensemble-before-fanout",
-        ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
-        ...(meta.user?.login ? { authorLogin: meta.user.login } : {}), // SIG-38: rate-limit
-      })
+      if (args.scmProvider === "github") {
+        await handleStaleHead({
+          env,
+          owner,
+          repo,
+          prNumber,
+          installationId,
+          queuedHeadSha: headSha,
+          currentHeadSha: meta.head.sha,
+          baseSha: meta.base?.sha ?? null,
+          depth: staleHeadRequeueDepth,
+          source: "ensemble-before-fanout",
+          ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
+          ...(meta.user?.login ? { authorLogin: meta.user.login } : {}), // SIG-38: rate-limit
+        })
+      }
       return finalize(telemetry, env, "stale_head", cache)
     }
 
@@ -280,14 +263,16 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       // a noop-merge skip would help with anyway.
     }
 
-    const connectedAppEvidence = startPrReviewConnectedAppEvidence(args, client, meta.base?.sha ?? "")
-    args.statusReporter?.report(retrievalStatusUpdate())
+    const connectedAppEvidence =
+      args.scmProvider === "github" ? startPrReviewConnectedAppEvidence(args, client, meta.base?.sha ?? "") : undefined
+    statusReporter?.report(retrievalStatusUpdate())
     // SIG-318 (PR 12g-1): the diff + open-PRs fetch, the incremental-select marker
     // read, the per-repo sigilix.json load, the AI-instruction-ingest flag, and the
     // label-gate INPUT live in ensemble/app/context/fetch-and-pack (the label-gate
     // DECISION below stays orchestral). It mutates `telemetry.incrementalReview` by
     // reference; `sigilixConfig` is a `let` (`packAndRoute` reassigns on AI-ingest).
     const fetched = await fetchDiffAndConfig({
+      scmProvider: args.scmProvider,
       env,
       client,
       owner,
@@ -318,7 +303,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
           }),
         )
         telemetry.fellBackReason = "label_gate_skip"
-        args.statusReporter?.report(skippedStatusUpdate({ findingsCount: 0 }))
+        statusReporter?.report(skippedStatusUpdate({ findingsCount: 0 }))
         return finalize(telemetry, env, "skipped", cache, {
           event: "APPROVE",
           findingsCount: 0,
@@ -327,6 +312,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     }
 
     const packed = await packAndRoute({
+      scmProvider: args.scmProvider,
       env,
       client,
       owner,
@@ -389,7 +375,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       if (costTrimmedPaths.length > 0) {
         return bailWithSkipNotice("cost_governor_trimmed_all_routable")
       }
-      args.statusReporter?.report(skippedStatusUpdate({ findingsCount: 0 }))
+      statusReporter?.report(skippedStatusUpdate({ findingsCount: 0 }))
       return finalize(telemetry, env, "skipped", cache, {
         event: "APPROVE",
         findingsCount: 0,
@@ -401,6 +387,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     // build, and symbol retrieval live in ensemble/app/context/gather-evidence. It mutates
     // `telemetry` (dep-vuln) by reference; returns the retrieval cache (12a pre-try-let reassign).
     const evidence = await gatherRetrievalEvidence({
+      scmProvider: args.scmProvider,
       env,
       client,
       owner,
@@ -440,6 +427,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     // so the orchestrator's two pre-try `let`s (read by the posted finalize meta)
     // are reassigned.
     const graphEvidence = await gatherGraphEvidence({
+      scmProvider: args.scmProvider,
       env,
       client,
       owner,
@@ -493,6 +481,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     // context/assemble-prompts. The two closures are RETURNED (they hide their
     // captures); every other value the downstream phases consume flows out unchanged.
     const prompts = await assembleSpecialistPrompts({
+      scmProvider: args.scmProvider,
       env,
       client,
       owner,
@@ -556,7 +545,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       matchedCustomRules,
     } = prompts
 
-    args.statusReporter?.report(
+    statusReporter?.report(
       specialistsStatusUpdate({
         dispatched: router.specialists,
         droppedFiles: droppedTooLarge,
@@ -573,6 +562,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     // (which delegates synth to ensemble/app/synthesize + the floors to recall-
     // floors); mutates `telemetry`+`shadowState` by ref; skip-notice bails → `exit`, forwarded here.
     const specialistsPhase = await runSpecialistsAndSynthesize({
+      scmProvider: args.scmProvider,
       env,
       owner,
       repo,
@@ -638,7 +628,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
         ...(incrementalCoverage !== undefined ? { scope: "cumulative" } : {}),
       })
     }
-    args.statusReporter?.report(
+    statusReporter?.report(
       synthStatusUpdate({
         dispatched: router.specialists,
         succeeded: succeeded.map((v) => v.role),
@@ -702,20 +692,22 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       // CodeRabbit catch (phase-end): do NOT set `fellBackToPhase3`
       // — same reasoning as guard #1.
       telemetry.fellBackReason = "stale_head_after_review"
-      await handleStaleHead({
-        env,
-        owner,
-        repo,
-        prNumber,
-        installationId,
-        queuedHeadSha: headSha,
-        currentHeadSha: meta2.head.sha,
-        baseSha: meta2.base?.sha ?? null,
-        depth: staleHeadRequeueDepth,
-        source: "ensemble-after-review",
-        ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
-        ...(meta2.user?.login ? { authorLogin: meta2.user.login } : {}), // SIG-38: rate-limit
-      })
+      if (args.scmProvider === "github") {
+        await handleStaleHead({
+          env,
+          owner,
+          repo,
+          prNumber,
+          installationId,
+          queuedHeadSha: headSha,
+          currentHeadSha: meta2.head.sha,
+          baseSha: meta2.base?.sha ?? null,
+          depth: staleHeadRequeueDepth,
+          source: "ensemble-after-review",
+          ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
+          ...(meta2.user?.login ? { authorLogin: meta2.user.login } : {}), // SIG-38: rate-limit
+        })
+      }
       return finalize(telemetry, env, "stale_head", cache)
     }
 
@@ -758,6 +750,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       addedLineTextByLine,
       findingMarkers: findingMarkersFromPrep,
     } = await prepareRender({
+      scmProvider: args.scmProvider,
       env,
       owner,
       repo,
@@ -845,6 +838,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       reviewOutputSurface,
       findingMarkers: findingMarkersAfterBuild,
     } = await verifyAndBuildSubmission({
+      scmProvider: args.scmProvider,
       env,
       owner,
       repo,
@@ -888,6 +882,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     // SIG-318 (PR 12f): publish owns overview, stale-head guard #3, submit, and persistence.
     return attachInvariantLensAmendmentWork(
       await publishReviewSubmission({
+        scmProvider: args.scmProvider,
         env,
         owner,
         repo,
@@ -931,7 +926,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
         maybePostAstAutoInline,
         deterministicCheckAnnotationMeta,
         deterministicErroredReviewMeta,
-        connectedAppEvidence,
+        ...(connectedAppEvidence !== undefined ? { connectedAppEvidence } : {}),
       }),
       {
         env,

@@ -236,6 +236,7 @@ describe("review-slo-summary — full orchestrator, no-fan-out exit (SIG-149)", 
     mockGetFileContent.mockResolvedValueOnce(null)
 
     const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9001,

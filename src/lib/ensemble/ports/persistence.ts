@@ -12,14 +12,15 @@
 // (`domain/` or `@/shared/types`), this port should import from there instead.
 
 import type { ReviewManifestFinding } from "@/src/lib/review-manifest"
+import type { ScmProviderKind } from "./scm"
 
 /**
  * The telemetry record `finalize` persists for the FP-rate ruler + SLO surface.
- * The adapter reads ONLY `owner`/`repo`/`prNumber` (to build the reverse-ts KV
- * key) and stringifies the whole record verbatim — it never branches on any
- * other field — so the orchestrator's private `EnsembleTelemetry` object is
- * carried through structurally + runtime-identically by passing it where this
- * narrow shape is expected.
+ * The adapter reads `scmProvider` to select the provider namespace plus
+ * `owner`/`repo`/`prNumber` to build the reverse-ts KV key, then stringifies the
+ * whole record verbatim. The orchestrator's private `EnsembleTelemetry` object
+ * is carried through structurally by passing it where this narrow shape is
+ * expected.
  *
  * SIG-363 DEVIATION (reported): the original spec called for
  * `{ owner; repo; prNumber } & Record<string, unknown>`, but the orchestrator's
@@ -29,6 +30,7 @@ import type { ReviewManifestFinding } from "@/src/lib/review-manifest"
  * needs, IS assignable from `EnsembleTelemetry`, and stays runtime-identical.
  */
 export type EnsembleTelemetrySummary = {
+  scmProvider: ScmProviderKind
   owner: string
   repo: string
   prNumber: number
@@ -59,9 +61,9 @@ export interface EnsemblePersistencePort {
   incrementDailyBudget(by: number): Promise<void>
 
   /**
-   * Persist the review's SLO / FP-rate telemetry record under the reverse-ts
-   * `ensemble-review-telemetry:` key. Best-effort — a failed write is logged,
-   * never thrown into the review flow.
+   * Persist the review telemetry under a provider-specific reverse-ts key.
+   * GitHub preserves `ensemble-review-telemetry:` for FP-rate/SLO consumers;
+   * GitLab uses a disjoint prefix. Best-effort — a failed write is logged.
    */
   writeTelemetry(telemetry: EnsembleTelemetrySummary): Promise<void>
 }

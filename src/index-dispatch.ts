@@ -242,6 +242,7 @@ export async function dispatchJob(
       // GraphExpansionMetricsDO in the finally below.
       const graphExpansionMetricsSink: GraphExpansionSample[] = []
       const baseArgs = {
+        scmProvider: "github" as const,
         owner: job.owner,
         repo: job.repo,
         prNumber: job.prNumber,

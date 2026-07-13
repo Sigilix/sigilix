@@ -138,6 +138,7 @@ describe("handlePrReviewEnsemble — pre-fanout merged-on-approve short-circuit 
     ])
 
     const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 104,
@@ -183,6 +184,7 @@ describe("handlePrReviewEnsemble — pre-fanout merged-on-approve short-circuit 
     mockSubmitReview.mockRejectedValueOnce(new Error("HTTP 502 Bad Gateway"))
 
     const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 104,

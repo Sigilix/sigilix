@@ -270,6 +270,7 @@ describe("handlePrReviewEnsemble — dispatcher shadow mode (SIG-226)", () => {
       .mockRejectedValue(new Error("test boundary — specialist chat not mocked further"))
 
     await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 5001,
@@ -332,6 +333,7 @@ describe("handlePrReviewEnsemble — dispatcher shadow mode (SIG-226)", () => {
     mockChat.mockRejectedValue(new Error("test boundary"))
 
     await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 5002,
@@ -392,6 +394,7 @@ index abc1234..def5678 100644
     mockChat.mockRejectedValue(new Error("test boundary"))
 
     await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 5004,
@@ -440,6 +443,7 @@ index abc1234..def5678 100644
     mockChat.mockRejectedValue(new Error("test boundary"))
 
     await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 5006,
@@ -505,6 +509,7 @@ index abc1234..def5678 100644
       .mockRejectedValue(new Error("test boundary"))
 
     await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 5003,
@@ -624,6 +629,7 @@ index abc1234..def5678 100644
     })
 
     await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 5005,

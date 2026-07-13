@@ -226,6 +226,7 @@ async function executeDemoReview(job: DemoReviewJob, env: DemoEnv): Promise<void
   let result
   try {
     result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: target.owner,
       repo: target.repo,
       prNumber: target.prNumber,

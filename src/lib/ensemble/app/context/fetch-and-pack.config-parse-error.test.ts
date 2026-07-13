@@ -50,6 +50,7 @@ function makeClient(configRaw: string | null): { client: GitHubClient; createIss
 }
 
 const ARGS_BASE = {
+  scmProvider: "github" as const,
   owner: "o",
   repo: "r",
   prNumber: 1,

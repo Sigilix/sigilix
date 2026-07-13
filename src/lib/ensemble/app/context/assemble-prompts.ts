@@ -81,6 +81,7 @@ import {
   selectRelevantForPaths,
 } from "@/src/features/learnings"
 import { isCategoryBoosted, loadPrecisionProfile } from "@/src/features/precision-profile"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 import type { FindingCategory } from "@/src/shared/domain/finding-category"
 import { resolveDynamicEvidencePromptBlock } from "@/src/lib/ensemble/domain/dynamic-evidence-block"
 import { buildMultiBatchPrSummary } from "@/src/lib/ensemble/domain/multibatch-pr-summary"
@@ -97,6 +98,7 @@ type MatchedPathInstructions = ReturnType<typeof resolvePathInstructionsForChang
 type SplitFile = { path: string }
 
 export interface AssemblePromptsArgs {
+  scmProvider: ScmProviderKind
   env: Env
   client: GitHubClient
   owner: string
@@ -186,6 +188,7 @@ export interface AssemblePromptsResult {
 
 export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise<AssemblePromptsResult> {
   const {
+    scmProvider,
     env,
     client,
     owner,
@@ -762,7 +765,7 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
   // store, output byte-unchanged); `on` → inject. Best-effort (loader no-throws).
   const learningsMode = resolveLearningsMode(env.OPENCLAW_LEARNINGS_MODE)
   let learningsBlock = ""
-  if (learningsMode !== "off" && repoId !== undefined) {
+  if (scmProvider === "github" && learningsMode !== "off" && repoId !== undefined) {
     const candidateLearnings = await loadEffectiveLearnings({ env, owner, repo, repoId, prNumber })
     // Select over the FULL PR path scope (changed + not-yet-reviewed) so the
     // SAME block is correct for both messageForRole (changed files) and the
@@ -791,7 +794,7 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
   // round-trips with the dismiss path that records under `${owner}/${repo}`; that
   // means the boost runs even when the numeric `repoId` is absent. Telemeter in
   // both shadow + on; inject only in `on`. Best-effort (loader no-throws).
-  if (learningsMode !== "off") {
+  if (scmProvider === "github" && learningsMode !== "off") {
     try {
       const profile = await loadPrecisionProfile(env, `${owner}/${repo}`)
       const boostedCategories = profile

@@ -76,6 +76,7 @@ function fileBlock(path: string, addedLine: string): string {
 function makeArgs(over: Partial<PackAndRouteArgs> & { fullDiff: string }): PackAndRouteArgs {
   const telemetry: PackAndRouteTelemetry = { routerDecision: null }
   return {
+    scmProvider: "github",
     env: makeEnv(),
     // The mocked GitHubClient stub — never dialed on this path.
     client: {} as PackAndRouteArgs["client"],

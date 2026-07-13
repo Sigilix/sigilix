@@ -53,6 +53,7 @@ export async function runReviewInNode(args: RunReviewInNodeArgs): Promise<DryRun
     throw new Error(`sigilix: could not resolve head SHA for ${args.owner}/${args.repo}#${args.prNumber}`)
   }
   const result = await handlePrReviewEnsemble({
+    scmProvider: "github",
     owner: args.owner,
     repo: args.repo,
     prNumber: args.prNumber,

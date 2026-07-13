@@ -41,6 +41,10 @@ export function createdMsFromKey(key: string, prefix: string): number | null {
 export function mapTelemetryToReview(raw: unknown, createdMs: number): FpRateReview | null {
   if (!raw || typeof raw !== "object") return null
   const r = raw as Record<string, any>
+  // Legacy GitHub rows predate the provider tag and remain valid. Any explicit
+  // non-GitHub row is excluded defense-in-depth in case an old/corrupt key was
+  // written under the legacy GitHub prefix before provider keying existed.
+  if (r.scmProvider !== undefined && r.scmProvider !== "github") return null
   if (r.owner == null || r.repo == null || r.prNumber == null) return null
   // A NaN/invalid prNumber would flow into the (prNumber:fid) attribution key
   // and join wrongly — drop the row instead (CodeRabbit).

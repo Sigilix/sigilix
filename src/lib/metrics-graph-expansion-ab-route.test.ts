@@ -177,6 +177,18 @@ describe("handleGraphExpansionAbMetricsRoute", () => {
     expect(body.treatment.reviews + body.control.reviews).toBe(0)
   })
 
+  it("excludes explicit GitLab telemetry even if it exists under a legacy colliding key", async () => {
+    const [key, value] = rec("treatment", [5], 300)
+    const records = { [key]: { ...(value as Record<string, unknown>), scmProvider: "gitlab" } }
+
+    const res = await handleGraphExpansionAbMetricsRoute(
+      get("https://x/metrics/graph-expansion-ab?repo=o/r", `Bearer ${TOKEN}`),
+      makeEnv(records),
+    )
+    const body = (await res.json()) as { treatment: { reviews: number }; control: { reviews: number } }
+    expect(body.treatment.reviews + body.control.reviews).toBe(0)
+  })
+
   it("excludes telemetry older than the window", async () => {
     const oldReverseTs = REVERSE_TS_BASE - (Date.now() - 40 * DAY) // ~40 days old
     const records: Record<string, unknown> = {

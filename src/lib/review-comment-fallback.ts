@@ -37,6 +37,7 @@
 
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { Env } from "@/src/shared/types/env"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 
 /** The marker every Sigilix review body starts with. Same marker the
  *  formal-review path uses (see `formatReviewBody` in
@@ -55,8 +56,15 @@ const LEGACY_REVIEW_BODY_MARKER = "<!-- openclaw:pr-review -->"
  *  Distinct key family from the regular pr-review dedupe so a
  *  comment-fallback record doesn't suppress a future successful
  *  formal-review submit on the same SHA (and vice versa). */
-function dedupeKeyForCommentFallback(args: { owner: string; repo: string; prNumber: number; headSha: string }): string {
-  return `pr-review-comment-fallback:${args.owner}/${args.repo}#${args.prNumber}@${args.headSha}`
+function dedupeKeyForCommentFallback(args: {
+  scmProvider: ScmProviderKind
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+}): string {
+  const prefix = args.scmProvider === "github" ? "pr-review-comment-fallback" : "gitlab:pr-review-comment-fallback"
+  return `${prefix}:${args.owner}/${args.repo}#${args.prNumber}@${args.headSha}`
 }
 
 /** The submit path that failed verify. Surfaced in the header so the
@@ -170,6 +178,7 @@ export function renderReviewCommentFallback(args: {
 }
 
 export interface PostReviewCommentFallbackArgs {
+  scmProvider: ScmProviderKind
   env: Env
   client: GitHubClient
   owner: string
@@ -206,9 +215,9 @@ export type PostReviewCommentFallbackResult =
 export async function postReviewCommentFallback(
   args: PostReviewCommentFallbackArgs,
 ): Promise<PostReviewCommentFallbackResult> {
-  const { env, client, owner, repo, prNumber, headSha, body, submitPath } = args
+  const { scmProvider, env, client, owner, repo, prNumber, headSha, body, submitPath } = args
   const tag = { owner, repo, prNumber, headSha, submit_path: submitPath }
-  const key = dedupeKeyForCommentFallback({ owner, repo, prNumber, headSha })
+  const key = dedupeKeyForCommentFallback({ scmProvider, owner, repo, prNumber, headSha })
 
   // Dedupe check FIRST so we don't even render the wrapper when a
   // prior fallback already landed.
@@ -307,8 +316,15 @@ export type SkipNoticeReason =
   // never reaches it.
   | "cost_governor_trimmed_all_routable"
 
-function dedupeKeyForSkipNotice(args: { owner: string; repo: string; prNumber: number; headSha: string }): string {
-  return `pr-review-skip-notice:${args.owner}/${args.repo}#${args.prNumber}@${args.headSha}`
+function dedupeKeyForSkipNotice(args: {
+  scmProvider: ScmProviderKind
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+}): string {
+  const prefix = args.scmProvider === "github" ? "pr-review-skip-notice" : "gitlab:pr-review-skip-notice"
+  return `${prefix}:${args.owner}/${args.repo}#${args.prNumber}@${args.headSha}`
 }
 
 /** Pure: render the body for a "Sigilix couldn't review" comment.
@@ -359,6 +375,7 @@ export function renderReviewSkipNotice(args: {
 }
 
 export interface PostReviewSkipNoticeArgs {
+  scmProvider: ScmProviderKind
   env: Env
   client: GitHubClient
   owner: string
@@ -387,9 +404,9 @@ export type PostReviewSkipNoticeResult =
  * Never throws — every failure path returns a structured result.
  */
 export async function postReviewSkipNotice(args: PostReviewSkipNoticeArgs): Promise<PostReviewSkipNoticeResult> {
-  const { env, client, owner, repo, prNumber, headSha, reason, dispatchedRoles } = args
+  const { scmProvider, env, client, owner, repo, prNumber, headSha, reason, dispatchedRoles } = args
   const tag = { owner, repo, prNumber, headSha, skip_reason: reason }
-  const key = dedupeKeyForSkipNotice({ owner, repo, prNumber, headSha })
+  const key = dedupeKeyForSkipNotice({ scmProvider, owner, repo, prNumber, headSha })
 
   try {
     const existing = await env.OPENCLAW_STATE.get(key)

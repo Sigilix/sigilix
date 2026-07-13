@@ -81,6 +81,7 @@ export type { GatherGraphTelemetry, GatherGraphArgs, GatherGraphResult } from ".
 
 export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGraphResult> {
   const {
+    scmProvider,
     env,
     client,
     owner,
@@ -133,7 +134,7 @@ export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGra
   let graphBlastDependentPaths: string[] = []
   // SIG-143: blast paths folded into the prompt graph-context block (post mode).
   let graphBlastContextString = ""
-  if (ensembleConfig.flags.graphRetrievalEnabled) {
+  if (scmProvider === "github" && ensembleConfig.flags.graphRetrievalEnabled) {
     const graphRpcBudgetMs = ensembleConfig.tunables.graphRpcTimeoutMs
     // SIG-374: sub-span timing for the graph DO RPC + shaping (distinct
     // from the deterministic_scans phase and the shadow graph-expansion
@@ -320,7 +321,7 @@ export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGra
   // emits `graph-expansion-shadow-error` and continues. It must NEVER block,
   // slow, or break the review.
   const graphExpMode = graphExpansionMode(env)
-  if (graphExpMode !== "off") {
+  if (scmProvider === "github" && graphExpMode !== "off") {
     try {
       // CodeRabbit: measure the WHOLE PR, not the prompt batch. astFilesByPath
       // is the full changed JS/TS set, but `diff` is truncated to maxPatchLength
@@ -715,14 +716,14 @@ export async function gatherGraphEvidence(a: GatherGraphArgs): Promise<GatherGra
   // join `(repoId, prNumber)` and BIND it to the PR's current merge commit
   // (`meta.merge_commit_sha` == the OIDC-signed sha) — the forge-proof key. In
   // `post` we feed the receipt's SARIF to the SAME pipeline via `rawOverride`.
-  const runnerMode = readRunnerEvidenceMode(env)
+  const runnerMode = scmProvider === "github" ? readRunnerEvidenceMode(env) : "off"
   // SIG-285 v2 PR1: receipt-join shares the SAME verified-receipt lookup as
   // runner-evidence, so the lookup must fire when EITHER feature is on —
   // otherwise enabling OPENCLAW_RECEIPTJOIN_MODE alone (with runner-evidence
   // off) would silently no-op (CodeRabbit). The runner-evidence-specific
   // outputs (the trust-pill badge + the adoption metric) stay gated on
   // `runnerMode` below; only the shared lookup is decoupled.
-  const receiptJoinMode = ensembleConfig.flags.receiptJoinMode
+  const receiptJoinMode = scmProvider === "github" ? ensembleConfig.flags.receiptJoinMode : "off"
   let runnerEvidence: RunnerEvidenceState = { state: "runner-absent" }
   // SIG-285 v2 PR1: the verified receipt's UN-FILTERED HEAD-scan index, built
   // below + joined to findings after submission (receipt-join verification).

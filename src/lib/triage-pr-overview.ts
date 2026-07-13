@@ -1,11 +1,5 @@
-// PR-overview triage pipeline. Triggered by `pull_request` webhook on
-// opened / synchronize / reopened — fetches the PR + diff + commits,
-// asks Ollama Turbo for a structured overview, and posts (or PATCHes
-// in place) a single sticky top-level comment.
-//
-// Ported from rema-portal/tools/openclaw/triage-pr-overview.mjs +
-// lib/pr-overview.mjs. No filesystem, no gh CLI — everything goes
-// through the GitHubClient.
+// PR-overview triage pipeline: fetches PR context, generates a structured
+// overview, and posts or updates one sticky comment through GitHubClient.
 
 import { generate } from "@/src/shared/adapters/model"
 import type { GitHubClient } from "@/src/shared/adapters/github"
@@ -19,11 +13,7 @@ import { runPreMergeGates, type GateResult } from "@/src/shared/domain/pre-merge
 import { resolveEffectiveSigilixConfig } from "./ensemble/app/context/resolve-effective-config"
 import { batchReadFileCache, batchWriteFileCache } from "./pr-overview-file-cache"
 import type { Env } from "@/src/shared/types/env"
-// SIG-376 (SIG-318 Tier-1 6/8): the pure parse/transform, render, and
-// comment-scan clusters were lifted into three sibling leaves to keep this
-// file under the 1,000-line budget. The core imports what `handlePrOverview`
-// / `buildPrompt` call and re-exports every previously-exported symbol that
-// moved so importers + tests stay unchanged.
+// SIG-376: pure parse, render, and comment-scan clusters live in sibling leaves.
 import { mergeCachedAndFreshRows, parseOverviewResponse, scopedDiffFromMisses } from "./triage-pr-overview-parse"
 import { excludePrAuthor } from "./triage-pr-overview-reviewers"
 import { formatOverviewComment, renderReviewContextBlock, truncate } from "./triage-pr-overview-format"
@@ -275,7 +265,16 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
         )
         return [] as PrChangedFile[]
       }),
-      resolveEffectiveSigilixConfig({ env, client, owner, repo, prNumber, headSha, installationId }),
+      resolveEffectiveSigilixConfig({
+        scmProvider: "github",
+        env,
+        client,
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        installationId,
+      }),
     ])
     since("pr-fetched")
 

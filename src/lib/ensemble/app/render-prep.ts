@@ -1,14 +1,6 @@
-// SIG-318 (PR 12d) — the RENDER-PREP phase of the PR-review orchestrator (app
-// layer). Carved verbatim from `handlePrReviewEnsemble`, between stale-head
-// guard #2 and merge-guard #2: the review-memory soften pre-pass + the SIG-280
-// warm veto (incl. the shared `runClaimClassifier` model closure), the renderable-
-// set assembly (content fingerprints, consensus annotation, withdrawal filtering,
-// repeat-FP metrics, precision profile, the `keepIndex` parallel-array bookkeeping,
-// approval-readiness, the review-event resolution, and the `submissionVerdict`),
-// the cross-push delta-badge snapshot, and the specialist coverage roster. It then
-// delegates the verification/marker pre-compute to `./verification-prep` (split out
-// so neither app file exceeds 1k lines) and returns the values the merge-guard +
-// verify-and-build phases downstream consume.
+// SIG-318 (PR 12d): render-prep phase extracted from the ensemble orchestrator.
+// Verification/marker pre-compute remains delegated to `./verification-prep` so
+// both app modules stay under the 1k-line cap.
 //
 // THE INDEX-ALIGNMENT INVARIANT: the parallel arrays (`keepIndex`, the filtered-
 // consensus triple, the markers) are the most fragile code in the orchestrator —
@@ -79,6 +71,7 @@ import {
   selectConfigApiKey,
 } from "@/src/lib/ensemble/adapters/model-provider"
 import { prepareVerification } from "./verification-prep"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 
 type SynthesizerProvenanceFindings = SynthesizerProvenance["findings"]
 /**
@@ -92,6 +85,7 @@ type FilteredProvenance = Array<SynthesizerProvenanceFindings[number] | undefine
 type ReviewableMap = ReturnType<typeof parseDiffToReviewablePositions>
 
 export interface RenderPrepArgs {
+  scmProvider: ScmProviderKind
   env: Env
   owner: string
   repo: string
@@ -144,6 +138,7 @@ export interface RenderPrepResult {
 
 export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult> {
   const {
+    scmProvider,
     env,
     owner,
     repo,
@@ -213,12 +208,13 @@ export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult
   // soften", never over-soften). When NOT active, the soften loop below
   // simply doesn't decrement, turning off the pre-Phase-4 uncalibrated
   // always-on soften.
-  const claimShadowMode = ensembleConfig.flags.reviewMemoryClaimShadowMode
+  const claimShadowMode = scmProvider === "github" ? ensembleConfig.flags.reviewMemoryClaimShadowMode : "off"
   // `reviewMemoryConfig` is scoped to the review-memory injection block
   // above; re-resolve the per-repo bool here (pure + cheap) from the
   // function-scoped sigilixConfig.
-  const softenActive = isSoftenActive(claimShadowMode, resolveReviewMemoryConfig(sigilixConfig).claimSoftening)
-  const claimsEnabled = ensembleConfig.flags.reviewMemoryClaims === "on"
+  const softenActive =
+    scmProvider === "github" && isSoftenActive(claimShadowMode, resolveReviewMemoryConfig(sigilixConfig).claimSoftening)
+  const claimsEnabled = scmProvider === "github" && ensembleConfig.flags.reviewMemoryClaims === "on"
 
   // Reusable claim-extractor model closure. Shared by the SIG-280 PR C
   // warm veto below and the Phase-2/3 extraction site further down, so
@@ -259,7 +255,7 @@ export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult
   // nice-to-have and must never fail a review.
   let withdrawals: Awaited<ReturnType<typeof loadWithdrawals>> = []
   try {
-    withdrawals = await loadWithdrawals(env, owner, repo, prNumber)
+    if (scmProvider === "github") withdrawals = await loadWithdrawals(env, owner, repo, prNumber)
   } catch (err) {
     console.warn(
       JSON.stringify({
@@ -578,7 +574,7 @@ export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult
   // only `enforce` changes what's posted.
   const precisionMode = ensembleConfig.flags.precisionProfileMode
   let precisionKept = postWithdrawalFindings
-  if (precisionMode !== "off") {
+  if (scmProvider === "github" && precisionMode !== "off") {
     // Key on the owner/repo slug — the SAME key the dismiss path
     // (github-mention) records outcomes under, so the signal round-trips.
     const precisionRepoKey = `${owner}/${repo}`
@@ -631,17 +627,19 @@ export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult
     }
   }
   // SIG-104 PR-3: the learnings SUPPRESS gate — carve-outs + mode in `learnings-suppress-prep`.
-  precisionKept = await applyLearningSuppressions({
-    env,
-    owner,
-    repo,
-    prNumber,
-    repoId: a.repoId,
-    kept: precisionKept,
-    renderableFindings,
-    consensusProvenance,
-    changedPaths: [...reviewable.keys(), ...filesNotReviewed],
-  })
+  if (scmProvider === "github") {
+    precisionKept = await applyLearningSuppressions({
+      env,
+      owner,
+      repo,
+      prNumber,
+      repoId: a.repoId,
+      kept: precisionKept,
+      renderableFindings,
+      consensusProvenance,
+      changedPaths: [...reviewable.keys(), ...filesNotReviewed],
+    })
+  }
   // SIG-298 + config-as-code: strip `[sdk:<packId>]` / `[repo-rule:<id>]` self-tag
   // markers + stamp attribution (pure/sync) over BOTH renderable scopes.
   precisionKept = applyMarkerAttributions({ ...a, precisionKept, renderableUnanchoredRaw })
@@ -887,7 +885,8 @@ export async function prepareRender(a: RenderPrepArgs): Promise<RenderPrepResult
   // summary. `null` = no prior manifest / no signal.
   let deltaCounts: DeltaBadgeCounts | null = null
   try {
-    const priorRead = await readReviewManifest(env, owner, repo, prNumber)
+    const priorRead =
+      scmProvider === "github" ? await readReviewManifest(env, owner, repo, prNumber) : { kind: "missing" as const }
     if (priorRead.kind === "ok" && priorRead.manifest.findings) {
       // Codex spec warning: a finding's path NOT in the current PR's
       // changed-file set means specialists never looked at it on

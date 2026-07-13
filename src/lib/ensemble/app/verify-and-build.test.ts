@@ -109,6 +109,7 @@ function makeArgs(opts: {
     filesDroppedCount: 0,
   })
   return {
+    scmProvider: "github",
     env,
     owner: "octo",
     repo: "repo",

@@ -429,6 +429,7 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
         }),
       )
       postConfigErrorComment({
+        scmProvider: "github",
         env,
         client,
         owner,

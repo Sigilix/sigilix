@@ -27,6 +27,7 @@ import type { runSarifEvidence, SarifFinding } from "@/src/features/sarif-eviden
 import type { ReceiptScanResult } from "@/src/lib/verification/verify-finding-receipt"
 import type { GraphRetrievalSample } from "@/src/do/graph-metrics"
 import type { GraphExpansionSample } from "@/src/do/graph-expansion-metrics"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 import type { GraphContextNode } from "@/src/do/repo-graph"
 import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 
@@ -64,6 +65,7 @@ export interface GatherGraphTelemetry {
 }
 
 export interface GatherGraphArgs {
+  scmProvider: ScmProviderKind
   env: Env
   client: GitHubClient
   owner: string

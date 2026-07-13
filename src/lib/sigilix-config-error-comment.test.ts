@@ -38,6 +38,7 @@ function fakeClient(overrides: {
 }
 
 const args = {
+  scmProvider: "github" as const,
   owner: "acme",
   repo: "site",
   prNumber: 7,
@@ -74,6 +75,26 @@ describe("postConfigErrorComment", () => {
     const result = await postConfigErrorComment({ env: makeEnv(stub), client, ...args })
     expect(result).toEqual({ kind: "suppressed", reason: "kv-dedupe" })
     expect(create).not.toHaveBeenCalled()
+  })
+
+  it("does not let a colliding GitHub key suppress a GitLab config-error comment", async () => {
+    const create = vi.fn(async () => ({ id: 101 }))
+    const client = fakeClient({ createIssueComment: create })
+    const { stub, store } = fakeKV({
+      "config-error-posted:acme/site#7:hhhhhhh": "42",
+    })
+
+    const result = await postConfigErrorComment({
+      env: makeEnv(stub),
+      client,
+      ...args,
+      scmProvider: "gitlab",
+    })
+
+    expect(result).toEqual({ kind: "posted", commentId: 101 })
+    expect(create).toHaveBeenCalledOnce()
+    expect(store["config-error-posted:acme/site#7:hhhhhhh"]).toBe("42")
+    expect(store["gitlab:config-error-posted:acme/site#7:hhhhhhh"]).toBe("101")
   })
 
   it("suppresses via GitHub-side search when a comment with the marker already exists (cold KV)", async () => {

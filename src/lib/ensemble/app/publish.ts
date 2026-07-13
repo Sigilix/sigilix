@@ -68,6 +68,7 @@ import { finalize, type EnsembleResult, type FinalizeTelemetry, type ReviewMeta 
 import { runInlineOverviewWithRetry, countBySeverity, countByCategory } from "./publish-helpers"
 import { computeProofCounts, formatManageLine } from "@/src/lib/pr-review-status-render"
 import type { PrReviewAppEvidence } from "@/src/features/pr-review-app-evidence"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 
 // SIG-216: the inline-overview budget thresholds — the min remaining budget to
 // attempt the inline render, the max budget to spend on it, and the reserve held
@@ -91,6 +92,7 @@ export interface PublishTelemetry extends FinalizeTelemetry {
 }
 
 export interface PublishArgs<Tel extends PublishTelemetry> {
+  scmProvider: ScmProviderKind
   env: Env
   owner: string
   repo: string
@@ -158,6 +160,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
   a: PublishArgs<Tel>,
 ): Promise<EnsembleResult<Tel>> {
   const {
+    scmProvider,
     env,
     owner,
     repo,
@@ -204,6 +207,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
   // SIG-318/SIG-507: shared deps for the post-submit persistence tail (persistSubmittedReview),
   // invoked by BOTH the primary inline-anchored and the anchorless-422-fallback success paths.
   const persistDeps = {
+    scmProvider,
     env,
     client,
     owner,
@@ -230,7 +234,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
   // ORCHESTRATOR_TIMEOUT_MS, capped at INLINE_OVERVIEW_MAX_BUDGET_MS and skipped
   // under INLINE_OVERVIEW_MIN_BUDGET_MS. Single retry on transients, bounded by
   // the same Promise.race budget. Best-effort: a failure NEVER blocks the submit.
-  if (isPrOverviewEnabled(sigilixConfig)) {
+  if (scmProvider === "github" && isPrOverviewEnabled(sigilixConfig)) {
     const resolvedConnectedAppEvidence = connectedAppEvidence
       ? await connectedAppEvidence.catch(() => [] as readonly PrReviewAppEvidence[])
       : []
@@ -506,6 +510,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
         ),
       )
       const fallback = await postReviewCommentFallback({
+        scmProvider,
         env,
         client,
         owner,
@@ -580,7 +585,9 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
       reviewManifestEnabled
     ) {
       try {
-        await captureInlineCommentIds(client, owner, repo, prNumber, currentFindingsForManifest)
+        if (scmProvider === "github") {
+          await captureInlineCommentIds(client, owner, repo, prNumber, currentFindingsForManifest)
+        }
       } catch (err) {
         console.error(
           JSON.stringify({
@@ -683,6 +690,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
         ),
       )
       const commentFallback = await postReviewCommentFallback({
+        scmProvider,
         env,
         client,
         owner,
@@ -783,6 +791,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
         }),
       )
       const commentFallback = await postReviewCommentFallback({
+        scmProvider,
         env,
         client,
         owner,
@@ -843,6 +852,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
       // is real signal the reviewer would benefit from — post
       // it as a regular comment instead of dropping it.
       const commentFallback = await postReviewCommentFallback({
+        scmProvider,
         env,
         client,
         owner,

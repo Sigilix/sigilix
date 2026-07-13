@@ -167,6 +167,7 @@ describe("dispatchJob — gitlab-mr-review consumer (e2e: a real MR gets a poste
     expect(args.repo).toBe("sub/proj")
     expect(args.prNumber).toBe(7)
     expect(args.headSha).toBe("c".repeat(40))
+    expect(args.scmProvider).toBe("gitlab")
     expect(args.installationId).toBe(0) // GitHub concept; 0 on the GitLab path
     expect(args.repoId).toBeUndefined() // omitted -> usage-metering + getCommit paths stay inert
     expect(args.githubClient).toBeDefined()

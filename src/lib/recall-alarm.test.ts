@@ -116,6 +116,13 @@ describe("recallOutcomeFromTelemetry", () => {
     expect(recallOutcomeFromTelemetry({ synthesizer: { verdict: { findings: [] } } })).toBeNull()
   })
 
+  it("accepts legacy GitHub rows but excludes explicit GitLab telemetry", () => {
+    const base = { prNumber: 216, synthesizer: { verdict: { findings: [] } } }
+    expect(recallOutcomeFromTelemetry(base)).not.toBeNull()
+    expect(recallOutcomeFromTelemetry({ ...base, scmProvider: "github" })).not.toBeNull()
+    expect(recallOutcomeFromTelemetry({ ...base, scmProvider: "gitlab" })).toBeNull()
+  })
+
   it("treats a non-logic missing role as not-logic-degraded", () => {
     expect(
       recallOutcomeFromTelemetry({

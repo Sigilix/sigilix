@@ -60,6 +60,7 @@ function emptyArm(): ArmAgg {
 function readArmSample(raw: unknown): { arm: "treatment" | "control"; total: number; highSev: number } | null {
   if (!raw || typeof raw !== "object") return null
   const r = raw as Record<string, any>
+  if (r.scmProvider !== undefined && r.scmProvider !== "github") return null
   const arm = r.graphExpansionAb?.arm
   if (arm !== "treatment" && arm !== "control") return null
   const findings = r.synthesizer?.verdict?.findings

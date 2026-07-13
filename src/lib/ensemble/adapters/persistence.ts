@@ -7,12 +7,9 @@
 // EXPORTED here (permitted deltas — the god-file imports them back; public surface
 // unchanged). `writeTelemetry`'s param is the ONE permitted non-export delta:
 // retyped from the orchestrator-private `EnsembleTelemetry` interface to the
-// port's `EnsembleTelemetrySummary` (the `{ owner; repo; prNumber }` routing
-// shape — see the SIG-363 DEVIATION note on the port) — runtime-identical (it
-// stringifies the whole object and only reads owner/repo/prNumber to build the
-// reverse-ts key; the caller passes the same full object). The KV key string +
-// TTL stay BYTE-IDENTICAL (contract-tested in fp-rate / metrics-fp-rate-route /
-// metrics-graph-expansion-ab).
+// port's `EnsembleTelemetrySummary` provider + routing shape. It stringifies the
+// whole object and reads scmProvider/owner/repo/prNumber for the reverse-ts key.
+// GitHub's key and TTL stay byte-identical; GitLab writes a disjoint prefix.
 
 import type { Env } from "@/src/shared/types/env"
 import { GitHubClient } from "@/src/shared/adapters/github"
@@ -165,7 +162,20 @@ export async function incrementDailyCostUsd(env: Env, usd: number): Promise<void
 
 export async function writeTelemetry(env: Env, telemetry: EnsembleTelemetrySummary): Promise<void> {
   const reverseTs = String(9_999_999_999_999 - Date.now()).padStart(13, "0")
-  const key = `ensemble-review-telemetry:${reverseTs}:${telemetry.owner}/${telemetry.repo}#${telemetry.prNumber}`
+  // Preserve the legacy GitHub key byte-for-byte: metrics and operational
+  // scripts scan this prefix. GitLab gets a disjoint prefix so an owner/repo/PR
+  // collision can never enter GitHub-only FP-rate, recall, or A/B consumers.
+  const prefix = (() => {
+    switch (telemetry.scmProvider) {
+      case "github":
+        return "ensemble-review-telemetry"
+      case "gitlab":
+        return "gitlab:ensemble-review-telemetry"
+      default:
+        throw new Error(`Unsupported SCM provider: ${String(telemetry.scmProvider satisfies never)}`)
+    }
+  })()
+  const key = `${prefix}:${reverseTs}:${telemetry.owner}/${telemetry.repo}#${telemetry.prNumber}`
   // TTL sourced from TELEMETRY_TTL_DAYS so the write expiry and the fp-rate
   // unmatched-dismissal classification can't drift (SIG-306).
   await env.OPENCLAW_STATE.put(key, JSON.stringify(telemetry), {

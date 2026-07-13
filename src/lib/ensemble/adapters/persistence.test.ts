@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { Env } from "@/src/shared/types/env"
-import { incrementDailyBudget, incrementDailyCostUsd } from "@/src/lib/ensemble/adapters/persistence"
+import { incrementDailyBudget, incrementDailyCostUsd, writeTelemetry } from "@/src/lib/ensemble/adapters/persistence"
 
 function makeEnv(initial: Record<string, string> = {}): { env: Env; kv: Map<string, string> } {
   const kv = new Map<string, string>(Object.entries(initial))
@@ -79,5 +79,39 @@ describe("incrementDailyBudget (call-count) stays separate from the cost accumul
     expect(kv.get(`ensemble-budget:${TODAY}`)).toBe("12")
     // Cost: JSON under the distinct cost key.
     expect(JSON.parse(kv.get(`ensemble-cost-usd:${TODAY}`)!)).toEqual({ date: TODAY, usd: 0.42 })
+  })
+})
+
+describe("writeTelemetry provider isolation", () => {
+  const reverseTs = String(9_999_999_999_999 - new Date(`${TODAY}T12:00:00Z`).getTime()).padStart(13, "0")
+
+  it("preserves the legacy GitHub key exactly", async () => {
+    const { env, kv } = makeEnv()
+    await writeTelemetry(env, { scmProvider: "github", owner: "acme", repo: "api", prNumber: 7 })
+
+    expect([...kv.keys()]).toEqual([`ensemble-review-telemetry:${reverseTs}:acme/api#7`])
+  })
+
+  it("writes a colliding GitLab identity only to the provider-specific keyspace", async () => {
+    const { env, kv } = makeEnv()
+    await writeTelemetry(env, { scmProvider: "gitlab", owner: "acme", repo: "api", prNumber: 7 })
+
+    expect([...kv.keys()]).toEqual([`gitlab:ensemble-review-telemetry:${reverseTs}:acme/api#7`])
+    expect([...kv.keys()].some((key) => key.startsWith("ensemble-review-telemetry:"))).toBe(false)
+    expect(JSON.parse(kv.values().next().value!)).toMatchObject({ scmProvider: "gitlab" })
+  })
+
+  it("fails closed without writing if an unsupported provider reaches the adapter at runtime", async () => {
+    const { env, kv } = makeEnv()
+
+    await expect(
+      writeTelemetry(env, {
+        scmProvider: "bitbucket" as "github",
+        owner: "acme",
+        repo: "api",
+        prNumber: 7,
+      }),
+    ).rejects.toThrow("Unsupported SCM provider: bitbucket")
+    expect(kv.size).toBe(0)
   })
 })

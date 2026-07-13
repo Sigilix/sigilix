@@ -182,6 +182,7 @@ describe("prepareSubmissionAffordance", () => {
     const store = new Map<string, string>()
     const puts: Array<[string, string]> = []
     const affordance = await prepareSubmissionAffordance({
+      scmProvider: "github",
       env: makeCounterEnv(store, puts),
       owner: "Sigilix",
       repo: "sigilix",
@@ -200,6 +201,7 @@ describe("prepareSubmissionAffordance", () => {
     const store = new Map<string, string>([[key, "7"]])
     const puts: Array<[string, string]> = []
     const affordance = await prepareSubmissionAffordance({
+      scmProvider: "github",
       env: makeCounterEnv(store, puts),
       owner: "Sigilix",
       repo: "sigilix",
@@ -217,6 +219,26 @@ describe("prepareSubmissionAffordance", () => {
 
     expect(store.get(key)).toBe("8")
     expect(puts).toEqual([[key, "8"]])
+  })
+
+  it("does not read or persist GitHub counters or render GitHub rerun links for GitLab", async () => {
+    const key = "pr-review-counter:Sigilix/sigilix#168"
+    const store = new Map<string, string>([[key, "7"]])
+    const puts: Array<[string, string]> = []
+    const affordance = await prepareSubmissionAffordance({
+      scmProvider: "gitlab",
+      env: makeCounterEnv(store, puts),
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 168,
+      event: "REQUEST_CHANGES",
+    })
+
+    expect(affordance.reviewCounter).toBeUndefined()
+    expect(affordance.retriggerUrl).toBeUndefined()
+    await affordance.persistReviewCounter()
+    expect(store.get(key)).toBe("7")
+    expect(puts).toHaveLength(0)
   })
 })
 

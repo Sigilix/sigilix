@@ -371,6 +371,7 @@ describe("handlePrReviewEnsemble — SIG-418 multi-batch shadow wiring", () => {
     })
 
     const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9100,
@@ -398,6 +399,7 @@ describe("handlePrReviewEnsemble — SIG-418 multi-batch shadow wiring", () => {
     mockGetFileContent.mockResolvedValueOnce(null)
 
     const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9101,
@@ -434,6 +436,7 @@ describe("handlePrReviewEnsemble — SIG-418 multi-batch shadow wiring", () => {
       configureFullReviewChat({ batchOneFinding: false })
       const backgroundWork: Promise<void>[] = []
       const result = await handlePrReviewEnsemble({
+        scmProvider: "github",
         owner: "Sigilix",
         repo: "sigilix",
         prNumber,
@@ -474,6 +477,7 @@ describe("handlePrReviewEnsemble — SIG-418 multi-batch shadow wiring", () => {
     configureFullReviewChat({ synthFindings: [] })
 
     const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9104,
@@ -527,6 +531,7 @@ describe("handlePrReviewEnsemble — SIG-418 multi-batch shadow wiring", () => {
     })
 
     const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9105,

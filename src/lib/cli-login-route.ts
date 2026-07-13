@@ -1,6 +1,10 @@
 // sig-cli-login — the Worker half of `sigilix login` (the browser/loopback CLI
-// auth flow, gh-auth-login-web pattern). Three endpoints:
+// auth flow, gh-auth-login-web pattern). Four endpoints:
 //
+//   GET  /v1/cli/installations — SESSION-authed lightweight discovery for the
+//                                portal's organization picker. It lists only
+//                                live GitHub-visible installation identities;
+//                                POST /authorize remains the access decision.
 //   POST /v1/cli/authorize  — SESSION-authed (the portal's /cli/authorize page
 //                             calls it on Approve, credentials:include). Checks
 //                             exact installation access and returns a sealed,
@@ -63,6 +67,7 @@ const CLI_KEY_NAME = "Sigilix CLI"
 // mirrors auth-setup-route.ts / org-overview-route.ts. Real users never approach
 // it; hitting it means something's wrong upstream, not that we should spin.
 const MAX_INSTALLATION_PAGES = 20
+const INSTALLATIONS_PER_PAGE = 100
 
 // Defensive length bounds on the CLI-supplied opaque nonces so a malformed
 // caller can't push oversized values into KV. Both are base64url-ish tokens the
@@ -230,6 +235,13 @@ export async function tryHandleCliLoginRoute(
   ctx: ExecutionContext,
   url: URL,
 ): Promise<Response> {
+  if (url.pathname === "/v1/cli/installations") {
+    if (request.method === "OPTIONS") return handlePortalPreflight(request, env)
+    if (request.method === "GET") {
+      return withPortalCors(request, await handleCliInstallationsRoute(request, env, ctx), env)
+    }
+    return methodNotAllowed()
+  }
   if (url.pathname === "/v1/cli/authorize") {
     if (request.method === "OPTIONS") return handlePortalPreflight(request, env)
     if (request.method === "POST") return withPortalCors(request, await handleCliAuthorizeRoute(request, env, ctx), env)
@@ -244,6 +256,76 @@ export async function tryHandleCliLoginRoute(
     return methodNotAllowed()
   }
   return json({ error: "not_found" }, 404)
+}
+
+/** One connected GitHub App installation shown in the Portal CLI picker. */
+export interface CliInstallationCandidate {
+  installationId: number
+  accountLogin: string
+  accountType: "Organization" | "User"
+}
+
+/**
+ * GET /v1/cli/installations — GitHub-grounded discovery, not authorization.
+ * The same session can already discover these installations (plus their
+ * repositories) through onboarding context; this smaller route deliberately
+ * avoids that repository fan-out. POST /authorize exact-rechecks the selected
+ * installation and remains the only access decision.
+ */
+export async function handleCliInstallationsRoute(
+  request: Request,
+  env: Env,
+  ctx?: ExecutionContext,
+): Promise<Response> {
+  let authed: AuthedSession | null
+  try {
+    authed = await requireSession(request, env, ctx)
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "cli-installations-session-read-failed",
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return json({ error: "list_unavailable" }, 503)
+  }
+  if (!authed) return json({ error: "unauthenticated" }, 401)
+
+  const githubUserId = authed.record.githubUserId
+  if (typeof githubUserId !== "number" || !Number.isSafeInteger(githubUserId) || githubUserId <= 0) {
+    return json({ error: "github_account_required" }, 403)
+  }
+
+  const encryptionKey = env.OPENCLAW_SESSION_ENCRYPTION_KEY
+  if (!encryptionKey) return json({ error: "misconfigured" }, 503)
+
+  let accessToken: string
+  try {
+    // Resolve once per request. A decrypt/integrity failure is an invalid
+    // session, not a GitHub availability problem.
+    accessToken = await getValidGithubToken({
+      env,
+      sessionId: authed.sessionId,
+      record: authed.record,
+      encryptionKeyB64url: encryptionKey,
+    })
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "cli-installations-session-token-invalid",
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return json({ error: "session_invalid" }, 401)
+  }
+
+  const listed = await fetchVisibleInstallations(accessToken)
+  if (!listed.ok) {
+    console.warn(JSON.stringify({ event: "cli-installations-list-failed", reason: listed.reason }))
+    if (listed.reason === "session_invalid") return json({ error: "session_invalid" }, 401)
+    return json({ error: "list_unavailable" }, 502)
+  }
+  return json({ installations: listed.installations }, 200)
 }
 
 /**
@@ -374,25 +456,52 @@ export async function handleCliAuthorizeRoute(request: Request, env: Env, ctx?: 
   return json({ code, login: access.login }, 200)
 }
 
+interface GitHubInstallationAccount {
+  login?: string
+  type?: string
+}
+
+interface GitHubInstallation {
+  id?: number
+  account?: GitHubInstallationAccount | null
+}
+
 interface UserInstallationsResponse {
   total_count?: number
-  installations?: Array<{ id?: number }>
+  installations?: GitHubInstallation[]
+}
+
+type VisibleInstallationsResult =
+  | { ok: true; installations: CliInstallationCandidate[] }
+  | { ok: false; reason: "session_invalid" | "upstream_unavailable" }
+
+function toCliInstallationCandidate(value: unknown): CliInstallationCandidate | null {
+  if (value == null || typeof value !== "object") return null
+  const installation = value as GitHubInstallation
+  const installationId = installation.id
+  const accountLogin = installation.account?.login
+  const accountType = installation.account?.type
+  if (!validInstallationId(installationId) || typeof accountLogin !== "string" || accountLogin.length === 0) {
+    return null
+  }
+  if (accountType !== "Organization" && accountType !== "User") return null
+  return { installationId, accountLogin, accountType }
 }
 
 /**
- * Every installation id the session's GitHub user-to-server token can see via
- * `GET /user/installations` — which includes BOTH the caller's PERSONAL installs
- * AND every ORG install they're an owner/member of. FAILS SOFT to [] on any
- * network/HTTP/JSON error so the caller cleanly refuses (409) rather than
- * minting against an unverified installation. Never logs the token.
+ * Every installation identity the session's GitHub user-to-server token can
+ * see. The strict result lets the picker distinguish a dead session (401) from
+ * genuine GitHub/network unavailability (502); a successful empty response is
+ * the only path to `installations: []`. Never logs the token.
  */
-async function fetchVisibleInstallationIds(accessToken: string): Promise<number[]> {
-  const ids: number[] = []
+async function fetchVisibleInstallations(accessToken: string): Promise<VisibleInstallationsResult> {
+  const installations: CliInstallationCandidate[] = []
+  const seenIds = new Set<number>()
   let seen = 0
   for (let page = 1; page <= MAX_INSTALLATION_PAGES; page++) {
     let res: Response
     try {
-      res = await fetch(`https://api.github.com/user/installations?per_page=100&page=${page}`, {
+      res = await fetch(`https://api.github.com/user/installations?per_page=${INSTALLATIONS_PER_PAGE}&page=${page}`, {
         headers: {
           accept: "application/vnd.github+json",
           "x-github-api-version": "2022-11-28",
@@ -401,24 +510,55 @@ async function fetchVisibleInstallationIds(accessToken: string): Promise<number[
         },
       })
     } catch {
-      return []
+      return { ok: false, reason: "upstream_unavailable" }
     }
-    if (!res.ok) return []
+    if (!res.ok) {
+      return {
+        ok: false,
+        reason: res.status === 401 || res.status === 403 ? "session_invalid" : "upstream_unavailable",
+      }
+    }
     let body: UserInstallationsResponse
     try {
       body = (await res.json()) as UserInstallationsResponse
     } catch {
-      return []
+      return { ok: false, reason: "upstream_unavailable" }
     }
-    const installs = Array.isArray(body.installations) ? body.installations : []
+    if (body == null || typeof body !== "object" || !Array.isArray(body.installations)) {
+      return { ok: false, reason: "upstream_unavailable" }
+    }
+    const installs = body.installations
+    let validOnPage = 0
     for (const inst of installs) {
-      if (typeof inst.id === "number") ids.push(inst.id)
+      const candidate = toCliInstallationCandidate(inst)
+      if (candidate) {
+        validOnPage++
+        if (!seenIds.has(candidate.installationId)) {
+          seenIds.add(candidate.installationId)
+          installations.push(candidate)
+        }
+      }
+    }
+    // A full page with no contract-valid installation is an upstream schema
+    // failure. Stop after one call rather than burning the entire page cap.
+    if (installs.length === INSTALLATIONS_PER_PAGE && validOnPage === 0) {
+      return { ok: false, reason: "upstream_unavailable" }
     }
     seen += installs.length
-    const total = typeof body.total_count === "number" ? body.total_count : seen
-    if (installs.length === 0 || seen >= total) break
+    const total =
+      typeof body.total_count === "number" && Number.isSafeInteger(body.total_count) && body.total_count >= 0
+        ? body.total_count
+        : null
+    const reachedStableTotal = total !== null && seen >= total && seenIds.size >= total
+    if (installs.length < INSTALLATIONS_PER_PAGE || reachedStableTotal) break
   }
-  return ids
+  return { ok: true, installations }
+}
+
+/** Legacy omitted-selector fallback keeps its historical fail-soft behavior. */
+async function fetchVisibleInstallationIds(accessToken: string): Promise<number[]> {
+  const result = await fetchVisibleInstallations(accessToken)
+  return result.ok ? result.installations.map((installation) => installation.installationId) : []
 }
 
 /** Resolve the legacy default only from the caller's fresh user token. */

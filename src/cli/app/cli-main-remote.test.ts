@@ -85,7 +85,9 @@ describe("cliMainRemote", () => {
   })
   it("--rich renders the panel (null overview) without crashing", async () => {
     const savedFC = process.env.FORCE_COLOR
+    const savedNoColor = process.env.NO_COLOR
     process.env.FORCE_COLOR = "1"
+    delete process.env.NO_COLOR
     try {
       mockRemote.mockResolvedValue(review([finding(5)]))
       const code = await withKey(() => cliMainRemote(["review", "--diff", "main", "--rich", "--no-splash"]))
@@ -94,6 +96,8 @@ describe("cliMainRemote", () => {
     } finally {
       if (savedFC === undefined) delete process.env.FORCE_COLOR
       else process.env.FORCE_COLOR = savedFC
+      if (savedNoColor === undefined) delete process.env.NO_COLOR
+      else process.env.NO_COLOR = savedNoColor
     }
   })
   it("RECALL-SAFETY: a remote failure propagates (throws → bin exits non-zero), never a clean pass", async () => {

@@ -19,6 +19,7 @@ import type { Env } from "@/src/shared/types/env"
 import { loadSigilixConfigSource } from "@/src/shared/adapters/config/load"
 import { parseSigilixConfigSource } from "@/src/shared/domain/config/parse"
 import { EMPTY_CONFIG, type SigilixConfig } from "@/src/shared/domain/config/types"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 
 const RAW_SNIPPET_MAX = 500
 const KV_TTL_SECONDS = 24 * 60 * 60 // 1 day
@@ -37,8 +38,15 @@ function buildLegacyMarker(headSha: string): string {
   return `<!-- openclaw:config-error:${headSha.slice(0, 7)} -->`
 }
 
-function buildKvKey(owner: string, repo: string, prNumber: number, headSha: string): string {
-  return `config-error-posted:${owner}/${repo}#${prNumber}:${headSha.slice(0, 7)}`
+function buildKvKey(
+  scmProvider: ScmProviderKind,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  headSha: string,
+): string {
+  const prefix = scmProvider === "github" ? "config-error-posted" : "gitlab:config-error-posted"
+  return `${prefix}:${owner}/${repo}#${prNumber}:${headSha.slice(0, 7)}`
 }
 
 function renderBody(reason: string, raw: string, headSha: string): string {
@@ -62,6 +70,7 @@ function renderBody(reason: string, raw: string, headSha: string): string {
 }
 
 export interface PostConfigErrorCommentArgs {
+  scmProvider: ScmProviderKind
   env: Env
   client: GitHubClient
   owner: string
@@ -80,6 +89,8 @@ export type PostResult =
 
 /**
  * Idempotently post the config-parse-error PR comment.
+ * Provider-neutral: both adapters expose top-level review comments and hide the
+ * HTML marker; provider-specific KV keys prevent cross-forge suppression.
  *
  * Telemetry:
  *   - `command-config-error-comment-posted` on successful new post
@@ -90,7 +101,7 @@ export type PostResult =
  * without re-listing comments. Best-effort — never throws.
  */
 export async function postConfigErrorComment(args: PostConfigErrorCommentArgs): Promise<PostResult> {
-  const { env, client, owner, repo, prNumber, headSha, reason, raw } = args
+  const { scmProvider, env, client, owner, repo, prNumber, headSha, reason, raw } = args
   if (!headSha) {
     return { kind: "skipped", reason: "missing-headsha" }
   }
@@ -100,7 +111,7 @@ export async function postConfigErrorComment(args: PostConfigErrorCommentArgs): 
   // `<!-- openclaw:config-error:<sha7> -->` marker on the GitHub-side
   // dedupe scan below.
   const legacyMarker = buildLegacyMarker(headSha)
-  const kvKey = buildKvKey(owner, repo, prNumber, headSha)
+  const kvKey = buildKvKey(scmProvider, owner, repo, prNumber, headSha)
 
   // KV fast-path dedupe.
   try {
@@ -205,6 +216,7 @@ export async function postConfigErrorComment(args: PostConfigErrorCommentArgs): 
 }
 
 export interface LoadConfigWithVisibleParseErrorArgs {
+  scmProvider: ScmProviderKind
   env: Env
   client: GitHubClient
   owner: string
@@ -225,15 +237,24 @@ export interface LoadConfigWithVisibleParseErrorArgs {
 export async function loadSigilixConfigWithVisibleParseError(
   args: LoadConfigWithVisibleParseErrorArgs,
 ): Promise<SigilixConfig> {
-  const { env, client, owner, repo, prNumber, headSha } = args
+  const { scmProvider, env, client, owner, repo, prNumber, headSha } = args
   const configSource = await loadSigilixConfigSource(client, owner, repo, headSha)
   if (configSource === null) return EMPTY_CONFIG
   const parsed = parseSigilixConfigSource(configSource)
   if (parsed.ok) return parsed.config
   console.warn(JSON.stringify({ event: "sigilix-config-parse-error", owner, repo, prNumber, reason: parsed.reason }))
-  postConfigErrorComment({ env, client, owner, repo, prNumber, headSha, reason: parsed.reason, raw: parsed.raw }).catch(
-    (err) =>
-      console.error(JSON.stringify({ event: "config-error-comment-bubbled", err: String(err), owner, repo, prNumber })),
+  postConfigErrorComment({
+    scmProvider,
+    env,
+    client,
+    owner,
+    repo,
+    prNumber,
+    headSha,
+    reason: parsed.reason,
+    raw: parsed.raw,
+  }).catch((err) =>
+    console.error(JSON.stringify({ event: "config-error-comment-bubbled", err: String(err), owner, repo, prNumber })),
   )
   return EMPTY_CONFIG
 }

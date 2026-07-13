@@ -52,6 +52,7 @@ export interface RecallAlarmResult {
 
 /** The subset of an `ensemble-review-telemetry` record this detector reads. */
 export interface RawReviewTelemetry {
+  scmProvider?: unknown
   prNumber?: unknown
   synthesizer?: { verdict?: { findings?: unknown } } | null
   degradedCoverage?: { rolesMissing?: unknown } | null
@@ -64,6 +65,7 @@ export interface RawReviewTelemetry {
  * whose recall we can judge).
  */
 export function recallOutcomeFromTelemetry(rec: RawReviewTelemetry): RecallReviewOutcome | null {
+  if (rec.scmProvider !== undefined && rec.scmProvider !== "github") return null
   if (typeof rec.prNumber !== "number") return null
   const synthFindings = rec.synthesizer?.verdict?.findings
   if (!Array.isArray(synthFindings)) return null

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest"
+import { beforeEach, describe, it, expect, vi } from "vitest"
 
 // The heavy persistence adapters are mocked to no-op spies so this unit isolates the tail's
 // orchestration (reviewId threading, AST auto-inline, fleet contribution). contributeFindingsToFleet
@@ -12,6 +12,9 @@ vi.mock("@/src/lib/ensemble/adapters/incremental-coverage", () => ({
 
 import { persistSubmittedReview, type PersistSubmittedReviewDeps } from "@/src/lib/ensemble/app/publish-finalize"
 import { writeReviewManifestForEnsemble } from "@/src/lib/ensemble/adapters/persistence"
+import { writeLastReviewedSha } from "@/src/lib/incremental-review"
+import { recordReviewedDiffHash } from "@/src/lib/noop-merge-detect"
+import { writeIncrementalReviewCoverage } from "@/src/lib/ensemble/adapters/incremental-coverage"
 import { readAggregate } from "@/src/lib/fleet/fleet-store"
 import { isEligible } from "@/src/shared/domain/fleet-aggregate"
 import type { Env } from "@/src/shared/types/env"
@@ -34,6 +37,7 @@ function mockEnv() {
 
 function makeDeps(env: Env, over: Partial<PersistSubmittedReviewDeps> = {}): PersistSubmittedReviewDeps {
   return {
+    scmProvider: "github",
     env,
     client: {} as unknown as GitHubClient,
     owner: "acme",
@@ -61,6 +65,10 @@ function makeDeps(env: Env, over: Partial<PersistSubmittedReviewDeps> = {}): Per
 }
 
 describe("persistSubmittedReview", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it("threads the confirmed reviewId into the manifest write and runs the AST auto-inline", async () => {
     const { env } = mockEnv()
     const ast = vi.fn(async () => {})
@@ -82,5 +90,27 @@ describe("persistSubmittedReview", () => {
     const { env, store } = mockEnv()
     await persistSubmittedReview(makeDeps(env, { sigilixConfig: { fleet: { contribute: false } } as SigilixConfig }), 1)
     expect([...store.keys()].some((k) => k.startsWith("fleet:agg:"))).toBe(false)
+  })
+
+  it("keeps GitLab submits out of every GitHub persistence namespace", async () => {
+    const { env, store } = mockEnv()
+    const ast = vi.fn(async () => {})
+
+    await persistSubmittedReview(
+      makeDeps(env, {
+        scmProvider: "gitlab",
+        repoId: 123,
+        incrementalCoverageEntries: [],
+        maybePostAstAutoInline: ast,
+      }),
+      4242,
+    )
+
+    expect(ast).toHaveBeenCalledOnce()
+    expect(writeReviewManifestForEnsemble).not.toHaveBeenCalled()
+    expect(writeLastReviewedSha).not.toHaveBeenCalled()
+    expect(writeIncrementalReviewCoverage).not.toHaveBeenCalled()
+    expect(recordReviewedDiffHash).not.toHaveBeenCalled()
+    expect([...store.keys()].some((key) => key.startsWith("fleet:"))).toBe(false)
   })
 })

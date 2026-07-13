@@ -78,6 +78,7 @@ import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import type { StackContext } from "@/src/lib/pr-stack"
 import type { SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation"
 import { prepareSubmissionAffordance, type SubmissionAffordance } from "./affordances"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 
 type ReviewableMap = ReturnType<typeof parseDiffToReviewablePositions>
 type AddedLineTextByLine = ReturnType<typeof buildAddedLineTextByLine>
@@ -90,6 +91,7 @@ type SynthesizerProvenanceFindings = SynthesizerProvenance["findings"]
 type FilteredProvenance = Array<SynthesizerProvenanceFindings[number] | undefined>
 
 export interface VerifyAndBuildArgs {
+  scmProvider: ScmProviderKind
   env: Env
   owner: string
   repo: string
@@ -195,6 +197,7 @@ export function securityAstFactsForReceiptJoin(
 
 export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<VerifyAndBuildResult> {
   const {
+    scmProvider,
     env,
     owner,
     repo,
@@ -783,6 +786,7 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
     ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
   })
   const primaryAffordance = await prepareSubmissionAffordance({
+    scmProvider,
     env,
     owner,
     repo,
@@ -790,7 +794,9 @@ export async function verifyAndBuildSubmission(a: VerifyAndBuildArgs): Promise<V
     event: primaryEvent,
   })
   const prepareFallbackAffordance = async (event: ReviewEvent): Promise<SubmissionAffordance> =>
-    event === primaryEvent ? primaryAffordance : prepareSubmissionAffordance({ env, owner, repo, prNumber, event })
+    event === primaryEvent
+      ? primaryAffordance
+      : prepareSubmissionAffordance({ scmProvider, env, owner, repo, prNumber, event })
 
   // SIG-318 (PR 0b): bind the render args so the golden-capture hook below
   // records the EXACT object passed to buildReviewSubmissionWithMetadata (no

@@ -18,8 +18,10 @@ import {
   type IncrementalReviewCoverageWriteEntry,
 } from "@/src/lib/ensemble/adapters/incremental-coverage"
 import { contributeFindingsToFleet } from "@/src/lib/fleet/fleet-contribute"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 
 export interface PersistSubmittedReviewDeps {
+  scmProvider: ScmProviderKind
   env: Env
   client: GitHubClient
   owner: string
@@ -50,6 +52,7 @@ export interface PersistSubmittedReviewDeps {
  */
 export async function persistSubmittedReview(deps: PersistSubmittedReviewDeps, reviewId: number): Promise<void> {
   const {
+    scmProvider,
     env,
     client,
     owner,
@@ -65,6 +68,10 @@ export async function persistSubmittedReview(deps: PersistSubmittedReviewDeps, r
     sigilixConfig,
     maybePostAstAutoInline,
   } = deps
+  if (scmProvider !== "github") {
+    await maybePostAstAutoInline()
+    return
+  }
   // ARC-184: write review-provenance manifest. Best-effort.
   // ARC-271: also persist the per-finding snapshot so the next push's review can compute a
   // new/still-open/likely-fixed delta against this run.

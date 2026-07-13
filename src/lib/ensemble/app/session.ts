@@ -39,6 +39,7 @@ import type { SkipNoticeReason } from "@/src/lib/review-comment-fallback"
 import { emitReviewSlo, computeReviewCost } from "@/src/lib/ensemble-slo-telemetry"
 import { incrementDailyBudget, incrementDailyCostUsd, writeTelemetry } from "@/src/lib/ensemble/adapters/persistence"
 import { appendUsage } from "@/src/features/tenancy"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 
 // ARC-250: `stale_head` is split out from `skipped` so the dispatcher
 // can short-circuit the Phase 3 fallback. Falling through to Phase 3
@@ -187,6 +188,7 @@ export function isDryRunEngineFailure(result: EnsembleResult): boolean {
  * site and `finalize`'s writes land on the same object by reference.
  */
 export interface FinalizeTelemetry {
+  scmProvider: ScmProviderKind
   owner: string
   repo: string
   prNumber: number
@@ -251,7 +253,11 @@ export async function finalize<Tel extends FinalizeTelemetry>(
   // never throws and no-ops without the binding or on incomplete identity).
   // Guard explicitly so we never issue a pointless call on headless/CLI dry-runs
   // or non-prod telemetry constructors that omit installationId/repoId.
-  if (typeof telemetry.installationId === "number" && typeof telemetry.repoId === "number") {
+  if (
+    telemetry.scmProvider === "github" &&
+    typeof telemetry.installationId === "number" &&
+    typeof telemetry.repoId === "number"
+  ) {
     try {
       const tokens = Object.values(telemetry.tokenUsageByModel).reduce(
         (n, m) =>

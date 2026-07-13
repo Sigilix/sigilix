@@ -43,6 +43,7 @@ import type { ValidationRejectionEvent } from "@/src/do/validation-metrics"
 import type { GraphRetrievalSample } from "@/src/do/graph-metrics"
 import type { GraphExpansionSample } from "@/src/do/graph-expansion-metrics"
 import type { ReviewStatusReporter } from "@/src/lib/pr-review-status-reporter"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 // SIG-386 (PR1): the concrete `EnsembleResult = EnsembleResultBase<EnsembleTelemetry>`
 // binding moved here from the orchestrator to land that file at <=1k lines. This is
 // `EnsembleTelemetry`'s natural co-location (the binding is one of its two named
@@ -52,6 +53,8 @@ import type { ReviewStatusReporter } from "@/src/lib/pr-review-status-reporter"
 import type { EnsembleResult as EnsembleResultBase } from "./session"
 
 export interface EnsembleHandlerArgs {
+  /** Required forge discriminator. GitLab must never inherit GitHub context namespaces. */
+  scmProvider: ScmProviderKind
   owner: string
   repo: string
   prNumber: number
@@ -121,10 +124,10 @@ export interface EnsembleHandlerArgs {
    */
   forceFullCoverage?: boolean
   /**
-   * SIG-304 (review CLI): a pre-built GitHubClient injected by a headless/Node
-   * caller. When present, the orchestrator uses it instead of `buildClient(env,
-   * installationId)` (skips the GitHub-App id/key + KV-token cache). Absent on every
-   * prod/Worker path → byte-identical behavior.
+   * Pre-built review client. The legacy field/concrete type remains because
+   * GitHub-only branches use methods beyond the shared `ScmReviewClient` port;
+   * GitLab injects its structural port implementation and the required provider
+   * discriminator keeps those wider GitHub branches unreachable.
    */
   githubClient?: GitHubClient
   /**
@@ -140,6 +143,7 @@ export interface EnsembleHandlerArgs {
 }
 
 export interface EnsembleTelemetry {
+  scmProvider: ScmProviderKind
   schemaVersion: 3
   owner: string
   repo: string

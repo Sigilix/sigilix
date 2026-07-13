@@ -1,28 +1,7 @@
-// SIG-318 (PR 12g-1) — the FETCH-AND-PACK seam of the PR-review orchestrator
-// (app layer, context-build phase). Carved verbatim from `handlePrReviewEnsemble`,
-// between the merged-on-approve short-circuit and the pre-flight retrieval snapshot.
-//
-// Two functions split AROUND the orchestral label gate (the cost-controls exit
-// stays god-file-side):
-//   - `fetchDiffAndConfig`  — the diff + open-PRs fetch, the incremental-select
-//     marker read, the per-repo sigilix.json load, the AI-instruction-ingest
-//     decision flag, and `resolveCostControlsConfig` (the label-gate INPUT). The
-//     gate DECISION (its `finalize(... "skipped")` exit) stays in the orchestrator.
-//   - `packAndRoute`        — the AI-instruction ingest (mutates the returned
-//     `sigilixConfig`), the hunk-level split/filter/pack + char-level truncation,
-//     the path-instructions + scoped-rules resolution, the `reviewable` map, the
-//     deterministic-checks + secret-scan, the legacy router (`decideSpecialists`),
-//     and the SIG-226/SIG-224 dynamic-dispatcher block (its own try/catch moved
-//     whole; it MUTATES `router`, so the function returns the final router). The
-//     router-empty skip (the `finalize(... "skipped")` exit) stays orchestral.
-//
-// The moved statements are byte-identical apart from the plumbing — the `args.X`
-// captures became explicit params, the in-place declarations became returns, and
-// the god-file-private `countLines` (whose only caller was the router-decision
-// line, here) relocated with it. ZERO behavior change.
-//
-// Dependency rule: every dependency imports from its canonical NON-god-file home.
-// It never imports the orchestrator god-file.
+// SIG-318 (PR 12g-1): context fetch/pack seam extracted from the ensemble
+// orchestrator around its label gate. It owns diff/config reads plus packing,
+// routing, deterministic checks, and scoped rules; orchestral exits remain above.
+// Dependency rule: canonical leaves only, never the orchestrator shim.
 
 import type { Env } from "@/src/shared/types/env"
 import { GitHubClient } from "@/src/shared/adapters/github"
@@ -82,6 +61,7 @@ import {
 import { parseDiffToReviewablePositions } from "@/src/shared/util/diff-positions"
 import { countLines } from "@/src/lib/ensemble/domain/diff-stats"
 import { buildDispatcherSavingsSummary, emitDispatcherSavingsSummary } from "@/src/lib/ensemble-perf-telemetry"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 export { startPrReviewConnectedAppEvidence } from "./connected-app-evidence"
 type ReviewableMap = ReturnType<typeof parseDiffToReviewablePositions>
 type MatchedPathInstructions = ReturnType<typeof resolvePathInstructionsForChangedPaths>
@@ -101,6 +81,7 @@ export interface FetchDiffTelemetry {
 }
 
 export interface FetchDiffAndConfigArgs {
+  scmProvider: ScmProviderKind
   env: Env
   client: GitHubClient
   owner: string
@@ -124,7 +105,7 @@ export interface FetchDiffAndConfigResult {
 }
 
 export async function fetchDiffAndConfig(a: FetchDiffAndConfigArgs): Promise<FetchDiffAndConfigResult> {
-  const { env, client, owner, repo, prNumber, headSha, ensembleConfig, telemetry } = a
+  const { scmProvider, env, client, owner, repo, prNumber, headSha, ensembleConfig, telemetry } = a
   // ARC-182: fetch open PRs in parallel with the full PR diff. Stack
   // detection needs the open-PR list to find downstack/upstack peers;
   // running the fetch here (after the stale-head guard, in parallel
@@ -156,7 +137,7 @@ export async function fetchDiffAndConfig(a: FetchDiffAndConfigArgs): Promise<Fet
   // `selectDiff` in incremental-review.ts for the full rationale.
   // The compareDiff fetch is gone too: its result is no longer
   // consumed, so spending the round-trip would be pure waste.
-  const lastReviewed = await readLastReviewedSha(env, owner, repo, prNumber)
+  const lastReviewed = scmProvider === "github" ? await readLastReviewedSha(env, owner, repo, prNumber) : null
   const diffSelection = selectDiff({
     fullDiff: fullPrDiff,
     compareDiff: null,
@@ -174,7 +155,16 @@ export async function fetchDiffAndConfig(a: FetchDiffAndConfigArgs): Promise<Fet
   // committed `sigilix.json` (SIG-107 visible parse-error; EMPTY_CONFIG fallback)
   // merged committed-wins + recall-safe with the portal dashboard config (see
   // resolve-effective-config.ts). Loaded BEFORE the diff split (ARC-176 pathFilters).
-  const sigilixConfig = await resolveEffectiveSigilixConfig(a)
+  const sigilixConfig = await resolveEffectiveSigilixConfig({
+    scmProvider,
+    env,
+    client,
+    owner,
+    repo,
+    prNumber,
+    headSha,
+    ...(scmProvider === "github" && a.installationId !== undefined ? { installationId: a.installationId } : {}),
+  })
   const shouldLoadAiInstructions = shouldIngestAiInstructions(
     sigilixConfig.guidance,
     ensembleConfig.flags.ingestAiInstructions,
@@ -254,6 +244,7 @@ export interface PackAndRouteTelemetry {
 }
 
 export interface PackAndRouteArgs {
+  scmProvider: ScmProviderKind
   env: Env
   client: GitHubClient
   owner: string
@@ -324,6 +315,7 @@ export interface PackAndRouteResult {
 
 export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteResult> {
   const {
+    scmProvider,
     env,
     client,
     owner,
@@ -406,8 +398,9 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
     ...(repoId !== undefined ? { repoId } : {}),
     meta,
     // VERIFIED unlock Phase 2: forceFullCoverage → "off" (non-incremental) so the
-    // receipt re-review re-fires findings + the join runs. See EnsembleHandlerArgs doc.
-    mode: forceFullCoverage ? "off" : ensembleConfig.flags.incrementalReviewMode,
+    // receipt re-review re-fires findings + the join runs. GitLab also stays full:
+    // incremental coverage is persisted in GitHub review-manifest namespaces.
+    mode: scmProvider === "github" && !forceFullCoverage ? ensembleConfig.flags.incrementalReviewMode : "off",
     filesAfterFilter,
     signal: orchCtrl.signal,
   })
@@ -490,7 +483,10 @@ export async function packAndRoute(a: PackAndRouteArgs): Promise<PackAndRouteRes
   // walk + glob matching. Cached compiled matchers are reused
   // across roles in this run (one matcher build per PR, not per
   // changed file).
-  const scopedRulesManifest = await loadCompiledScopedRulesManifest(env, owner, repo)
+  const scopedRulesManifest =
+    scmProvider === "github"
+      ? await loadCompiledScopedRulesManifest(env, owner, repo)
+      : { perDirectoryRules: [], globRules: [] }
   const scopedRuleSelection = resolveScopedRulesForChangedPaths(
     scopedRulesManifest,
     reviewedFiles.map((f) => f.path),

@@ -179,6 +179,7 @@ describe("renderReviewCommentFallback", () => {
 
 describe("postReviewCommentFallback — happy path", () => {
   const baseArgs = {
+    scmProvider: "github" as const,
     owner: "Sigilix",
     repo: "sigilix",
     prNumber: 90,
@@ -234,6 +235,7 @@ describe("postReviewCommentFallback — happy path", () => {
 
 describe("postReviewCommentFallback — dedupe", () => {
   const baseArgs = {
+    scmProvider: "github" as const,
     owner: "acme",
     repo: "site",
     prNumber: 42,
@@ -255,6 +257,26 @@ describe("postReviewCommentFallback — dedupe", () => {
 
     expect(out).toEqual({ ok: true, reason: "dedupe-hit" })
     expect(mockCreateIssueComment).not.toHaveBeenCalled()
+  })
+
+  it("does not let a colliding GitHub fallback key suppress a GitLab comment", async () => {
+    const { kv, store, writes } = makeKvStub()
+    store.set("pr-review-comment-fallback:acme/site#42@aaaaaaaaaaaaaaaaaaaa", String(Date.now()))
+    mockCreateIssueComment.mockResolvedValueOnce({ id: 1 })
+    const client = new GitHubClient({ token: "t" })
+
+    const out = await postReviewCommentFallback({
+      env: { OPENCLAW_STATE: kv } as unknown as Env,
+      client,
+      ...baseArgs,
+      scmProvider: "gitlab",
+    })
+
+    expect(out).toMatchObject({ ok: true, reason: "posted" })
+    expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+    expect(writes.map((write) => write.key)).toContain(
+      "gitlab:pr-review-comment-fallback:acme/site#42@aaaaaaaaaaaaaaaaaaaa",
+    )
   })
 
   it("uses distinct dedupe keys per (PR, headSha) — one head's fallback does not suppress another's", async () => {
@@ -307,6 +329,7 @@ describe("postReviewCommentFallback — dedupe", () => {
 
 describe("postReviewCommentFallback — post failure", () => {
   const baseArgs = {
+    scmProvider: "github" as const,
     owner: "acme",
     repo: "site",
     prNumber: 42,
@@ -339,6 +362,7 @@ describe("postReviewCommentFallback — telemetry shape", () => {
     const client = new GitHubClient({ token: "t" })
 
     await postReviewCommentFallback({
+      scmProvider: "github",
       env: { OPENCLAW_STATE: kv } as unknown as Env,
       client,
       owner: "Sigilix",
@@ -363,6 +387,7 @@ describe("postReviewCommentFallback — telemetry shape", () => {
     const client = new GitHubClient({ token: "t" })
 
     await postReviewCommentFallback({
+      scmProvider: "github",
       env: { OPENCLAW_STATE: kv } as unknown as Env,
       client,
       owner: "Sigilix",
@@ -423,6 +448,7 @@ describe("renderReviewSkipNotice", () => {
 
 describe("postReviewSkipNotice — happy path", () => {
   const baseArgs = {
+    scmProvider: "github" as const,
     owner: "Sigilix",
     repo: "sigilix",
     prNumber: 92,
@@ -462,6 +488,7 @@ describe("postReviewSkipNotice — dedupe", () => {
     const client = new GitHubClient({ token: "t" })
 
     const out = await postReviewSkipNotice({
+      scmProvider: "github",
       env: { OPENCLAW_STATE: kv } as unknown as Env,
       client,
       owner: "acme",
@@ -484,6 +511,7 @@ describe("postReviewSkipNotice — dedupe", () => {
     const client = new GitHubClient({ token: "t" })
 
     const out = await postReviewSkipNotice({
+      scmProvider: "github",
       env: { OPENCLAW_STATE: kv } as unknown as Env,
       client,
       owner: "acme",
@@ -497,6 +525,28 @@ describe("postReviewSkipNotice — dedupe", () => {
     if (out.ok) expect(out.reason).toBe("posted")
     expect(mockCreateIssueComment).toHaveBeenCalledOnce()
   })
+
+  it("does not let a colliding GitHub skip key suppress a GitLab notice", async () => {
+    const { kv, store, writes } = makeKvStub()
+    store.set("pr-review-skip-notice:acme/site#42@aaaaaaaaaaaaaaaaaaaa", String(Date.now()))
+    mockCreateIssueComment.mockResolvedValueOnce({ id: 1 })
+    const client = new GitHubClient({ token: "t" })
+
+    const out = await postReviewSkipNotice({
+      scmProvider: "gitlab",
+      env: { OPENCLAW_STATE: kv } as unknown as Env,
+      client,
+      owner: "acme",
+      repo: "site",
+      prNumber: 42,
+      headSha: "aaaaaaaaaaaaaaaaaaaa",
+      reason: "internal_error",
+    })
+
+    expect(out).toMatchObject({ ok: true, reason: "posted" })
+    expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+    expect(writes.map((write) => write.key)).toContain("gitlab:pr-review-skip-notice:acme/site#42@aaaaaaaaaaaaaaaaaaaa")
+  })
 })
 
 describe("postReviewSkipNotice — post failure", () => {
@@ -506,6 +556,7 @@ describe("postReviewSkipNotice — post failure", () => {
     const client = new GitHubClient({ token: "t" })
 
     const out = await postReviewSkipNotice({
+      scmProvider: "github",
       env: { OPENCLAW_STATE: kv } as unknown as Env,
       client,
       owner: "acme",

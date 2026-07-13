@@ -312,6 +312,7 @@ export async function handleReviewApiRoute(request: Request, env: Env, ctx: Exec
     if (!(await admitUnderDailyCeiling(env))) return json({ error: "daily_limit_exceeded" }, 429)
     contextDiff = parsed.diff
     args = {
+      scmProvider: "github",
       owner: parsed.owner,
       repo: parsed.repo,
       prNumber: parsed.prNumber,
@@ -448,6 +449,7 @@ export async function handleReviewApiRoute(request: Request, env: Env, ctx: Exec
         /* code context is best-effort — leave undefined */
       }
       args = {
+        scmProvider: "github",
         owner: parsed.owner,
         repo: parsed.repo,
         prNumber: parsed.prNumber,

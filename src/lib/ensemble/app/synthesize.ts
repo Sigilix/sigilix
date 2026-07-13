@@ -44,6 +44,7 @@ import {
 import { runSarifEvidence } from "@/src/features/sarif-evidence"
 import { withComposedTimeout } from "@/src/lib/agent-loop"
 import { runReviewMemoryLookup } from "@/src/lib/review-memory/lookup"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 import { renderReviewMemoryForPrompt } from "@/src/lib/review-memory/render"
 import type { ReviewMemoryFinding, ReviewMemorySkipReason } from "@/src/lib/review-memory/types"
 import {
@@ -127,6 +128,7 @@ export interface SynthesizeTelemetry {
 }
 
 export interface SynthesizeArgs<R> {
+  scmProvider: ScmProviderKind
   env: Env
   owner: string
   repo: string
@@ -185,6 +187,7 @@ export type SynthesizePhaseResult<R> =
 
 export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<SynthesizePhaseResult<R>> {
   const {
+    scmProvider,
     env,
     owner,
     repo,
@@ -374,20 +377,23 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
     // outer guard avoids paying the (cheap) lookup cost when
     // disabled.
     const reviewMemoryConfig = resolveReviewMemoryConfig(sigilixConfig)
-    const reviewMemoryResult = await runReviewMemoryLookup({
-      env,
-      owner,
-      repo,
-      prNumber,
-      paths: filePaths,
-      config: reviewMemoryConfig,
-      // SIG-247 Phase 1: thread the immutable repo.id so the lookup
-      // hits the dual-write keyspace. When absent (legacy queue
-      // message / slash-command raw-send), the lookup degrades to
-      // legacy-only reads and the canary telemetry `key_mode` field
-      // surfaces the gap.
-      ...(repoId !== undefined ? { repoId } : {}),
-    })
+    const reviewMemoryResult =
+      scmProvider === "github"
+        ? await runReviewMemoryLookup({
+            env,
+            owner,
+            repo,
+            prNumber,
+            paths: filePaths,
+            config: reviewMemoryConfig,
+            // SIG-247 Phase 1: thread the immutable repo.id so the lookup
+            // hits the dual-write keyspace. When absent (legacy queue
+            // message / slash-command raw-send), the lookup degrades to
+            // legacy-only reads and the canary telemetry `key_mode` field
+            // surfaces the gap.
+            ...(repoId !== undefined ? { repoId } : {}),
+          })
+        : ({ skipped: true, reason: "retrieval-disabled-env", findings: [] } as const)
     const memoryBlock = reviewMemoryResult.skipped ? "" : renderReviewMemoryForPrompt(reviewMemoryResult.findings)
     // SIG-276 Phase 3: hand the injected memories (which carry telemetry
     // `shadowClaims` when the shadow flag is on) to the outer-scope holder
@@ -404,7 +410,7 @@ export async function runSynthPhase<R>(a: SynthesizeArgs<R>): Promise<Synthesize
     // `off` skips. Reassigned in place so every downstream synth attempt / retry /
     // shadow path picks it up. Best-effort — the loader never throws.
     const synthLearningsMode = resolveLearningsMode(env.OPENCLAW_LEARNINGS_MODE)
-    if (synthLearningsMode !== "off" && repoId !== undefined) {
+    if (scmProvider === "github" && synthLearningsMode !== "off" && repoId !== undefined) {
       const learningsEntries = await loadEffectiveLearnings({ env, owner, repo, repoId, prNumber })
       const relevantLearnings = selectRelevantForPaths(learningsEntries, filePaths)
       console.log(

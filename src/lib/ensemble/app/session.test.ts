@@ -57,6 +57,7 @@ const MIGRATION_SQL = readFileSync(
 
 function makeTelemetry(overrides: Partial<FinalizeTelemetry> = {}): FinalizeTelemetry {
   return {
+    scmProvider: "github",
     owner: "acme",
     repo: "site",
     prNumber: 7,
@@ -176,6 +177,17 @@ describe("finalize — SIG-343 usage-ledger metering", () => {
     const res = await finalize(tel, env, "posted", null)
 
     expect(res.status).toBe("posted")
+    expect(await usageLedgerRowCount(db)).toBe(0)
+  })
+
+  it("does NOT write GitHub usage for GitLab even when colliding installation and repo ids are populated", async () => {
+    const env = { SIGILIX_PLATFORM_DB: db } as unknown as Env
+    const tel = makeTelemetry({ scmProvider: "gitlab", installationId: 10, repoId: 200 })
+
+    const res = await finalize(tel, env, "posted", null)
+
+    expect(res.status).toBe("posted")
+    expect(res.telemetry.scmProvider).toBe("gitlab")
     expect(await usageLedgerRowCount(db)).toBe(0)
   })
 

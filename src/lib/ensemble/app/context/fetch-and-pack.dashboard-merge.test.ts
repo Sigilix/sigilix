@@ -49,6 +49,7 @@ function makeClient(committedConfig: string | null): FetchDiffAndConfigArgs["cli
 
 function baseArgs(env: Env, client: FetchDiffAndConfigArgs["client"]): FetchDiffAndConfigArgs {
   return {
+    scmProvider: "github",
     env,
     client,
     owner: "acme",

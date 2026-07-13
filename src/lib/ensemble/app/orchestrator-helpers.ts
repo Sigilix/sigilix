@@ -100,6 +100,7 @@ export function validateForSubmission(
  * — the body is byte-identical to the prior inline literal. ZERO behavior change.
  */
 export function createEnsembleTelemetrySkeleton(args: {
+  scmProvider: import("@/src/lib/ensemble/ports").ScmProviderKind
   mode: "shadow" | "post"
   owner: string
   repo: string
@@ -108,8 +109,9 @@ export function createEnsembleTelemetrySkeleton(args: {
   tokenUsageByModel: TokenUsageByModel
   startMs: number
 }): EnsembleTelemetry {
-  const { mode, owner, repo, prNumber, headSha, tokenUsageByModel, startMs } = args
+  const { scmProvider, mode, owner, repo, prNumber, headSha, tokenUsageByModel, startMs } = args
   return {
+    scmProvider,
     schemaVersion: 3,
     owner,
     repo,
@@ -200,6 +202,7 @@ export function buildDeterministicErroredReviewMeta(
  * deterministic annotations at call time (the specialists phase consumes that closure).
  */
 export async function runBailWithSkipNotice(args: {
+  scmProvider: import("@/src/lib/ensemble/ports").ScmProviderKind
   reason: SkipNoticeReason
   opts: { dispatchedRoles?: readonly string[] } | undefined
   env: Env
@@ -221,6 +224,7 @@ export async function runBailWithSkipNotice(args: {
     return finalize(telemetry, env, "skipped", cache)
   }
   const out = await postReviewSkipNotice({
+    scmProvider: args.scmProvider,
     env,
     client,
     owner,

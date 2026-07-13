@@ -17,8 +17,10 @@ import { loadSigilixConfigWithVisibleParseError } from "@/src/lib/sigilix-config
 import { resolveDashboardConfigLayers } from "@/src/lib/review-config-store"
 import { dashboardReviewConfigToSigilixConfig, mergeSigilixConfigLayers } from "@/src/shared/domain/config/merge"
 import type { SigilixConfig } from "@/src/shared/domain/config/types"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 
 export interface ResolveEffectiveConfigArgs {
+  scmProvider: ScmProviderKind
   env: Env
   client: GitHubClient
   owner: string
@@ -34,10 +36,12 @@ export interface ResolveEffectiveConfigArgs {
  * comment) AND the dashboard layers in parallel, then merge committed-wins.
  */
 export async function resolveEffectiveSigilixConfig(a: ResolveEffectiveConfigArgs): Promise<SigilixConfig> {
-  const { env, client, owner, repo, prNumber, headSha, installationId } = a
+  const { scmProvider, env, client, owner, repo, prNumber, headSha, installationId } = a
   const [committedConfig, dashboardLayers] = await Promise.all([
-    loadSigilixConfigWithVisibleParseError({ env, client, owner, repo, prNumber, headSha }),
-    resolveDashboardConfigLayers(env, installationId, owner, repo),
+    loadSigilixConfigWithVisibleParseError({ scmProvider, env, client, owner, repo, prNumber, headSha }),
+    scmProvider === "github"
+      ? resolveDashboardConfigLayers(env, installationId, owner, repo)
+      : Promise.resolve({ org: null, repo: null }),
   ])
   return mergeSigilixConfigLayers(
     dashboardLayers.org ? dashboardReviewConfigToSigilixConfig(dashboardLayers.org) : null,

@@ -169,6 +169,7 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
         )
         // Fire-and-forget — never block the user-invoked command.
         postConfigErrorComment({
+          scmProvider: "github",
           env,
           client,
           owner,

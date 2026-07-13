@@ -20,6 +20,7 @@ import type { Env } from "@/src/shared/types/env"
 import type { ReviewEvent } from "@/src/lib/ensemble/domain/verdict"
 import type { ReviewSuggestionEmission } from "@/src/lib/ensemble/render/finding-comment"
 import { buildPrUrl, preparePrReviewCounter } from "@/src/lib/pr-review-counter"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 
 export interface SubmissionAffordance {
   reviewCounter?: number
@@ -75,13 +76,14 @@ export function buildSuggestionEmissionLogEvents(
 }
 
 export async function prepareSubmissionAffordance(args: {
+  scmProvider: ScmProviderKind
   env: Env
   owner: string
   repo: string
   prNumber: number
   event: ReviewEvent
 }): Promise<SubmissionAffordance> {
-  if (args.event !== "REQUEST_CHANGES") {
+  if (args.scmProvider !== "github" || args.event !== "REQUEST_CHANGES") {
     return { persistReviewCounter: async () => undefined }
   }
   const counter = await preparePrReviewCounter(args.env, args.owner, args.repo, args.prNumber)

@@ -98,6 +98,12 @@ for (let i = 0; i < kept.length; i++) {
       console.warn(`[bakeoff] [${tag}] ensemble payload not an object — skipping`)
       continue
     }
+    // Legacy rows have no provider field and are GitHub. Explicit non-GitHub
+    // rows must never be paired against a GitHub Phase 3 review.
+    if (ensemble.scmProvider !== undefined && ensemble.scmProvider !== "github") {
+      console.warn(`[bakeoff] [${tag}] non-GitHub telemetry — skipping`)
+      continue
+    }
     const { owner, repo, prNumber, headSha } = ensemble
     if (!owner || !repo || !prNumber || !headSha) {
       console.warn(`[bakeoff] [${tag}] missing owner/repo/prNumber/headSha — skipping`)

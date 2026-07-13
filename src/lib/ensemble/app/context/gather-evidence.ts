@@ -62,6 +62,7 @@ import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import { RETRIEVAL_PREFLIGHT_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import { type EnsembleRunCtx, emitPhaseCompleted, emitSubphaseCompleted } from "@/src/lib/ensemble-perf-telemetry"
 import { TOP_K_BRANCH } from "@/src/lib/ensemble/domain/retrieval-constants"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 
 type AstRulesConfig = ReturnType<typeof resolveAstRulesConfig>
 type DepVulnFindings = Exclude<Awaited<ReturnType<typeof runDepVulnScan>>, { skipped: true }>["findings"]
@@ -87,6 +88,7 @@ export interface GatherEvidenceTelemetry {
 }
 
 export interface GatherEvidenceArgs {
+  scmProvider: ScmProviderKind
   env: Env
   client: GitHubClient
   owner: string
@@ -129,6 +131,7 @@ export interface GatherEvidenceResult {
 
 export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<GatherEvidenceResult> {
   const {
+    scmProvider,
     env,
     client,
     owner,
@@ -150,6 +153,7 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
   const cache = createRetrievalCache({
     maxCalls: ensembleConfig.tunables.maxRetrieveCallsPerPr,
   })
+  const githubContext = scmProvider === "github"
   const namespace = indexNamespace(owner, repo)
   // Cross-repo context. Resolved ONCE here as the UNION of (a) the flag-gated
   // auto-discovery siblings (same-installation, owner-scoped manifest set) and
@@ -157,7 +161,9 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
   // honored — explicit config is the admin's opt-in, not gated behind the
   // auto-discovery flag). `[]` ⇒ unchanged single-repo retrieval; capped +
   // truncation-logged inside the resolver.
-  const crossRepoNamespaces = await resolveReviewCrossRepoNamespaces(env, installationId, owner, repo)
+  const crossRepoNamespaces = githubContext
+    ? await resolveReviewCrossRepoNamespaces(env, installationId, owner, repo)
+    : []
   const preflightQuery = `${meta.title}\n\n${meta.body ?? ""}`
   // Phase 4a.1: cap the pre-flight Vectorize round-trip so a slow
   // retrieval can't silently consume the synth budget. Failure here
@@ -179,7 +185,8 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
   // perf-relevant code (single namespace → bias is via query terms, not
   // a separate index). Best-effort: never rejects, falls back to the
   // shared snapshot.
-  const wantPerfRetrieval = shouldRunPerfRetrieval(router.specialists, preflightCache.budgetRemaining())
+  const wantPerfRetrieval =
+    githubContext && shouldRunPerfRetrieval(router.specialists, preflightCache.budgetRemaining())
   let perfQuery = ""
   let perfChunks: RetrievedChunk[] | null = null
   let perfRetrievalPromise: Promise<RetrievedChunk[] | null> | null = null
@@ -205,7 +212,7 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
   // function soft-fails per leg, and we add a defensive .catch). Flag-gated
   // (default off); the result is appended to the shared snapshot AFTER the
   // branch-aware merge block below so the merge can't clobber it.
-  const wantMultiCorpus = multiCorpusEnabled(env)
+  const wantMultiCorpus = githubContext && multiCorpusEnabled(env)
   const multiCorpusPromise: Promise<MultiCorpusResult> | null = wantMultiCorpus
     ? retrieveMultiCorpus(env, owner, repo, preflightQuery, { prNumber, headSha }).catch(() => ({
         pr: [],
@@ -216,18 +223,20 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
   // path) so a 15s pre-flight cap-hit shows up in the trace.
   const preflightStartMs = Date.now()
   try {
-    const preflight = await withComposedTimeout(
-      () =>
-        preflightCache.cachedRetrieve({
-          caller: "preflight",
-          query: preflightQuery,
-          namespace,
-          fetcher: () => retrieveChunks({ text: preflightQuery, teamKey: namespace, env, crossRepoNamespaces }),
-        }),
-      RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
-      orchCtrl.signal,
-    )
-    preflightChunks = preflight.chunks
+    if (githubContext) {
+      const preflight = await withComposedTimeout(
+        () =>
+          preflightCache.cachedRetrieve({
+            caller: "preflight",
+            query: preflightQuery,
+            namespace,
+            fetcher: () => retrieveChunks({ text: preflightQuery, teamKey: namespace, env, crossRepoNamespaces }),
+          }),
+        RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
+        orchCtrl.signal,
+      )
+      preflightChunks = preflight.chunks
+    }
   } catch (err) {
     // If the orchestrator's outer signal aborted, propagate — that's a
     // genuine internal_error, not a pre-flight timeout.
@@ -321,12 +330,14 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
   // OPENCLAW_SYMBOL_RETRIEVAL=on. Budget is read here, before the fetch; no
   // retrieval consumes between here and the block below, so the value is
   // identical to reading it at the block.
-  const wantSymbolRetrieval = shouldRunSymbolRetrieval(
-    ensembleConfig.flags.symbolRetrieval,
-    router.specialists,
-    preflightCache.budgetRemaining(),
-  )
-  const wantBranchAware = (ensembleConfig.flags.branchAwareRetrieval ?? "").trim().toLowerCase() === "on"
+  const wantSymbolRetrieval =
+    githubContext &&
+    shouldRunSymbolRetrieval(ensembleConfig.flags.symbolRetrieval, router.specialists, preflightCache.budgetRemaining())
+  const wantBranchAware =
+    githubContext && (ensembleConfig.flags.branchAwareRetrieval ?? "").trim().toLowerCase() === "on"
+  // Provider-neutral: cards are derived from the current diff + current-file
+  // reads through the injected SCM client. GitHub-backed retrieval/graph inputs
+  // are already empty for non-GitHub reviews, so GitLab keeps local MR evidence.
   const wantDynamicReviewEvidence = dynamicReviewEvidenceEnabled(env)
   // SIG-317 Part 4b: the asymmetry injector needs the changed-files corpus too
   // (CodeRabbit #308 — else `on`/`shadow` silently no-ops when astRules is off).

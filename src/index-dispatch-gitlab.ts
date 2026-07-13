@@ -165,6 +165,7 @@ export async function dispatchGitLabMrReview(
   // paths (which key on `repoId`, and would call GitHub-only client verbs like
   // `getCommit` the GitLab client lacks) stay inert.
   const result = await handlePrReviewEnsemble({
+    scmProvider: "gitlab",
     owner,
     repo,
     prNumber: job.mrIid,

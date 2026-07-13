@@ -441,6 +441,14 @@ describe("ingest — mapTelemetryToReview (real prod shapes)", () => {
     expect(mapTelemetryToReview({ owner: "o", repo: "r", prNumber: 0 }, 1)).toBeNull() // non-positive
   })
 
+  it("accepts legacy/explicit GitHub rows but rejects an explicit GitLab row from a legacy colliding key", () => {
+    const base = { owner: "acme", repo: "api", prNumber: 7, synthesizer: { verdict: { findings: [] } } }
+
+    expect(mapTelemetryToReview(base, 1)).not.toBeNull()
+    expect(mapTelemetryToReview({ ...base, scmProvider: "github" }, 1)).not.toBeNull()
+    expect(mapTelemetryToReview({ ...base, scmProvider: "gitlab" }, 1)).toBeNull()
+  })
+
   it("coerces non-finite score/line to 0 so a NaN-scored finding fails the score gate", () => {
     const raw = {
       owner: "o",

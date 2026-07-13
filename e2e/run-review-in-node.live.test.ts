@@ -59,6 +59,7 @@ describe.skipIf(!GH_TOKEN || !OR_KEY)("SIG-304 — headless dry-run review (engi
     })
 
     const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: FIXTURE.owner,
       repo: FIXTURE.repo,
       prNumber: FIXTURE.prNumber,

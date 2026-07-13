@@ -1,9 +1,5 @@
-// SIG-318 (PR 12c) — SPECIALISTS+SYNTH seam of the PR-review orchestrator
-// (app layer): shadow/prod specialist fan-out, quorum collection, coverage
-// gates, synth delegation, and recall floors.
-//
-// Dependency rule: every dependency imports from its canonical NON-god-file home.
-// It never imports the orchestrator god-file.
+// SIG-318 (PR 12c): specialist fan-out, quorum, coverage gates, synthesis,
+// and recall floors. Imports canonical leaves only, never the orchestrator shim.
 
 import type { Env } from "@/src/shared/types/env"
 import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
@@ -71,6 +67,7 @@ import {
 } from "./multibatch-enforce"
 import type { ReviewMemoryFinding } from "@/src/lib/review-memory/types"
 import type { DiffFileBlock } from "@/src/lib/diff-packing"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 
 type SecurityManifest = Awaited<ReturnType<typeof buildSecurityFactManifest>>
 type AstResult = Awaited<ReturnType<typeof runAstRules>>
@@ -97,6 +94,7 @@ export interface SpecialistsTelemetry
 }
 
 export interface SpecialistsArgs<R> {
+  scmProvider: ScmProviderKind
   env: Env
   owner: string
   repo: string
@@ -160,6 +158,7 @@ export type SpecialistsPhaseResult<R> =
 
 export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Promise<SpecialistsPhaseResult<R>> {
   const {
+    scmProvider,
     env,
     owner,
     repo,
@@ -935,6 +934,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     synthInputCapFor(multiBatchEnforce !== null, ensembleConfig.flags.synthSourceFloorLow === "on"),
   )
   const synthPhase = await runSynthPhase({
+    scmProvider,
     env,
     owner,
     repo,

@@ -254,6 +254,7 @@ describe("handlePrReviewEnsemble — empty-router skip path (SIG-224 Phase 0)", 
     mockGetFileContent.mockResolvedValueOnce(null)
 
     const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9001,
@@ -289,6 +290,7 @@ describe("handlePrReviewEnsemble — empty-router skip path (SIG-224 Phase 0)", 
     const statusReporter = { report: vi.fn(), flush: vi.fn(async () => undefined) }
 
     await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9001,
@@ -335,6 +337,7 @@ describe("handlePrReviewEnsemble — empty-router skip path (SIG-224 Phase 0)", 
     mockChat.mockRejectedValue(new Error("test boundary — specialists not mocked"))
 
     const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9002,
@@ -375,6 +378,7 @@ describe("handlePrReviewEnsemble — label-gate skip path (SIG-224 Phase 0 follo
     )
 
     const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9003,
@@ -415,6 +419,7 @@ describe("handlePrReviewEnsemble — label-gate skip path (SIG-224 Phase 0 follo
     mockChat.mockRejectedValue(new Error("test boundary — specialists not mocked"))
 
     const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9004,
@@ -470,6 +475,7 @@ describe("handlePrReviewEnsemble — incremental empty-delta skip path (false-AP
     await env.OPENCLAW_STATE.put("pr-review-coverage:Sigilix/sigilix#9100", PRIOR_COVERAGE("BLOB1"))
 
     const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9100,
@@ -510,6 +516,7 @@ describe("handlePrReviewEnsemble — incremental empty-delta skip path (false-AP
     await env.OPENCLAW_STATE.put("pr-review-coverage:Sigilix/sigilix#9101", PRIOR_COVERAGE("BLOB1"))
 
     const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9101,
@@ -556,6 +563,7 @@ describe("handlePrReviewEnsemble — deterministic SARIF annotation threading (S
     mockCreateIssueComment.mockResolvedValueOnce({ id: 12_345 })
 
     const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9005,
@@ -623,6 +631,7 @@ describe("handlePrReviewEnsemble — testing evidence repo-tree abort handling (
     )
 
     const resultPromise = handlePrReviewEnsemble({
+      scmProvider: "github",
       owner: "Sigilix",
       repo: "sigilix",
       prNumber: 9006,

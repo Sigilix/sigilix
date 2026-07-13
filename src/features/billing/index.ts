@@ -40,10 +40,16 @@ export {
 export {
   acquireOrgSeatBillingLease,
   deriveBillableSeatQuantity,
+  ensureSeatReconciliationTenant,
   readActiveOrgSeatBillingOperation,
+  readStripeCustomerBinding,
+  readStripeInstallationBinding,
   readStripeSeatSubscription,
   readTenantBillingState,
   releaseOrgSeatBillingLease,
+  writeStripeSeatSubscriptionSnapshot,
+  type StripeSeatSubscriptionSnapshotWrite,
+  type StripeSeatSubscriptionSnapshotWriteResult,
 } from "./adapters/d1-seat-reconciliation-store"
 export {
   decodeStripeSeatSubscriptionRow,

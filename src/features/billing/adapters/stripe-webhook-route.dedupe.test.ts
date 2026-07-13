@@ -18,6 +18,7 @@ const MIGRATION_SQL = [
   readFileSync(new URL("../../../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8"),
   readFileSync(new URL("../../../../migrations/0011_add_tenant_subscription_status.sql", import.meta.url), "utf8"),
   readFileSync(new URL("../../../../migrations/0012_add_tenant_billing_source.sql", import.meta.url), "utf8"),
+  readFileSync(new URL("../../../../migrations/0020_create_stripe_seat_reconciliation.sql", import.meta.url), "utf8"),
 ].join("\n")
 
 function makeKv() {
@@ -105,6 +106,30 @@ function installStripeFetch(state: StripeState) {
         headers: { "content-type": "application/json" },
       })
     }
+    if (u.pathname === "/v1/subscription_items" && method === "GET") {
+      const subscriptionId = u.searchParams.get("subscription") ?? ""
+      const subscription = Object.values(state.subs)
+        .flat()
+        .find((candidate) => candidate.id === subscriptionId)
+      const data = subscription
+        ? [
+            {
+              id: `si_${subscription.id}`,
+              quantity: subscription.priceId === "price_teams" ? 10 : 1,
+              price: {
+                id: subscription.priceId,
+                lookup_key: null,
+                nickname: null,
+                recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
+              },
+            },
+          ]
+        : []
+      return new Response(JSON.stringify({ object: "list", data, has_more: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }
     if (u.pathname.startsWith("/v1/subscriptions/") && method === "DELETE") {
       const id = decodeURIComponent(u.pathname.slice("/v1/subscriptions/".length))
       if (state.failCancel) {
@@ -185,7 +210,7 @@ describe("stripe webhook — single active subscription guard", () => {
     expect(res.status).toBe(200)
     expect(state.deleted).toEqual(["sub_new"]) // newer cancelled; older survivor NOT
     expect(await readTier(db, 42)).toBe("max") // driven by the surviving (oldest) sub
-    expect(fetchMock).toHaveBeenCalledTimes(2) // one list + one cancel
+    expect(fetchMock).toHaveBeenCalledTimes(4) // list + two item reads + one cancel
   })
 
   it("checkout.session.completed with an EXPANDED active dup also routes through the guard", async () => {
@@ -239,10 +264,7 @@ describe("stripe webhook — single active subscription guard", () => {
     expect(await readTier(db, 42)).toBe("max") // survivor's tier, not the stale 'pro'
   })
 
-  it("duplicate event but the survivor's price is UNMAPPED → never persists the dup's tier (tenant left unchanged)", async () => {
-    // The event is for a duplicate (sub_new / price_pro), but the surviving oldest sub has a
-    // grandfathered/unconfigured price we can't map. We must NOT fall back to the dup's 'pro';
-    // the tenant is left untouched (link-only) rather than set to a cancelled sub's tier.
+  it("an older unrelated subscription never displaces or cancels the configured Sigilix subscription", async () => {
     const state: StripeState = {
       subs: {
         cus_DUP: [
@@ -260,12 +282,11 @@ describe("stripe webhook — single active subscription guard", () => {
     )
 
     expect(res.status).toBe(200)
-    expect(state.deleted).toEqual(["sub_new"]) // the duplicate is still cancelled
-    // Tenant tier was NOT set to the cancelled dup's 'pro' — no row written (link-only).
-    expect(await readTier(db, 88)).toBeNull()
+    expect(state.deleted).toEqual([])
+    expect(await readTier(db, 88)).toBe("pro")
   })
 
-  it("stale active event but Stripe shows NO live subscription → does not (re)grant a paid tier", async () => {
+  it("stale active event but Stripe shows NO live subscription → records free provider truth", async () => {
     // An out-of-order / late subscription.created arrives after every sub was cancelled: the
     // live list is empty. The stale 'active' payload must NOT re-upgrade the tenant.
     const state: StripeState = {
@@ -281,7 +302,7 @@ describe("stripe webhook — single active subscription guard", () => {
 
     expect(res.status).toBe(200)
     expect(state.deleted).toEqual([]) // nothing to cancel
-    expect(await readTier(db, 71)).toBeNull() // tenant NOT upgraded from the stale payload
+    expect(await readTier(db, 71)).toBe("free") // tenant is never upgraded from the stale payload
   })
 
   it("the subscription.deleted for a dup WE cancelled does NOT downgrade the surviving tenant", async () => {
@@ -388,8 +409,8 @@ describe("stripe webhook — single active subscription guard", () => {
       env,
     )
 
-    expect(res.status).toBe(500) // Stripe redelivers; no tier written from an unverified list
-    expect(await readTier(db, 44)).toBeNull()
+    expect(res.status).toBe(500) // Stripe redelivers; no PAID tier written from an unverified list
+    expect(await readTier(db, 44)).toBe("free")
   })
 
   it("a genuine single subscription → NO cancel call, tier from the event (happy path)", async () => {
@@ -407,13 +428,13 @@ describe("stripe webhook — single active subscription guard", () => {
     expect(res.status).toBe(200)
     expect(await readTier(db, 7)).toBe("pro")
     expect(state.deleted).toEqual([]) // no DELETE ever issued
-    expect(fetchMock).toHaveBeenCalledTimes(1) // the list only
+    expect(fetchMock).toHaveBeenCalledTimes(2) // subscription list + exact item list
     for (const call of fetchMock.mock.calls) {
       expect((call[1] as RequestInit | undefined)?.method ?? "GET").not.toBe("DELETE")
     }
   })
 
-  it("cancel-API failure → webhook still 200, oldest survivor drives tier, never cancelled", async () => {
+  it("cancel-API failure → webhook blocks the ambiguous snapshot and never applies a tier", async () => {
     const state = twoActiveDup()
     state.failCancel = true
     installStripeFetch(state)
@@ -423,11 +444,9 @@ describe("stripe webhook — single active subscription guard", () => {
       env,
     )
 
-    expect(res.status).toBe(200) // never crashes despite the failed cancel
+    expect(res.status).toBe(200) // permanent provider ambiguity is recorded, not retried forever
     expect(state.deleted).toEqual([]) // cancel failed → nothing actually cancelled
-    // The surviving OLDEST sub still drives the tier — the tenant is not left on the dup's
-    // 'pro' nor dropped to free.
-    expect(await readTier(db, 55)).toBe("max")
+    expect(await readTier(db, 55)).toBe("free")
   })
 
   it("different customers with ONE sub each → untouched (no cross-customer cancellation)", async () => {

@@ -23,6 +23,10 @@ const MIGRATION_SEAT_SQL = readFileSync(
   new URL("../../migrations/0007_create_org_seat_assignment.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_ORG_ACCESS_SQL = readFileSync(
+  new URL("../../migrations/0022_create_org_workspace_access.sql", import.meta.url),
+  "utf8",
+)
 
 function makeKV(): KVNamespace {
   const store = new Map<string, string>()
@@ -45,7 +49,34 @@ async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(MIGRATION_USAGE_SQL)
   await db.exec(MIGRATION_SEAT_SQL)
+  await db.exec(MIGRATION_ORG_ACCESS_SQL)
   return db
+}
+
+async function seedOrgAccess(
+  db: D1Database,
+  args: { installationId: number; githubUserId: string; role: "admin" | "member"; revokedAt?: string | null },
+): Promise<void> {
+  const nowIso = "2026-07-13T00:00:00.000Z"
+  const revokedAt = args.revokedAt ?? null
+  await db
+    .prepare(
+      "INSERT INTO org_workspace_access" +
+        " (installation_id, github_user_id, role, created_at, updated_at, revoked_at," +
+        " updated_by, last_audit_id, last_action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(
+      args.installationId,
+      args.githubUserId,
+      args.role,
+      nowIso,
+      nowIso,
+      revokedAt,
+      "test-seed",
+      `seat-test-${args.installationId}-${args.githubUserId}-${revokedAt === null ? "active" : "revoked"}`,
+      revokedAt === null ? "bootstrap_admin" : "access_removed",
+    )
+    .run()
 }
 
 async function seedSession(
@@ -230,6 +261,28 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     // No fetch needed — body parse fails before auth.
     const res = await handleOrgSeatRoute(seatReq("sess-1", 1, "dev", { assigned: "yes" }), env, undefined, 1, "dev")
     expect(res.status).toBe(400)
+  })
+
+  it("415s a non-JSON managed request before GitHub access or first-admin bootstrap", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-csrf", "octocat", 111)
+    const env = { ...baseEnv(kv, db), OPENCLAW_ORG_MEMBERSHIP_MODE: "on" } as Env
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+    const request = new Request("https://x/v1/org/1/members/dev/seat", {
+      method: "POST",
+      headers: { "content-type": "text/plain", cookie: `${SESSION_COOKIE}=sess-csrf` },
+      body: JSON.stringify({ assigned: true }),
+    })
+
+    const res = await handleOrgSeatRoute(request, env, undefined, 1, "dev")
+
+    expect(res.status).toBe(415)
+    expect(fetchMock).not.toHaveBeenCalled()
+    await expect(db.prepare("SELECT COUNT(*) AS n FROM org_workspace_access").first<{ n: number }>()).resolves.toEqual({
+      n: 0,
+    })
   })
 
   it("admin assigns a member's seat → 200 + persisted assigned=1", async () => {
@@ -595,7 +648,7 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     expect((await readSeatRow(db, 1, "co-admin"))?.assigned).toBe(1)
   })
 
-  it("end-to-end via the worker entrypoint: the POST route is registered and CORS-wrapped", async () => {
+  it("end-to-end via worker.fetch: rollout-off keeps the live GitHub admin path", async () => {
     const db = await makeDb()
     const kv = makeKV()
     await seedSession(kv, "sess-1", "octocat", 111)
@@ -618,6 +671,73 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     const res = await worker.fetch(req, env, ctx)
     expect(res.status).toBe(200)
     expect(res.headers.get("access-control-allow-origin")).toBe("https://app.sigilix.ai")
+    expect((await readSeatRow(db, 1, "dev"))?.assigned).toBe(0)
+  })
+
+  it("end-to-end via worker.fetch: managed access rejects a revoked stored admin before the seat write", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-revoked", "octocat", 111)
+    await seedOrgAccess(db, {
+      installationId: 1,
+      githubUserId: "111",
+      role: "admin",
+      revokedAt: "2026-07-13T00:01:00.000Z",
+    })
+    await insertRepo(db, 100, 1, "octocat/api")
+    await insertMemberActivity(db, { installationId: 1, repoId: 100, prNumber: 1, authorLogin: "dev" })
+    const env = { ...baseEnv(kv, db), OPENCLAW_ORG_MEMBERSHIP_MODE: "on" } as Env
+    const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
+    // The caller remains a live GitHub admin. The stored revocation must still
+    // be authoritative while managed membership is enabled.
+    stubGitHub({ installations: [{ id: 1, account: { type: "User", login: "octocat" } }] })
+
+    const res = await worker.fetch(
+      new Request("https://x/v1/org/1/members/dev/seat", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: `${SESSION_COOKIE}=sess-revoked`,
+          origin: "https://app.sigilix.ai",
+        },
+        body: JSON.stringify({ assigned: false }),
+      }),
+      env,
+      ctx,
+    )
+
+    expect(res.status).toBe(403)
+    expect(res.headers.get("access-control-allow-origin")).toBe("https://app.sigilix.ai")
+    expect(await readSeatRow(db, 1, "dev")).toBeNull()
+  })
+
+  it("end-to-end via worker.fetch: managed access lets an active stored admin update a seat", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-active", "octocat", 111)
+    await seedOrgAccess(db, { installationId: 1, githubUserId: "111", role: "admin" })
+    await insertRepo(db, 100, 1, "octocat/api")
+    await insertMemberActivity(db, { installationId: 1, repoId: 100, prNumber: 1, authorLogin: "dev" })
+    const env = { ...baseEnv(kv, db), OPENCLAW_ORG_MEMBERSHIP_MODE: "on" } as Env
+    const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
+    // Sigilix's stored role is authoritative in managed mode even when the
+    // separate GitHub organization role is only member.
+    stubGitHub({
+      installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "member", state: "active", organization: { login: "acme" } }],
+    })
+
+    const res = await worker.fetch(
+      new Request("https://x/v1/org/1/members/dev/seat", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: `${SESSION_COOKIE}=sess-active` },
+        body: JSON.stringify({ assigned: false }),
+      }),
+      env,
+      ctx,
+    )
+
+    expect(res.status).toBe(200)
     expect((await readSeatRow(db, 1, "dev"))?.assigned).toBe(0)
   })
 

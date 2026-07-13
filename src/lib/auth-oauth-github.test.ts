@@ -306,7 +306,9 @@ describe("handleGitHubAuthCallback", () => {
     expect(sessionEntry![1]).not.toContain("ghu_token")
   })
 
-  it("remember me OFF (state.remember=false) → browser-session cookie (no Max-Age) + short-TTL record, secure flags intact", async () => {
+  it("remember me OFF (state.remember=false) → STILL a persistent 30-day cookie (always-persistent), flag stored, secure flags intact", async () => {
+    // sig-always-persistent-session: remember=false no longer yields a
+    // browser-session cookie; the flag is still recorded for back-compat.
     const kv = makeKV({
       "auth_state:nonce-1": JSON.stringify({ createdAt: Date.now(), remember: false }),
     })
@@ -315,7 +317,7 @@ describe("handleGitHubAuthCallback", () => {
     const res = await handleGitHubAuthCallback(req, env(kv))
     expect(res.status).toBe(302)
     const sessionCookie = res.headers.getSetCookie().find((c) => c.startsWith("__Host-sigilix_session="))!
-    expect(sessionCookie).not.toContain("Max-Age")
+    expect(sessionCookie).toContain("Max-Age=2592000")
     expect(sessionCookie).not.toContain("Expires")
     expect(sessionCookie).toContain("HttpOnly")
     expect(sessionCookie).toContain("Secure")

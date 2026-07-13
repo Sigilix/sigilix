@@ -56,10 +56,9 @@ function extractCreds(
   const b = body as Record<string, unknown>
   if (typeof b.email !== "string" || typeof b.password !== "string") return null
   const name = typeof b.name === "string" && b.name.trim() ? b.name.trim().slice(0, 120) : null
-  // "Remember me": persistent 30-day session unless the client explicitly
-  // opts out with `remember: false`. Any non-boolean (or absent) value keeps
-  // the persistent default, so an older client that never sends the flag is
-  // unaffected.
+  // "Remember me" is parsed + stored for back-compat only; every session is a
+  // persistent 30-day session now (sig-always-persistent-session), so
+  // `remember: false` no longer shortens it.
   const remember = b.remember !== false
   return { email: b.email, password: b.password, name, remember }
 }

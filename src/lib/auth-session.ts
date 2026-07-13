@@ -16,12 +16,13 @@ const SESSION_COOKIE = "__Host-sigilix_session"
 const STATE_COOKIE = "__Host-sigilix_oauth_state"
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
 const SESSION_TTL_SECONDS = SESSION_TTL_MS / 1000
-// "Remember me" OFF: a browser-SESSION cookie (no Max-Age → dropped on browser
-// close) backed by a shorter server-side KV TTL. The KV cap is deliberately
-// short so an abandoned/forgotten session on a shared machine cannot be
-// resurrected for weeks; the cookie and this record still expire independently
-// (whichever comes first wins), and logout always revokes both regardless.
-const SESSION_SHORT_TTL_SECONDS = 24 * 60 * 60 // 1 day
+// sig-always-persistent-session: EVERY session is a persistent 30-day cookie +
+// 30-day KV record, regardless of the login's "remember me" choice. The former
+// remember-me-OFF path (a browser-SESSION cookie with no Max-Age + a 1-day KV
+// TTL) was retired so a returning visitor is never unexpectedly signed out — a
+// SameSite=None browser-session cookie was the most fragile thing across
+// browsers. The `remember` field is still accepted/stored for back-compat, but
+// no longer shortens a session. Logout still revokes cookie + record.
 
 export interface SessionRecord {
   login: string
@@ -48,13 +49,11 @@ export interface SessionRecord {
   // Which provider minted this session. Absent on legacy GitHub sessions
   // (treat as "github").
   provider?: "github" | "google" | "gitlab" | "password"
-  // "Remember me" choice at login. `false` → a browser-session cookie + the
-  // shorter KV TTL (SESSION_SHORT_TTL_SECONDS); anything else (true OR absent)
-  // → the persistent 30-day cookie + TTL. Absent on legacy sessions minted
-  // before this field, which are treated as persistent to preserve their
-  // existing lifetime. Stored so touchSession/setSessionEmail refresh the KV
-  // record under the SAME TTL the session was issued with, never silently
-  // promoting a short session to 30 days.
+  // "Remember me" choice at login, retained for back-compat and audit only.
+  // sig-always-persistent-session: every session is now a persistent 30-day
+  // cookie + record regardless of this value (see sessionTtlSeconds /
+  // setSessionCookie), so `false` no longer shortens anything. Still stored
+  // when a login sends it so existing serialized records round-trip unchanged.
   remember?: boolean
   // AES-GCM ciphertext of the GitHub user-to-server access token. For non-GitHub
   // sessions there is no GitHub token, so this holds the encryption of an EMPTY
@@ -177,15 +176,14 @@ export function mintStateNonce(): string {
 
 /**
  * The KV `expirationTtl` (seconds) a session record should be written with.
- * `remember === false` → the short (browser-session) TTL; true OR absent →
- * the persistent 30-day TTL. Legacy records (no `remember` field) therefore
- * keep their original 30-day lifetime unchanged. This single mapping is the
- * source of truth shared by createSession/touchSession/setSessionEmail AND
- * mirrors the cookie Max-Age chosen in setSessionCookie, so the cookie can
- * never outlive its server-side record.
+ * Always the persistent 30-day TTL (sig-always-persistent-session) — the
+ * `remember` argument is retained so every call site keeps compiling but no
+ * longer shortens a session. Shared by createSession/touchSession/
+ * updateSessionTokens/setSessionEmail, and mirrors the cookie Max-Age in
+ * setSessionCookie so the cookie can never outlive its server-side record.
  */
-export function sessionTtlSeconds(remember: boolean | undefined): number {
-  return remember === false ? SESSION_SHORT_TTL_SECONDS : SESSION_TTL_SECONDS
+export function sessionTtlSeconds(_remember?: boolean): number {
+  return SESSION_TTL_SECONDS
 }
 
 // ─── session CRUD against KV ────────────────────────────────────────
@@ -210,9 +208,9 @@ export async function createSession(args: {
   email?: string
   provider?: "github" | "google" | "gitlab" | "password"
   name?: string
-  // "Remember me" choice. `false` → browser-session cookie + short KV TTL;
-  // true OR omitted → persistent 30-day cookie + TTL (preserves prior behavior
-  // for any caller that doesn't opt in).
+  // "Remember me" choice, stored for back-compat/audit only. Every session is a
+  // persistent 30-day cookie + record regardless of this value
+  // (sig-always-persistent-session).
   remember?: boolean
 }): Promise<SessionRecord> {
   const { kv, sessionId, login, name, githubUserId, userId, email, provider, remember, encryptionKeyB64url } = args
@@ -255,11 +253,11 @@ export async function getSession(args: { kv: KVNamespace; sessionId: string }): 
 
 export async function touchSession(args: { kv: KVNamespace; sessionId: string; record: SessionRecord }): Promise<void> {
   // Sliding TTL — refresh lastSeenAt + KV TTL on each authenticated request so
-  // an active user never gets logged out at exactly the horizon. The horizon
-  // matches how the session was ISSUED (record.remember): a "remember me" OFF
-  // session keeps sliding on the 1-day cap and is never silently promoted to 30
-  // days. Done as fire-and-forget from the request path; the race-window
-  // consequence is at most a slightly stale lastSeenAt.
+  // an active user never gets logged out at exactly the horizon. Every session
+  // is a persistent 30-day record now (sig-always-persistent-session), so each
+  // touch re-writes the full 30-day TTL. Done as fire-and-forget from the
+  // request path; the race-window consequence is at most a slightly stale
+  // lastSeenAt.
   const updated: SessionRecord = { ...args.record, lastSeenAt: Date.now() }
   await args.kv.put(`${SESSION_KV_PREFIX}${args.sessionId}`, JSON.stringify(updated), {
     expirationTtl: sessionTtlSeconds(args.record.remember),
@@ -274,9 +272,10 @@ export async function deleteSession(args: { kv: KVNamespace; sessionId: string }
  * Persist a freshly-refreshed GitHub App user-to-server token onto the live
  * session (sig-portal-bugs). Re-encrypts the new access + rotated refresh token
  * under the session's key + AAD, records the new expiry timestamps, and writes
- * the record back under the SAME issued TTL (see touchSession) so a refresh
- * never silently extends — or shortens — the session's lifetime. All other
- * fields (identity, remember, createdAt) are preserved; lastSeenAt is bumped.
+ * the record back under the persistent 30-day TTL (every session is persistent
+ * now — sig-always-persistent-session) so a token refresh never changes the
+ * session's lifetime. All other fields (identity, remember, createdAt) are
+ * preserved; lastSeenAt is bumped.
  */
 export async function updateSessionTokens(args: {
   kv: KVNamespace
@@ -352,8 +351,8 @@ export async function setSessionEmail(args: {
 }): Promise<void> {
   const updated: SessionRecord = { ...args.record, email: args.email, lastSeenAt: Date.now() }
   await args.kv.put(`${SESSION_KV_PREFIX}${args.sessionId}`, JSON.stringify(updated), {
-    // Preserve the session's issued lifetime (see touchSession) — capturing an
-    // email must not extend a "remember me" OFF session to 30 days.
+    // Every session is a persistent 30-day record (sig-always-persistent-session);
+    // capturing an email re-writes that same 30-day TTL.
     expirationTtl: sessionTtlSeconds(args.record.remember),
   })
 }
@@ -370,7 +369,7 @@ export function readCookie(request: Request, name: string): string | null {
   return null
 }
 
-export function setSessionCookie(sessionId: string, remember = true): string {
+export function setSessionCookie(sessionId: string, _remember = true): string {
   const parts = [
     `${SESSION_COOKIE}=${sessionId}`,
     "Path=/",
@@ -404,15 +403,13 @@ export function setSessionCookie(sessionId: string, remember = true): string {
     // Domain regardless of SameSite.
     "SameSite=None",
   ]
-  // "Remember me" ON (default): a PERSISTENT cookie whose Max-Age equals the
-  // 30-day KV record TTL — matched so the cookie never outlives its server-side
-  // session. OFF: NO Max-Age/Expires attribute at all → a browser-SESSION
-  // cookie the browser discards on close, backed by the short KV TTL. Either
-  // way the `__Host-` prefix + HttpOnly + Secure + SameSite=None above are
-  // unchanged, and logout still revokes both sides.
-  if (remember) {
-    parts.push(`Max-Age=${SESSION_TTL_SECONDS}`)
-  }
+  // sig-always-persistent-session: ALWAYS a persistent cookie whose Max-Age
+  // equals the 30-day KV record TTL — matched so the cookie never outlives its
+  // server-side session. The former remember-me-OFF branch (no Max-Age → a
+  // browser-session cookie discarded on close) was retired so visitors are not
+  // unexpectedly signed out. `_remember` is retained only to keep call sites
+  // compiling. Logout still revokes both sides.
+  parts.push(`Max-Age=${SESSION_TTL_SECONDS}`)
   return parts.join("; ")
 }
 

@@ -76,7 +76,9 @@ export async function handleGoogleAuthKickoff(request: Request, env: GoogleOauth
   }
 
   const url = new URL(request.url)
-  // Persistent 30-day session unless the login form opted out (`?remember=0`).
+  // Parsed + stored for back-compat only; every session is a persistent 30-day
+  // session now (sig-always-persistent-session), so `?remember=0` no longer
+  // shortens it.
   const remember = url.searchParams.get("remember") !== "0"
   const rawRedirect = url.searchParams.get("redirectAfter") ?? undefined
   const redirectAfter = rawRedirect ? safeRedirectAfter(rawRedirect, baseUrl(env)) : undefined

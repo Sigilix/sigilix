@@ -98,14 +98,17 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   // (2026-06-16): per-attempt cap = SPECIALIST_TIMEOUT_MS (the role wall) — the
   // sole limiter, so one deep pass can use the FULL wall and a fast-fail retry uses the
   // REMAINING wall time; total wall-clock stays bounded at SPECIALIST_TIMEOUT_MS.
-  // fallback (2026-07-13): the OpenRouter twin `deepseek/deepseek-v4-pro` (same model/quality,
-  // different provider) kills the single-provider SPOF — normal path stays all-Ollama (≈zero
-  // OpenRouter cost); it fires ONLY on Turbo failure/exhaustion. Keys resolve per leg; if
-  // OPENROUTER_API_KEY is unset the leg is stripped (primary still runs). Both-fail → banner.
+  // provider (2026-07-13, revised): primary is v4-pro on **OpenRouter** — Ollama Turbo
+  // v4-pro was timing out (~8min) on real full-size PRs and degrading reviews to the
+  // "partial" banner; OpenRouter serves the same model fast, at a few cents/PR. The Ollama
+  // twin `deepseek-v4-pro:cloud` (same model/quality, different provider) is the fallback —
+  // kills the single-provider SPOF, fires ONLY on OpenRouter failure/exhaustion. Keys resolve
+  // per leg by model-id shape; if a leg's key is unset it is stripped (primary still runs).
+  // Both-fail → recall-safe "specialist unavailable" banner.
   logic: {
-    primary: "deepseek-v4-pro:cloud",
+    primary: "deepseek/deepseek-v4-pro",
     retries: 2,
-    fallback: "deepseek/deepseek-v4-pro",
+    fallback: "deepseek-v4-pro:cloud",
     perAttemptTimeoutMs: SPECIALIST_TIMEOUT_MS,
   },
   // security — deepseek/deepseek-v4-flash: fast reasoner; reasoning stays OFF (it

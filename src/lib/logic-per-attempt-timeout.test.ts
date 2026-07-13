@@ -50,10 +50,13 @@ describe("SIG-369 — per-attempt cap = the role wall (all-roles uncap)", () => 
     expect(SPECIALIST_CONFIGS.performance.retries).toBe(2)
     expect(SPECIALIST_CONFIGS.tests.retries).toBe(1)
     // Both fallbacks share the role wall (no extra wall-clock): security (SIG-468) recovers
-    // parse-exhaustion, and logic (2026-07-13) degrades a Turbo outage to the OpenRouter v4-pro
-    // twin. performance + tests stay fallback:null (OpenRouter self-routes their attempts).
+    // parse-exhaustion on the OpenRouter v4-pro twin; logic (2026-07-13) runs v4-pro on
+    // OpenRouter and degrades an OpenRouter outage to the Ollama Turbo v4-pro twin.
+    // performance + tests stay fallback:null (OpenRouter self-routes their attempts).
     for (const role of ROLES) {
-      if (role === "security" || role === "logic") {
+      if (role === "logic") {
+        expect(SPECIALIST_CONFIGS[role].fallback).toBe("deepseek-v4-pro:cloud")
+      } else if (role === "security") {
         expect(SPECIALIST_CONFIGS[role].fallback).toBe("deepseek/deepseek-v4-pro")
       } else {
         expect(SPECIALIST_CONFIGS[role].fallback).toBeNull()

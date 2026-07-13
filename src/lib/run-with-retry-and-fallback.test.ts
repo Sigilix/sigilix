@@ -501,8 +501,8 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
         )
         const result = await runSpecialist({
           role,
-          // logic now routes to Ollama Turbo (deepseek-v4-pro:cloud), the rest to
-          // OpenRouter — the fan-out needs both keys so every role resolves one.
+          // logic routes to OpenRouter (deepseek/deepseek-v4-pro) with an Ollama Turbo
+          // fallback; the fan-out needs both keys so every role resolves one.
           apiKeys: { ollama: "test-key", openrouter: "test-key" },
           systemPrompt: "system",
           initialMessage: "user",

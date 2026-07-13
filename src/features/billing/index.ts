@@ -39,14 +39,23 @@ export {
 // the atomic lease primitive only; provider mutation remains a later slice.
 export {
   acquireOrgSeatBillingLease,
+  cancelActiveOrgSeatBillingOperation,
+  commitOrgSeatExpansion,
+  createPendingOrgSeatExpansion,
+  deferOrgSeatBillingOperation,
   deriveBillableSeatQuantity,
   ensureSeatReconciliationTenant,
+  listDueOrgSeatBillingOperations,
+  markOrgSeatExpansionStripeApplied,
+  prepareCancelActiveOrgSeatBillingOperation,
   readActiveOrgSeatBillingOperation,
+  readEffectiveOrgSeatAssignment,
   readStripeCustomerBinding,
   readStripeInstallationBinding,
   readStripeSeatSubscription,
   readTenantBillingState,
   releaseOrgSeatBillingLease,
+  writeLocalOrgSeatAssignment,
   writeStripeSeatSubscriptionSnapshot,
   type StripeSeatSubscriptionSnapshotWrite,
   type StripeSeatSubscriptionSnapshotWriteResult,
@@ -60,3 +69,9 @@ export {
   type StripeSnapshotState,
   type TenantBillingState,
 } from "./domain/seat-reconciliation"
+export {
+  enqueueDueOrgSeatBillingOperations,
+  reconcileOrgSeatAssignment,
+  recoverOrgSeatBillingOperation,
+  type OrgSeatAssignmentReconcileResult,
+} from "./adapters/org-seat-billing-reconciler"

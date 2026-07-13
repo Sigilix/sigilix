@@ -27,6 +27,22 @@ const MIGRATION_ORG_ACCESS_SQL = readFileSync(
   new URL("../../migrations/0022_create_org_workspace_access.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_SUBSCRIPTION_STATUS_SQL = readFileSync(
+  new URL("../../migrations/0011_add_tenant_subscription_status.sql", import.meta.url),
+  "utf8",
+)
+const MIGRATION_BILLING_SOURCE_SQL = readFileSync(
+  new URL("../../migrations/0012_add_tenant_billing_source.sql", import.meta.url),
+  "utf8",
+)
+const MIGRATION_STRIPE_SEATS_SQL = readFileSync(
+  new URL("../../migrations/0020_create_stripe_seat_reconciliation.sql", import.meta.url),
+  "utf8",
+)
+const MIGRATION_STRIPE_SEAT_CONTEXT_SQL = readFileSync(
+  new URL("../../migrations/0023_add_org_seat_billing_operation_context.sql", import.meta.url),
+  "utf8",
+)
 
 function makeKV(): KVNamespace {
   const store = new Map<string, string>()
@@ -48,7 +64,11 @@ function makeKV(): KVNamespace {
 async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(MIGRATION_USAGE_SQL)
+  await db.exec(MIGRATION_SUBSCRIPTION_STATUS_SQL)
+  await db.exec(MIGRATION_BILLING_SOURCE_SQL)
   await db.exec(MIGRATION_SEAT_SQL)
+  await db.exec(MIGRATION_STRIPE_SEATS_SQL)
+  await db.exec(MIGRATION_STRIPE_SEAT_CONTEXT_SQL)
   await db.exec(MIGRATION_ORG_ACCESS_SQL)
   return db
 }
@@ -118,6 +138,26 @@ async function insertTenant(
         " account_login = excluded.account_login, account_type = excluded.account_type",
     )
     .bind(installationId, accountLogin, accountType)
+    .run()
+}
+
+async function seedStripeSeatCapacity(db: D1Database, installationId: number, quantity: number): Promise<void> {
+  await db
+    .prepare(
+      "UPDATE tenant SET tier = 'pro', subscription_status = 'active', billing_source = 'stripe'" +
+        " WHERE installation_id = ?",
+    )
+    .bind(installationId)
+    .run()
+  await db
+    .prepare(
+      `INSERT INTO stripe_seat_subscription
+        (installation_id, stripe_customer_id, stripe_subscription_id, stripe_subscription_item_id,
+         stripe_price_id, subscription_status, observed_quantity, derived_quantity, revision,
+         snapshot_state, last_refreshed_at_ms, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, 'price_pro_monthly', 'active', ?, ?, 1, 'ready', 1000, 1000, 1000)`,
+    )
+    .bind(installationId, `cus_${installationId}`, `sub_${installationId}`, `si_${installationId}`, quantity, quantity)
     .run()
 }
 
@@ -834,6 +874,112 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
 
     expect(res.status).toBe(503)
     expect(await readSeatRow(db, 1, "ghost")).toBeNull()
+  })
+
+  it("end-to-end via worker.fetch: assigning beyond purchased capacity expands the exact Stripe item before the seat commits", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-billing", "boss", 111)
+    await enableAppRoster(kv)
+    await insertRepo(db, 100, 1, "acme/api")
+    await insertTenant(db, 1, "acme", "Organization")
+    await insertMemberActivity(db, { installationId: 1, repoId: 100, prNumber: 1, authorLogin: "dev-one" })
+    await insertMemberActivity(db, { installationId: 1, repoId: 100, prNumber: 2, authorLogin: "dev-two" })
+    await seedStripeSeatCapacity(db, 1, 2)
+
+    stubGitHub({
+      installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
+      orgMemberPages: { 1: [{ id: 222, login: "newbie" }] },
+    })
+    const githubFetch = vi.mocked(globalThis.fetch)
+    const stripePosts: Array<{ path: string; body: URLSearchParams; idempotencyKey: string | null }> = []
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString()
+        if (url.startsWith("https://api.stripe.com/v1/subscription_items?")) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: "si_1",
+                  quantity: 2,
+                  price: {
+                    id: "price_pro_monthly",
+                    lookup_key: null,
+                    nickname: null,
+                    recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
+                  },
+                },
+              ],
+              has_more: false,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          )
+        }
+        if (url === "https://api.stripe.com/v1/subscription_items/si_1" && init?.method === "POST") {
+          const headers = new Headers(init.headers)
+          const body = new URLSearchParams(String(init.body))
+          stripePosts.push({ path: new URL(url).pathname, body, idempotencyKey: headers.get("idempotency-key") })
+          return new Response(JSON.stringify({ id: "si_1", quantity: 3 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        return githubFetch(input, init)
+      }),
+    )
+
+    const env = {
+      ...baseEnv(kv, db),
+      GITHUB_APP_ID: "123",
+      GITHUB_PRIVATE_KEY: "cached-token-avoids-key-use",
+      SIGILIX_STRIPE_SECRET_KEY: "sk_test_secret",
+      SIGILIX_STRIPE_PRICE_PRO: "price_pro_monthly",
+      OPENCLAW_JOBS: { send: vi.fn(async () => undefined) },
+    } as unknown as Env
+    const waits: Promise<unknown>[] = []
+    const ctx = {
+      waitUntil(promise: Promise<unknown>) {
+        waits.push(promise)
+      },
+      passThroughOnException() {},
+    } as unknown as ExecutionContext
+
+    const res = await worker.fetch(
+      new Request("https://x/v1/org/1/members/newbie/seat", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: `${SESSION_COOKIE}=sess-billing`,
+          origin: "https://app.sigilix.ai",
+        },
+        body: JSON.stringify({ assigned: true }),
+      }),
+      env,
+      ctx,
+    )
+    await Promise.all(waits)
+
+    expect(res.status).toBe(200)
+    expect(stripePosts).toHaveLength(1)
+    expect(stripePosts[0]?.path).toBe("/v1/subscription_items/si_1")
+    expect(stripePosts[0]?.body.get("quantity")).toBe("3")
+    expect(stripePosts[0]?.body.get("proration_behavior")).toBe("create_prorations")
+    expect(stripePosts[0]?.idempotencyKey).toMatch(/^sigilix-seat-/)
+    expect((await readSeatRow(db, 1, "newbie"))?.assigned).toBe(1)
+    await expect(
+      db
+        .prepare(
+          "SELECT observed_quantity, derived_quantity, snapshot_state FROM stripe_seat_subscription" +
+            " WHERE installation_id = 1",
+        )
+        .first(),
+    ).resolves.toMatchObject({ observed_quantity: 3, derived_quantity: 3, snapshot_state: "ready" })
+    await expect(
+      db.prepare("SELECT state, desired_quantity FROM org_seat_billing_operation WHERE installation_id = 1").first(),
+    ).resolves.toMatchObject({ state: "committed", desired_quantity: 3 })
   })
 
   it("CORS preflight: OPTIONS on the seat path from an allowlisted portal origin returns the CORS grant", async () => {

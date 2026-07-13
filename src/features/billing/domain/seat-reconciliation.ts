@@ -17,6 +17,8 @@ export interface OrgSeatBillingOperation {
   installationId: number
   revision: number
   login: string
+  actorLogin: string | null
+  targetIsAdmin: boolean | null
   requestedAssigned: boolean
   previousAssigned: boolean
   desiredQuantity: number
@@ -60,7 +62,7 @@ export type TenantBillingState =
   | {
       kind: "non-stripe"
       installationId: number
-      billingSource: null | "github_marketplace"
+      billingSource: null | "github_marketplace" | "legacy_entitlement"
       subscriptionStatus: string | null
     }
   | { kind: "missing" }
@@ -92,6 +94,8 @@ type OperationRow = {
   installation_id: unknown
   revision: unknown
   login: unknown
+  actor_login: unknown
+  target_is_admin: unknown
   requested_assigned: unknown
   previous_assigned: unknown
   desired_quantity: unknown
@@ -129,6 +133,13 @@ function nonNegativeInteger(value: unknown): value is number {
 function nullableNonNegativeInteger(value: unknown): number | null | undefined {
   if (value === null) return null
   return nonNegativeInteger(value) ? value : undefined
+}
+
+function nullableBoolean(value: unknown): boolean | null | undefined {
+  if (value === null) return null
+  if (value === 0) return false
+  if (value === 1) return true
+  return undefined
 }
 
 export function decodeStripeSeatSubscriptionRow(value: unknown): StripeSeatSubscriptionSnapshot | null {
@@ -214,6 +225,8 @@ export function decodeOrgSeatBillingOperationRow(value: unknown): OrgSeatBilling
   const row = value as OperationRow
   const operationId = nullableString(row.operation_id)
   const login = nullableString(row.login)
+  const actorLogin = nullableString(row.actor_login)
+  const targetIsAdmin = nullableBoolean(row.target_is_admin)
   const stripeSubscriptionId = nullableString(row.stripe_subscription_id)
   const stripeSubscriptionItemId = nullableString(row.stripe_subscription_item_id)
   const stripeObservedQuantity = nullableNonNegativeInteger(row.stripe_observed_quantity)
@@ -230,6 +243,8 @@ export function decodeOrgSeatBillingOperationRow(value: unknown): OrgSeatBilling
     row.revision === 0 ||
     login == null ||
     login.trim() === "" ||
+    actorLogin === undefined ||
+    targetIsAdmin === undefined ||
     (row.requested_assigned !== 0 && row.requested_assigned !== 1) ||
     (row.previous_assigned !== 0 && row.previous_assigned !== 1) ||
     !nonNegativeInteger(row.desired_quantity) ||
@@ -246,6 +261,9 @@ export function decodeOrgSeatBillingOperationRow(value: unknown): OrgSeatBilling
     stripeAppliedAtMs === undefined ||
     completedAtMs === undefined
   ) {
+    return null
+  }
+  if ((row.state === "pending" || row.state === "stripe_applied") && (actorLogin === null || targetIsAdmin === null)) {
     return null
   }
   if (
@@ -279,6 +297,8 @@ export function decodeOrgSeatBillingOperationRow(value: unknown): OrgSeatBilling
     installationId: row.installation_id,
     revision: row.revision,
     login,
+    actorLogin,
+    targetIsAdmin,
     requestedAssigned: row.requested_assigned === 1,
     previousAssigned: row.previous_assigned === 1,
     desiredQuantity: row.desired_quantity,

@@ -1,7 +1,7 @@
 // sig-org-overview — GET /v1/org/overview tests.
 // Mirrors workspace-prs-route.test.ts's harness: makeD1 + migration SQL, KV
-// session seeding, GitHub fetch stubbing (installations + org memberships, the
-// two calls resolveUserRole makes), and api-key D1 seeding. The CORS-preflight
+// session seeding, GitHub fetch stubbing (one installations snapshot + org
+// memberships), and api-key D1 seeding. The CORS-preflight
 // test drives the real worker entrypoint to prove the path is registered in
 // index.ts's isPortalCorsPath.
 
@@ -142,7 +142,7 @@ function reqWithBearer(token: string): Request {
 }
 
 /**
- * Stub the two GitHub calls resolveUserRole + the route make:
+ * Stub the two GitHub calls the installation-scoped role resolver makes:
  *   GET /user/installations         → { installations: [{ id, account }] }
  *   GET /user/memberships/orgs      → [] (or supplied)
  * `account.type: "User"` + a login matching the session login makes the caller
@@ -486,6 +486,56 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
     expect(body.seats.some((s) => s.login === "secret-agent")).toBe(false)
   })
 
+  it("admin of installation A but member of selected installation B receives only B's member shape", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+    stubGitHub({
+      installations: [
+        { id: 1, account: { type: "User", login: "octocat" } },
+        { id: 2, account: { type: "Organization", login: "org-b" } },
+      ],
+      memberships: [{ role: "member", state: "active", organization: { login: "org-b" } }],
+    })
+
+    await insertRepo(db, 200, 2, "org-b/api", "org-b")
+    await insertUsage(db, {
+      installationId: 2,
+      repoId: 200,
+      prNumber: 1,
+      headSha: "sha-own",
+      authorLogin: "octocat",
+      createdAt: "2026-06-01T00:00:00.000Z",
+    })
+    await insertUsage(db, {
+      installationId: 2,
+      repoId: 200,
+      prNumber: 2,
+      headSha: "sha-secret",
+      authorLogin: "secret-agent",
+      createdAt: "2026-06-02T00:00:00.000Z",
+    })
+
+    const res = await handleOrgOverviewRoute(reqWithSession("sess-1", "?installationId=2"), env)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as OrgOverviewResponse
+    expect(body.org).toMatchObject({ account: "org-b", installationId: 2 })
+    expect(body.role).toBe("member")
+    expect(body.seatCount).toBe(2)
+    expect(body.seats.map((seat) => seat.login)).toEqual(["octocat"])
+    expect(rosterMock).not.toHaveBeenCalled()
+
+    const installationCalls = vi
+      .mocked(fetch)
+      .mock.calls.filter(([input]) => String(input).includes("/user/installations"))
+    expect(installationCalls).toHaveLength(1)
+  })
+
   it("pagination: cursor + limit page through the seat list, nextCursor while more remain", async () => {
     const db = await makeDb()
     const kv = makeKV()
@@ -665,7 +715,7 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
     expect(body.seatCount).toBe(0)
   })
 
-  it("?installationId= ownership guard: a requested-but-not-owned installation never becomes the scope", async () => {
+  it("?installationId= ownership guard: an explicitly requested foreign installation is rejected", async () => {
     const db = await makeDb()
     const kv = makeKV()
     await seedSession(kv, "sess-1", "octocat", 111)
@@ -696,15 +746,21 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
       createdAt: "2026-06-09T00:00:00.000Z",
     })
 
-    // Ask for installation 2 (not owned) — must fall back to the caller's own
-    // installation 1, never scope to (or read the account_login of) 2.
+    // Ask for installation 2 (not owned) — an explicit selection must fail
+    // closed instead of silently painting a different organization.
     const res = await handleOrgOverviewRoute(reqWithSession("sess-1", "?installationId=2"), env)
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as OrgOverviewResponse
-    expect(body.org.installationId).toBe(1)
-    expect(body.org.account).toBe("octocat")
-    expect(body.seats.map((s) => s.login)).toEqual(["octocat"])
-    expect(body.seats.some((s) => s.login === "secret-agent")).toBe(false)
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: "forbidden" })
+  })
+
+  it("rejects a malformed explicit installation id instead of silently selecting a default", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111)
+    const env = { OPENCLAW_STATE: kv, OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY } as unknown as Env
+
+    const res = await handleOrgOverviewRoute(reqWithSession("sess-1", "?installationId=not-a-number"), env)
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ error: "invalid installation id" })
   })
 
   it("degraded auth path (decrypt failure) never leaks a foreign installation's account via ?installationId=", async () => {

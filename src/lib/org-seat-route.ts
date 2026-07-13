@@ -25,8 +25,9 @@
 // never an installation they're an admin of, so a cross-tenant target 403s and
 // no row is written.
 //
-// TARGET — must be a MEMBER of the installation (present in the derived seat set,
-// case-insensitive). A login that has never acted here → 404.
+// TARGET — must be a MEMBER of the installation, proven case-insensitively by
+// either real usage activity or the installed App's GitHub roster. A complete
+// activity + roster miss → 404; an incomplete/unavailable proof source → 503.
 //
 // LAST-ADMIN GUARD — fail-closed. Unassigning a KNOWN admin seat (the caller's
 // own seat is always known-admin; other seats via org_seat_assignment.is_admin)
@@ -34,11 +35,12 @@
 // admin from locking the org (and its billing) out of all admin access.
 //
 // FAIL-CLOSED overall: a missing session-encryption key → 503, a token-decrypt
-// failure → 500, any auth/ownership doubt → 403/404. A write only happens once
-// every gate has passed.
+// failure → 500, any auth/ownership doubt → 403, and any membership-store or
+// provider doubt → 503. A write only happens once every gate has passed.
 
 import { requireSession } from "@/src/lib/auth-middleware"
-import { decryptAccessToken } from "@/src/lib/auth-session"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
+import { fetchInstallationRoster } from "@/src/lib/org-members-roster"
 import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import type { Env } from "@/src/shared/types/env"
@@ -69,26 +71,45 @@ async function parseAssigned(request: Request): Promise<boolean | null> {
 }
 
 /**
- * Is `loginKey` (already lowercased) a member of `installationId` — i.e. a
- * distinct usage_ledger.author_login for that installation (the same derived
- * seat set the overview lists)? Case-insensitive. Fail-closed to false on a
- * missing binding or a D1 fault (an unverifiable target is treated as not a
- * member, so we never write a seat override for it).
+ * Membership proof for a seat target. A successful activity query is enough;
+ * otherwise a COMPLETE installed-App roster is authoritative. Any D1/provider
+ * uncertainty remains distinct from a complete miss so callers return 503,
+ * never a misleading 404.
  */
-async function isInstallationMember(
-  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+type InstallationMemberResolution = "member" | "not_member" | "unavailable"
+
+async function resolveInstallationMember(
+  env: Env,
   installationId: number,
   loginKey: string,
-): Promise<boolean> {
-  if (!env.SIGILIX_PLATFORM_DB || installationId <= 0) return false
+): Promise<InstallationMemberResolution> {
+  const db = env.SIGILIX_PLATFORM_DB
+  if (!db || installationId <= 0) return "unavailable"
+
+  let account: { login: string; type: "Organization" | "User" }
   try {
-    const row = await env.SIGILIX_PLATFORM_DB.prepare(
+    const activity = await db
+      .prepare(
       "SELECT 1 AS present FROM usage_ledger" +
         " WHERE installation_id = ? AND author_login IS NOT NULL AND LOWER(author_login) = ? LIMIT 1",
-    )
+      )
       .bind(installationId, loginKey)
       .first<{ present: unknown }>()
-    return row != null
+    if (activity != null) return "member"
+
+    const tenant = await db
+      .prepare("SELECT account_login, account_type FROM tenant WHERE installation_id = ?")
+      .bind(installationId)
+      .first<{ account_login: unknown; account_type: unknown }>()
+    if (
+      tenant == null ||
+      typeof tenant.account_login !== "string" ||
+      tenant.account_login === "" ||
+      (tenant.account_type !== "Organization" && tenant.account_type !== "User")
+    ) {
+      return "unavailable"
+    }
+    account = { login: tenant.account_login, type: tenant.account_type }
   } catch (error) {
     console.warn(
       JSON.stringify({
@@ -97,7 +118,25 @@ async function isInstallationMember(
         err: error instanceof Error ? error.message : String(error),
       }),
     )
-    return false
+    return "unavailable"
+  }
+
+  try {
+    const roster = await fetchInstallationRoster(env, installationId, account.login, account.type)
+    // A returned member is positive proof even if a later page failed. A miss
+    // is trustworthy only when every page completed; an incomplete miss stays
+    // unavailable rather than becoming a false 404.
+    if (roster.members.some((member) => member.login.toLowerCase() === loginKey)) return "member"
+    return roster.complete ? "not_member" : "unavailable"
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "org-seat-roster-check-failed",
+        installationId,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return "unavailable"
   }
 }
 
@@ -181,7 +220,7 @@ async function writeSeat(
     nowIso: string
   },
 ): Promise<void> {
-  if (!env.SIGILIX_PLATFORM_DB) return
+  if (!env.SIGILIX_PLATFORM_DB) throw new Error("org seat write: SIGILIX_PLATFORM_DB binding absent")
   await env.SIGILIX_PLATFORM_DB.prepare(
     "INSERT INTO org_seat_assignment (installation_id, login, assigned, is_admin, updated_at, updated_by)" +
       " VALUES (?, ?, ?, ?, ?, ?)" +
@@ -236,11 +275,12 @@ export async function handleOrgSeatRoute(
 
   let accessToken: string
   try {
-    accessToken = await decryptAccessToken(
-      { encryptedAccessToken: session.record.encryptedAccessToken, iv: session.record.iv },
-      session.sessionId,
-      env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-    )
+    accessToken = await getValidGithubToken({
+      env,
+      sessionId: session.sessionId,
+      record: session.record,
+      encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+    })
   } catch (error) {
     // Never log the token — only that decryption failed.
     console.error(
@@ -255,11 +295,21 @@ export async function handleOrgSeatRoute(
   const isAdmin = await isAdminOfInstallation(accessToken, callerLogin, installationId)
   if (!isAdmin) return json({ error: "forbidden" }, 403)
 
+  if (!env.SIGILIX_PLATFORM_DB) {
+    console.error(JSON.stringify({ event: "org-seat-platform-db-missing", installationId }))
+    return json({ error: "seat_unavailable" }, 503)
+  }
+
   const targetKey = targetLogin.toLowerCase()
   const callerKey = callerLogin.toLowerCase()
 
-  // The target must be a real member of this installation (a derived seat).
-  if (!(await isInstallationMember(env, installationId, targetKey))) {
+  // The target must be proven by activity or the installed-App roster. Roster
+  // presence is positive proof; only a roster miss needs complete pagination.
+  const member = await resolveInstallationMember(env, installationId, targetKey)
+  if (member === "unavailable") {
+    return json({ error: "seat membership unavailable" }, 503)
+  }
+  if (member === "not_member") {
     return json({ error: "not a member of this installation" }, 404)
   }
 

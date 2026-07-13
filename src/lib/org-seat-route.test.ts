@@ -48,25 +48,45 @@ async function makeDb(): Promise<D1Database> {
   return db
 }
 
-async function seedSession(kv: KVNamespace, sessionId: string, login: string, githubUserId: number): Promise<void> {
+async function seedSession(
+  kv: KVNamespace,
+  sessionId: string,
+  login: string,
+  githubUserId: number,
+  tokens: {
+    accessToken?: string
+    refreshToken?: string
+    accessTokenExpiresAt?: number
+    refreshTokenExpiresAt?: number
+  } = {},
+): Promise<void> {
   await createSession({
     kv,
     sessionId,
     login,
     githubUserId,
-    accessToken: "ghu_test_token",
+    accessToken: tokens.accessToken ?? "ghu_test_token",
+    ...(tokens.refreshToken !== undefined ? { refreshToken: tokens.refreshToken } : {}),
+    ...(tokens.accessTokenExpiresAt !== undefined ? { accessTokenExpiresAt: tokens.accessTokenExpiresAt } : {}),
+    ...(tokens.refreshTokenExpiresAt !== undefined ? { refreshTokenExpiresAt: tokens.refreshTokenExpiresAt } : {}),
     encryptionKeyB64url: ENC_KEY,
   })
 }
 
-async function insertTenant(db: D1Database, installationId: number, accountLogin: string | null = null) {
+async function insertTenant(
+  db: D1Database,
+  installationId: number,
+  accountLogin: string | null = null,
+  accountType: string | null = null,
+) {
   await db
     .prepare(
-      "INSERT INTO tenant (installation_id, account_login, created_at, updated_at)" +
-        " VALUES (?, ?, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')" +
-        " ON CONFLICT(installation_id) DO UPDATE SET account_login = excluded.account_login",
+      "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
+        " VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')" +
+        " ON CONFLICT(installation_id) DO UPDATE SET" +
+        " account_login = excluded.account_login, account_type = excluded.account_type",
     )
-    .bind(installationId, accountLogin)
+    .bind(installationId, accountLogin, accountType)
     .run()
 }
 
@@ -122,12 +142,32 @@ function seatReq(sessionId: string | null, installationId: number | string, logi
 function stubGitHub(opts: {
   installations: Array<{ id: number; account: { type: string; login: string } }>
   memberships?: Array<{ role: string; state: string; organization: { login: string } }>
+  orgMemberPages?: Record<number, Array<{ login: string; avatar_url?: string }> | { status: number }>
+  requiredUserToken?: string
+  refresh?: { accessToken: string; refreshToken: string }
 }) {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString()
+      if (url === "https://github.com/login/oauth/access_token" && opts.refresh) {
+        return new Response(
+          JSON.stringify({
+            access_token: opts.refresh.accessToken,
+            refresh_token: opts.refresh.refreshToken,
+            expires_in: 28_800,
+            refresh_token_expires_in: 15_897_600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
       if (url.startsWith("https://api.github.com/user/installations?")) {
+        if (opts.requiredUserToken) {
+          const headers = new Headers(init?.headers)
+          if (headers.get("authorization") !== `Bearer ${opts.requiredUserToken}`) {
+            return new Response(JSON.stringify({ message: "bad credentials" }), { status: 401 })
+          }
+        }
         return new Response(
           JSON.stringify({ total_count: opts.installations.length, installations: opts.installations }),
           { status: 200, headers: { "content-type": "application/json" } },
@@ -139,17 +179,35 @@ function stubGitHub(opts: {
           headers: { "content-type": "application/json" },
         })
       }
+      if (url.startsWith("https://api.github.com/orgs/acme/members?")) {
+        const page = Number(new URL(url).searchParams.get("page") ?? "1")
+        const result = opts.orgMemberPages?.[page] ?? []
+        if (!Array.isArray(result)) {
+          return new Response(JSON.stringify({ message: "roster unavailable" }), { status: result.status })
+        }
+        return new Response(JSON.stringify(result), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
       throw new Error(`unexpected fetch: ${url}`)
     }),
   )
 }
 
-function baseEnv(kv: KVNamespace, db: D1Database): Env {
+function baseEnv(kv: KVNamespace, db?: D1Database): Env {
   return {
     OPENCLAW_STATE: kv,
     OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
-    SIGILIX_PLATFORM_DB: db,
+    ...(db ? { SIGILIX_PLATFORM_DB: db } : {}),
   } as unknown as Env
+}
+
+async function enableAppRoster(kv: KVNamespace): Promise<void> {
+  await kv.put(
+    "gh-installation-token:1",
+    JSON.stringify({ token: "ghs_roster", expiresAt: Date.now() + 60 * 60 * 1000 }),
+  )
 }
 
 afterEach(() => {
@@ -258,7 +316,7 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     expect(await readSeatRow(db, 2, "secret-agent")).toBeNull()
   })
 
-  it("target must be a member: unknown login → 404", async () => {
+  it("target membership cannot be verified without App-roster credentials → 503", async () => {
     const db = await makeDb()
     const kv = makeKV()
     await seedSession(kv, "sess-1", "octocat", 111)
@@ -266,10 +324,175 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     stubGitHub({ installations: [{ id: 1, account: { type: "User", login: "octocat" } }] })
 
     await insertRepo(db, 100, 1, "octocat/api")
-    // No activity for "ghost" → not a member.
+    // No activity for "ghost", and no App credentials to complete the roster.
 
     const res = await handleOrgSeatRoute(seatReq("sess-1", 1, "ghost", { assigned: true }), env, undefined, 1, "ghost")
+    expect(res.status).toBe(503)
+  })
+
+  it("admin assigns and unassigns a roster-only member with no activity", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "boss", 111)
+    await enableAppRoster(kv)
+    await insertTenant(db, 1, "acme", "Organization")
+    const env = {
+      ...baseEnv(kv, db),
+      GITHUB_APP_ID: "123",
+      GITHUB_PRIVATE_KEY: "cached-token-avoids-key-use",
+    } as Env
+    stubGitHub({
+      installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
+      orgMemberPages: { 1: [{ login: "Newbie", avatar_url: "https://avatars.test/newbie" }] },
+    })
+
+    const assign = await handleOrgSeatRoute(
+      seatReq("sess-1", 1, "newbie", { assigned: true }),
+      env,
+      undefined,
+      1,
+      "newbie",
+    )
+
+    expect(assign.status).toBe(200)
+    expect((await readSeatRow(db, 1, "newbie"))?.assigned).toBe(1)
+
+    const unassign = await handleOrgSeatRoute(
+      seatReq("sess-1", 1, "newbie", { assigned: false }),
+      env,
+      undefined,
+      1,
+      "newbie",
+    )
+    expect(unassign.status).toBe(200)
+    expect((await readSeatRow(db, 1, "newbie"))?.assigned).toBe(0)
+  })
+
+  it("complete App roster miss → 404 and no seat write", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "boss", 111)
+    await enableAppRoster(kv)
+    await insertTenant(db, 1, "acme", "Organization")
+    const env = {
+      ...baseEnv(kv, db),
+      GITHUB_APP_ID: "123",
+      GITHUB_PRIVATE_KEY: "cached-token-avoids-key-use",
+    } as Env
+    stubGitHub({
+      installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
+      orgMemberPages: { 1: [{ login: "someone-else" }] },
+    })
+
+    const res = await handleOrgSeatRoute(seatReq("sess-1", 1, "ghost", { assigned: true }), env, undefined, 1, "ghost")
+
     expect(res.status).toBe(404)
+    expect(await readSeatRow(db, 1, "ghost")).toBeNull()
+  })
+
+  it("partial App roster miss is uncertain → 503", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "boss", 111)
+    await enableAppRoster(kv)
+    await insertTenant(db, 1, "acme", "Organization")
+    const env = {
+      ...baseEnv(kv, db),
+      GITHUB_APP_ID: "123",
+      GITHUB_PRIVATE_KEY: "cached-token-avoids-key-use",
+    } as Env
+    const firstPage = Array.from({ length: 100 }, (_, i) => ({ login: `member-${i}` }))
+    stubGitHub({
+      installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
+      orgMemberPages: { 1: firstPage, 2: { status: 503 } },
+    })
+
+    const res = await handleOrgSeatRoute(seatReq("sess-1", 1, "newbie", { assigned: true }), env, undefined, 1, "newbie")
+
+    expect(res.status).toBe(503)
+    expect(await readSeatRow(db, 1, "newbie")).toBeNull()
+  })
+
+  it("a target returned before a later roster page fails is still positively verified → 200", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "boss", 111)
+    await enableAppRoster(kv)
+    await insertTenant(db, 1, "acme", "Organization")
+    const env = {
+      ...baseEnv(kv, db),
+      GITHUB_APP_ID: "123",
+      GITHUB_PRIVATE_KEY: "cached-token-avoids-key-use",
+    } as Env
+    const firstPage = Array.from({ length: 100 }, (_, i) => ({ login: i === 0 ? "newbie" : `member-${i}` }))
+    stubGitHub({
+      installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
+      orgMemberPages: { 1: firstPage, 2: { status: 503 } },
+    })
+
+    const res = await handleOrgSeatRoute(seatReq("sess-1", 1, "newbie", { assigned: true }), env, undefined, 1, "newbie")
+
+    expect(res.status).toBe(200)
+    expect((await readSeatRow(db, 1, "newbie"))?.assigned).toBe(1)
+  })
+
+  it("missing SIGILIX_PLATFORM_DB → 503 rather than a false success or 404", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111)
+    const env = baseEnv(kv)
+    stubGitHub({ installations: [{ id: 1, account: { type: "User", login: "octocat" } }] })
+
+    const res = await handleOrgSeatRoute(seatReq("sess-1", 1, "dev", { assigned: true }), env, undefined, 1, "dev")
+
+    expect(res.status).toBe(503)
+  })
+
+  it("D1 membership-read failure → 503 rather than 404", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111)
+    const brokenDb = {
+      prepare() {
+        throw new Error("D1 unavailable")
+      },
+    } as unknown as D1Database
+    const env = baseEnv(kv, brokenDb)
+    stubGitHub({ installations: [{ id: 1, account: { type: "User", login: "octocat" } }] })
+
+    const res = await handleOrgSeatRoute(seatReq("sess-1", 1, "dev", { assigned: true }), env, undefined, 1, "dev")
+
+    expect(res.status).toBe(503)
+  })
+
+  it("refreshes an expired GitHub user token before the per-installation admin gate", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "octocat", 111, {
+      accessToken: "expired-token",
+      refreshToken: "refresh-token",
+      accessTokenExpiresAt: Date.now() - 1_000,
+      refreshTokenExpiresAt: Date.now() + 60 * 60 * 1000,
+    })
+    await insertRepo(db, 100, 1, "octocat/api")
+    await insertMemberActivity(db, { installationId: 1, repoId: 100, prNumber: 1, authorLogin: "dev" })
+    const env = {
+      ...baseEnv(kv, db),
+      GITHUB_OAUTH_CLIENT_ID: "client-id",
+      GITHUB_OAUTH_CLIENT_SECRET: "client-secret",
+    } as Env
+    stubGitHub({
+      installations: [{ id: 1, account: { type: "User", login: "octocat" } }],
+      requiredUserToken: "refreshed-token",
+      refresh: { accessToken: "refreshed-token", refreshToken: "rotated-refresh-token" },
+    })
+
+    const res = await handleOrgSeatRoute(seatReq("sess-1", 1, "dev", { assigned: true }), env, undefined, 1, "dev")
+
+    expect(res.status).toBe(200)
+    expect((await readSeatRow(db, 1, "dev"))?.assigned).toBe(1)
   })
 
   it("last-admin guard: an admin cannot unassign the last assigned admin seat → 409", async () => {
@@ -381,6 +604,101 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     expect(res.status).toBe(200)
     expect(res.headers.get("access-control-allow-origin")).toBe("https://app.sigilix.ai")
     expect((await readSeatRow(db, 1, "dev"))?.assigned).toBe(0)
+  })
+
+  it("end-to-end via worker.fetch: a roster-only member can be assigned", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "boss", 111)
+    await enableAppRoster(kv)
+    await insertTenant(db, 1, "acme", "Organization")
+    const env = {
+      ...baseEnv(kv, db),
+      GITHUB_APP_ID: "123",
+      GITHUB_PRIVATE_KEY: "cached-token-avoids-key-use",
+    } as Env
+    const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
+    stubGitHub({
+      installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
+      orgMemberPages: { 1: [{ login: "newbie" }] },
+    })
+    const req = new Request("https://x/v1/org/1/members/newbie/seat", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: `${SESSION_COOKIE}=sess-1`,
+        origin: "https://app.sigilix.ai",
+      },
+      body: JSON.stringify({ assigned: true }),
+    })
+
+    const res = await worker.fetch(req, env, ctx)
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get("access-control-allow-origin")).toBe("https://app.sigilix.ai")
+    expect((await readSeatRow(db, 1, "newbie"))?.assigned).toBe(1)
+  })
+
+  it("end-to-end via worker.fetch: a complete roster miss 404s without writing", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "boss", 111)
+    await enableAppRoster(kv)
+    await insertTenant(db, 1, "acme", "Organization")
+    const env = {
+      ...baseEnv(kv, db),
+      GITHUB_APP_ID: "123",
+      GITHUB_PRIVATE_KEY: "cached-token-avoids-key-use",
+    } as Env
+    const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
+    stubGitHub({
+      installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
+      orgMemberPages: { 1: [{ login: "someone-else" }] },
+    })
+    const req = new Request("https://x/v1/org/1/members/ghost/seat", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: `${SESSION_COOKIE}=sess-1` },
+      body: JSON.stringify({ assigned: true }),
+    })
+
+    const res = await worker.fetch(req, env, ctx)
+
+    expect(res.status).toBe(404)
+    expect(await readSeatRow(db, 1, "ghost")).toBeNull()
+  })
+
+  it("end-to-end via worker.fetch: an incomplete roster miss 503s without writing", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "boss", 111)
+    await enableAppRoster(kv)
+    await insertTenant(db, 1, "acme", "Organization")
+    const env = {
+      ...baseEnv(kv, db),
+      GITHUB_APP_ID: "123",
+      GITHUB_PRIVATE_KEY: "cached-token-avoids-key-use",
+    } as Env
+    const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
+    stubGitHub({
+      installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
+      orgMemberPages: {
+        1: Array.from({ length: 100 }, (_, i) => ({ login: `member-${i}` })),
+        2: { status: 503 },
+      },
+    })
+    const req = new Request("https://x/v1/org/1/members/ghost/seat", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: `${SESSION_COOKIE}=sess-1` },
+      body: JSON.stringify({ assigned: true }),
+    })
+
+    const res = await worker.fetch(req, env, ctx)
+
+    expect(res.status).toBe(503)
+    expect(await readSeatRow(db, 1, "ghost")).toBeNull()
   })
 
   it("CORS preflight: OPTIONS on the seat path from an allowlisted portal origin returns the CORS grant", async () => {

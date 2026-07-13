@@ -620,7 +620,20 @@ describe("SIG-318 parseEnsembleConfig — numeric tunables (PR 5c)", () => {
         minReviewedFiles: 1,
         perCallOverheadTokensEst: 4000,
       },
+      // Giant-PR total-context ceiling — default 300k estimated input tokens.
+      maxReviewContextTokens: 300_000,
     })
+  })
+
+  it("parses the giant-PR total-context ceiling from SIGILIX_MAX_REVIEW_CONTEXT_TOKENS", () => {
+    expect(parseEnsembleConfig({ SIGILIX_MAX_REVIEW_CONTEXT_TOKENS: "450000" }).tunables.maxReviewContextTokens).toBe(
+      450_000,
+    )
+    // parseIntEnv contract: non-numeric/negative → default; explicit 0 propagates.
+    expect(parseEnsembleConfig({ SIGILIX_MAX_REVIEW_CONTEXT_TOKENS: "nope" }).tunables.maxReviewContextTokens).toBe(
+      300_000,
+    )
+    expect(parseEnsembleConfig({ SIGILIX_MAX_REVIEW_CONTEXT_TOKENS: "0" }).tunables.maxReviewContextTokens).toBe(0)
   })
 
   it("falls back to the default on non-numeric or negative values (parseIntEnv contract)", () => {

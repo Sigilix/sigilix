@@ -834,6 +834,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
     graphBlastDependentPaths,
     roles: router.specialists,
     currentSourceJsonChars: JSON.stringify(succeeded.map((v) => v.verdict)).length,
+    maxReviewContextTokens: ensembleConfig.tunables.maxReviewContextTokens, // giant-PR total-context ceiling
     sigilixConfig,
     logicPromptBudgetMode,
     recallRoles: ensembleConfig.flags.recallRoles,

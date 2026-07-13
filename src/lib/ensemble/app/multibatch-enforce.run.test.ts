@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { ORCHESTRATOR_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
+import { estimateTokens } from "@/src/lib/diff-packing"
 import type { PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
 import { runMultiBatchEnforce } from "./multibatch-enforce"
 
@@ -63,6 +64,8 @@ describe("runMultiBatchEnforce", () => {
       roles: ["logic"],
       currentSourceJsonChars: 0,
       maxSynthInputChars: 100_000,
+      maxReviewContextTokens: 10_000_000,
+      priorInputTokensEst: 0,
       runRole,
     })
 
@@ -96,6 +99,8 @@ describe("runMultiBatchEnforce", () => {
       roles: ["logic"],
       currentSourceJsonChars: 0,
       maxSynthInputChars: 100_000,
+      maxReviewContextTokens: 10_000_000,
+      priorInputTokensEst: 0,
       runRole,
     })
 
@@ -128,12 +133,53 @@ describe("runMultiBatchEnforce", () => {
       roles: ["logic"],
       currentSourceJsonChars: 0,
       maxSynthInputChars: first.charCount + Math.floor(second.charCount / 2),
+      maxReviewContextTokens: 10_000_000,
+      priorInputTokensEst: 0,
       runRole,
     })
 
     expect(result.batchesLaunched).toBe(1)
     expect(result.haltedEarly).toBe(true)
     expect(result.haltReason).toBe("synth-input-cap")
+    expect(result.launchedBatches.map((batch) => batch.map((file) => file.path))).toEqual([["src/b.ts"]])
+    expect(result.unlaunchedBatches.map((batch) => batch.map((file) => file.path))).toEqual([["src/c.ts"]])
+    expect(runRole).toHaveBeenCalledTimes(1)
+  })
+
+  it("halts spillover on the giant-PR total-context ceiling before launching the batch that would cross it", async () => {
+    const first = paddedDiffBlock("src/b.ts", 20, 1_000)
+    const second = paddedDiffBlock("src/c.ts", 30, 1_000)
+    const runRole = vi.fn(async () => ({
+      summary: "no findings",
+      confidence: 5,
+      confidenceReason: "test fixture",
+      findings: [],
+    }))
+
+    // Roomy synth-input cap + deadline so ONLY the token ceiling can halt. The prior
+    // spend plus batch-1's per-role diff estimate sits under the ceiling; adding
+    // batch-2 crosses it, so the loop launches batch 1 and stops before batch 2.
+    const perBatchTokensEst = estimateTokens(first.body) // roles.length === 1
+    const result = await runMultiBatchEnforce({
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 418,
+      headSha: "deadbeefdeadbeef",
+      perfCtx: { owner: "Sigilix", repo: "sigilix", prNumber: 418, headSha: "deadbeefdeadbeef" },
+      orchCtrl: new AbortController(),
+      startMs: Date.now(),
+      spilloverBatches: [[first], [second]],
+      roles: ["logic"],
+      currentSourceJsonChars: 0,
+      maxSynthInputChars: 10_000_000,
+      priorInputTokensEst: 100_000,
+      maxReviewContextTokens: 100_000 + perBatchTokensEst + Math.floor(perBatchTokensEst / 2),
+      runRole,
+    })
+
+    expect(result.batchesLaunched).toBe(1)
+    expect(result.haltedEarly).toBe(true)
+    expect(result.haltReason).toBe("context-token-cap")
     expect(result.launchedBatches.map((batch) => batch.map((file) => file.path))).toEqual([["src/b.ts"]])
     expect(result.unlaunchedBatches.map((batch) => batch.map((file) => file.path))).toEqual([["src/c.ts"]])
     expect(runRole).toHaveBeenCalledTimes(1)

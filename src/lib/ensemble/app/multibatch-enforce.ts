@@ -3,7 +3,7 @@ import type { Env } from "@/src/shared/types/env"
 import type { SpecialistRole } from "@/src/shared/domain/specialist-role"
 import { parseDiffToReviewablePositions, type ReviewableMap } from "@/src/shared/util/diff-positions"
 import type { EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
-import { batchToDiff, type DiffFileBlock } from "@/src/lib/diff-packing"
+import { batchToDiff, estimateTokens, type DiffFileBlock } from "@/src/lib/diff-packing"
 import type { PrReviewVerdictWithIds } from "@/src/lib/ensemble/domain/findings"
 import { decideNextBatchLaunchWithBudget } from "@/src/lib/ensemble/domain/multibatch-budget"
 import type { CollectedVerdict } from "@/src/lib/ensemble/domain/validation"
@@ -19,7 +19,7 @@ import { renderHitsForPrompt, runDeterministicChecks } from "@/src/shared/domain
 import { renderSecretHitsForPrompt, runSecretScan } from "@/src/lib/secret-scan"
 import { buildSecurityFactManifest, type SecurityFactManifest } from "@/src/lib/security-evidence-manifest"
 
-export type MultiBatchHaltReason = "deadline" | "synth-input-cap"
+export type MultiBatchHaltReason = "deadline" | "synth-input-cap" | "context-token-cap"
 
 const MIN_USEFUL_BATCH_MS = 60_000
 export const MAX_MULTIBATCH_SYNTH_INPUT_CHARS = 256_000
@@ -126,7 +126,9 @@ export function renderSynthCoverageScopeBlock(input: SynthCoverageScopeInput): s
       ? "Deadline/budget halted before every changed file could be launched."
       : input.haltReason === "synth-input-cap"
         ? "Synth-input budget halted before another batch could be launched without truncating source findings."
-        : "Coverage is partial."
+        : input.haltReason === "context-token-cap"
+          ? "Total-context token ceiling halted before another batch could be launched (this PR exceeds the per-review context budget)."
+          : "Coverage is partial."
   return [
     "[REVIEW COVERAGE SCOPE]",
     `Reviewed files (${input.reviewedFiles.length}/${total}): ${input.reviewedFiles.join(", ")}`,
@@ -152,6 +154,33 @@ export function shouldHaltForSynthInputCap(input: SynthInputCapInput): {
 } {
   const wouldUse = input.currentUnionInputChars + input.candidateBatchDiffChars
   return wouldUse > input.maxSynthInputChars ? { halt: true, reason: "synth-input-cap" } : { halt: false, reason: null }
+}
+
+export interface ContextTokenCapInput {
+  /** Estimated INPUT tokens the whole review has spent so far (batch[0] + resweep +
+   *  every spillover batch already launched, each counted across all roles). */
+  cumulativeInputTokensEst: number
+  /** Estimated INPUT tokens the candidate batch would add (its diff, per role). */
+  candidateBatchInputTokensEst: number
+  /** The giant-PR total-context ceiling (`SIGILIX_MAX_REVIEW_CONTEXT_TOKENS`). */
+  maxReviewContextTokens: number
+}
+
+/**
+ * Giant-PR total-context ceiling. Halts spillover-batch launching once the whole
+ * review's cumulative estimated input tokens would cross `maxReviewContextTokens`.
+ * Recall-safe: the posted batch[0] is already reviewed before spillover starts, so
+ * this only trims the diminishing-returns tail of a rare giant multi-batch PR. A
+ * normal PR never reaches the ceiling → the loop never halts here → byte-identical.
+ */
+export function shouldHaltForContextTokenCap(input: ContextTokenCapInput): {
+  halt: boolean
+  reason: "context-token-cap" | null
+} {
+  const wouldUse = input.cumulativeInputTokensEst + input.candidateBatchInputTokensEst
+  return wouldUse > input.maxReviewContextTokens
+    ? { halt: true, reason: "context-token-cap" }
+    : { halt: false, reason: null }
 }
 
 export interface CrossBatchSeamInput {
@@ -202,6 +231,12 @@ export interface RunMultiBatchEnforceArgs {
   roles: readonly SpecialistRole[]
   currentSourceJsonChars: number
   maxSynthInputChars: number
+  /** Giant-PR total-context ceiling (`SIGILIX_MAX_REVIEW_CONTEXT_TOKENS`). Spillover
+   *  halts once the cumulative estimated input tokens would cross it. */
+  maxReviewContextTokens: number
+  /** Estimated input tokens already spent BEFORE spillover (batch[0] + resweep,
+   *  across roles) — the starting point for the total-context accumulator. */
+  priorInputTokensEst: number
   firstBatchIdx?: number
   runRole: (args: MultiBatchRoleRunArgs) => Promise<PrReviewVerdict | null>
 }
@@ -220,11 +255,27 @@ export async function runMultiBatchEnforce(args: RunMultiBatchEnforceArgs): Prom
   const launchedBatches: DiffFileBlock[][] = []
   let haltReason: MultiBatchHaltReason | null = null
   let currentUnionInputChars = args.currentSourceJsonChars
+  let cumulativeInputTokensEst = args.priorInputTokensEst
   let nextBatchIndex = args.spilloverBatches.length
 
   for (let k = 0; k < args.spilloverBatches.length; k++) {
     const batch = [...args.spilloverBatches[k]!]
     const batchDiff = batchToDiff(batch)
+    // Giant-PR total-context ceiling FIRST (outermost budget): a batch is re-sent to
+    // every role, so its marginal input ≈ diff tokens × role count. Halt before
+    // launching if the whole review would cross the ceiling. batch[0] is already
+    // reviewed, so this only trims the tail of a rare giant PR.
+    const candidateBatchInputTokensEst = estimateTokens(batchDiff) * args.roles.length
+    const contextCapDecision = shouldHaltForContextTokenCap({
+      cumulativeInputTokensEst,
+      candidateBatchInputTokensEst,
+      maxReviewContextTokens: args.maxReviewContextTokens,
+    })
+    if (contextCapDecision.halt) {
+      haltReason = contextCapDecision.reason
+      nextBatchIndex = k
+      break
+    }
     const capDecision = shouldHaltForSynthInputCap({
       currentUnionInputChars,
       candidateBatchDiffChars: batchDiff.length,
@@ -280,6 +331,7 @@ export async function runMultiBatchEnforce(args: RunMultiBatchEnforceArgs): Prom
     )
     collected.push(...roleResults)
     launchedBatches.push(batch)
+    cumulativeInputTokensEst += candidateBatchInputTokensEst
     nextBatchIndex = k + 1
   }
 
@@ -355,6 +407,8 @@ export async function runMultiBatchEnforceForSpecialists(args: {
   graphBlastDependentPaths: readonly string[]
   roles: readonly SpecialistRole[]
   currentSourceJsonChars: number
+  /** Giant-PR total-context ceiling (`SIGILIX_MAX_REVIEW_CONTEXT_TOKENS`). */
+  maxReviewContextTokens: number
   sigilixConfig: SigilixConfig
   logicPromptBudgetMode: LogicPromptBudgetMode
   recallRoles: ReadonlySet<SpecialistRole>
@@ -406,6 +460,10 @@ export async function runMultiBatchEnforceForSpecialists(args: {
     roles: args.roles,
     currentSourceJsonChars: args.currentSourceJsonChars,
     maxSynthInputChars: MAX_MULTIBATCH_SYNTH_INPUT_CHARS,
+    maxReviewContextTokens: args.maxReviewContextTokens,
+    // Seed the total-context accumulator with batch[0]'s already-spent input (its diff
+    // × roles) — a conservative floor; real per-review spend (retrieval/graph) is larger.
+    priorInputTokensEst: estimateTokens(batchToDiff([...args.reviewedFiles])) * args.roles.length,
     runRole,
   })
   const seamBatch = selectCrossBatchSeamFiles({
@@ -431,6 +489,12 @@ export async function runMultiBatchEnforceForSpecialists(args: {
         result.launchedBatches.reduce((sum, batch) => sum + batchToDiff(batch).length, 0) +
         JSON.stringify(result.collected.map((v) => v.verdict)).length,
       maxSynthInputChars: MAX_MULTIBATCH_SYNTH_INPUT_CHARS,
+      maxReviewContextTokens: args.maxReviewContextTokens,
+      // The seam pass runs AFTER the spillover batches, so its total-context accumulator
+      // starts from batch[0]'s input PLUS every launched spillover batch's input.
+      priorInputTokensEst:
+        estimateTokens(batchToDiff([...args.reviewedFiles])) * args.roles.length +
+        result.launchedBatches.reduce((sum, batch) => sum + estimateTokens(batchToDiff(batch)) * args.roles.length, 0),
       firstBatchIdx: args.spilloverBatches.length + 1,
       runRole,
     })

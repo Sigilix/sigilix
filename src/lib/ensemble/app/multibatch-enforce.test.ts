@@ -12,6 +12,7 @@ import {
   namespaceBatchVerdict,
   renderSynthCoverageScopeBlock,
   selectCrossBatchSeamFiles,
+  shouldHaltForContextTokenCap,
   shouldHaltForSynthInputCap,
 } from "./multibatch-enforce"
 
@@ -171,6 +172,18 @@ describe("renderSynthCoverageScopeBlock", () => {
     expect(block).toContain("Deadline/budget halted")
   })
 
+  it("names the total-context ceiling as the halt cause when the giant-PR token cap stopped spillover", () => {
+    const block = renderSynthCoverageScopeBlock({
+      reviewedFiles: ["src/a.ts", "src/b.ts"],
+      skippedFiles: ["src/c.ts"],
+      haltReason: "context-token-cap",
+    })
+
+    expect(block).toContain("[REVIEW COVERAGE SCOPE]")
+    expect(block).toContain("Total-context token ceiling halted")
+    expect(block).toContain("Do NOT describe the whole PR as fully reviewed")
+  })
+
   it("returns an empty block for full launched coverage so off/shadow synth prompts stay byte-identical", () => {
     expect(
       renderSynthCoverageScopeBlock({
@@ -215,6 +228,28 @@ describe("shouldHaltForSynthInputCap", () => {
       currentUnionInputChars: 1_000,
       candidateBatchDiffChars: 400,
       maxSynthInputChars: 1_500,
+    })
+
+    expect(decision).toEqual({ halt: false, reason: null })
+  })
+})
+
+describe("shouldHaltForContextTokenCap", () => {
+  it("halts before launching another batch when the whole review's estimated input would cross the ceiling", () => {
+    const decision = shouldHaltForContextTokenCap({
+      cumulativeInputTokensEst: 280_000,
+      candidateBatchInputTokensEst: 40_000,
+      maxReviewContextTokens: 300_000,
+    })
+
+    expect(decision).toEqual({ halt: true, reason: "context-token-cap" })
+  })
+
+  it("continues while the review stays under the total-context ceiling", () => {
+    const decision = shouldHaltForContextTokenCap({
+      cumulativeInputTokensEst: 200_000,
+      candidateBatchInputTokensEst: 40_000,
+      maxReviewContextTokens: 300_000,
     })
 
     expect(decision).toEqual({ halt: false, reason: null })

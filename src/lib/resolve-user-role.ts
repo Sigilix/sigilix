@@ -27,6 +27,14 @@
 
 export type UserRole = "admin" | "member"
 
+/** One installation the current GitHub user can see, with a role scoped to
+ * that installation only (never the aggregate admin-of-any-install role). */
+export interface UserInstallationScope {
+  installationId: number
+  account: { login: string; type: string }
+  role: UserRole
+}
+
 type FetchImpl = typeof fetch
 
 interface GitHubInstallationAccount {
@@ -128,6 +136,94 @@ async function fetchOwnOrgMemberships(accessToken: string, fetchImpl: FetchImpl)
   return out
 }
 
+async function readUserInstallationAccess(
+  accessToken: string,
+  fetchImpl: FetchImpl,
+): Promise<{ installations: GitHubInstallation[]; memberships: OrgMembershipItem[] }> {
+  const [installations, memberships] = await Promise.all([
+    fetchInstallations(accessToken, fetchImpl),
+    fetchOwnOrgMemberships(accessToken, fetchImpl),
+  ])
+  return { installations, memberships }
+}
+
+function installationRole(
+  installation: GitHubInstallation,
+  memberships: OrgMembershipItem[],
+  sessionLogin: string,
+): UserRole {
+  const accountLogin = installation.account?.login
+  const accountType = installation.account?.type
+  const loginKey = sessionLogin.toLowerCase()
+  if (accountType === "User" && accountLogin?.toLowerCase() === loginKey) return "admin"
+  if (accountType !== "Organization" || typeof accountLogin !== "string") return "member"
+  const orgKey = accountLogin.toLowerCase()
+  return memberships.some(
+    (membership) =>
+      membership.organization?.login?.toLowerCase() === orgKey &&
+      membership.role === "admin" &&
+      membership.state === "active",
+  )
+    ? "admin"
+    : "member"
+}
+
+function toInstallationScope(
+  installation: GitHubInstallation,
+  memberships: OrgMembershipItem[],
+  sessionLogin: string,
+): UserInstallationScope | null {
+  if (!Number.isInteger(installation.id) || installation.id! <= 0) return null
+  return {
+    installationId: installation.id!,
+    account: {
+      login: typeof installation.account?.login === "string" ? installation.account.login : "",
+      type: typeof installation.account?.type === "string" ? installation.account.type : "",
+    },
+    role: installationRole(installation, memberships, sessionLogin),
+  }
+}
+
+/**
+ * Resolve one explicitly requested installation. An installation the user's
+ * token cannot see returns null; callers must fail closed rather than silently
+ * substituting another organization.
+ */
+export async function resolveExactUserInstallationScope(
+  accessToken: string,
+  sessionLogin: string,
+  installationId: number,
+  fetchImpl: FetchImpl = fetch,
+): Promise<UserInstallationScope | null> {
+  if (!Number.isInteger(installationId) || installationId <= 0) return null
+  const { installations, memberships } = await readUserInstallationAccess(accessToken, fetchImpl)
+  const target = installations.find((installation) => installation.id === installationId)
+  return target ? toInstallationScope(target, memberships, sessionLogin) : null
+}
+
+/**
+ * Preserve the legacy no-query landing behavior explicitly: select the first
+ * valid installation returned by GitHub. This is a default, not an exact
+ * authorization lookup; explicit installation requests use the helper above.
+ */
+export async function resolveDefaultUserInstallationScope(
+  accessToken: string,
+  sessionLogin: string,
+  fetchImpl: FetchImpl = fetch,
+): Promise<UserInstallationScope | null> {
+  const { installations, memberships } = await readUserInstallationAccess(accessToken, fetchImpl)
+  const target = installations.find((installation) => Number.isInteger(installation.id) && installation.id! > 0)
+  const scope = target ? toInstallationScope(target, memberships, sessionLogin) : null
+  console.log(
+    JSON.stringify({
+      event: "org-default-installation-selected",
+      installationId: scope?.installationId ?? 0,
+      installations: installations.length,
+    }),
+  )
+  return scope
+}
+
 /**
  * Resolve the session user's aggregate role ("admin" | "member") across every
  * GitHub App installation their user-to-server token can see. FAILS CLOSED to
@@ -220,14 +316,7 @@ export async function isAdminOfInstallation(
     const target = installations.find((inst) => inst.id === installationId)
     if (!target) return false // not visible to the caller's token → not an admin of it
 
-    if (target.account?.type === "User") {
-      return target.account.login === sessionLogin
-    }
-    if (target.account?.type === "Organization" && typeof target.account.login === "string") {
-      const orgLogin = target.account.login
-      return memberships.some((m) => m.organization?.login === orgLogin && m.role === "admin" && m.state === "active")
-    }
-    return false
+    return installationRole(target, memberships, sessionLogin) === "admin"
   } catch (error) {
     console.error(
       JSON.stringify({

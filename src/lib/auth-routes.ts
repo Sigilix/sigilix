@@ -11,6 +11,7 @@
 //   GET  /auth/gitlab[/login]       — GitLab OAuth kickoff (top-level nav)
 //   GET  /auth/gitlab/callback      — GitLab OAuth callback (top-level nav)
 //   GET  /auth/welcome              — session-gated welcome page (302 → / if not authed)
+//   GET  /auth/session              — cheap session/identity probe (no provider role lookup)
 //   GET  /auth/me                   — session/whoami (portal reads cross-origin, CORS)
 //   POST /auth/logout               — clears the session cookie
 //   GET  /auth/install-redirect     — GitHub App install kickoff (mints CSRF nonce)
@@ -21,6 +22,7 @@
 import { handleGitHubAuthCallback, handleGitHubAuthKickoff, handleLogout } from "@/src/lib/auth-oauth-github"
 import { handleGitlabAuthCallback, handleGitlabAuthKickoff } from "@/src/lib/auth-oauth-gitlab"
 import { requireSession } from "@/src/lib/auth-middleware"
+import { handleAuthSessionProbeRoute } from "@/src/lib/auth-session-probe-route"
 import { handleAuthMeRoute } from "@/src/lib/auth-me-route"
 import { tryHandleIdentityRoute } from "@/src/lib/identity-router"
 import { renderWelcomePage } from "@/src/lib/auth-welcome"
@@ -71,6 +73,9 @@ export async function handleAuthRoutes(
   if (method === "GET" && pathname === "/auth/me") {
     // #155: portal reads this cross-origin with credentials — needs CORS (simple GET, no preflight).
     return withPortalCors(request, await handleAuthMeRoute(request, env, ctx), env)
+  }
+  if (method === "GET" && pathname === "/auth/session") {
+    return withPortalCors(request, await handleAuthSessionProbeRoute(request, env, ctx), env)
   }
   if (method === "POST" && pathname === "/auth/logout") {
     // sig-portal-bugs: the portal (app.sigilix.ai) calls this cross-origin with

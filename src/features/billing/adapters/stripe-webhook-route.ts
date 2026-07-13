@@ -50,6 +50,10 @@ export function resolvePriceTierConfig(env: Env): PriceTierConfig {
     teams: env.SIGILIX_STRIPE_PRICE_TEAMS,
     max: env.SIGILIX_STRIPE_PRICE_MAX,
     ultra: env.SIGILIX_STRIPE_PRICE_ULTRA,
+    proAnnual: env.SIGILIX_STRIPE_PRICE_PRO_ANNUAL,
+    teamsAnnual: env.SIGILIX_STRIPE_PRICE_TEAMS_ANNUAL,
+    maxAnnual: env.SIGILIX_STRIPE_PRICE_MAX_ANNUAL,
+    ultraAnnual: env.SIGILIX_STRIPE_PRICE_ULTRA_ANNUAL,
   }
 }
 

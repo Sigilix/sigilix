@@ -14,6 +14,9 @@ import type { PriceTierConfig } from "@/src/features/billing/domain/stripe-event
 /** The tiers a customer can actually subscribe to (free/enterprise are NOT purchasable here). */
 export type PaidTier = "pro" | "teams" | "max" | "ultra"
 
+/** The Stripe Price cadence selected by the buyer. */
+export type BillingPeriod = "monthly" | "annual"
+
 /** Per-tier seat bounds enforced SERVER-SIDE (never trust the client). Teams is a
  *  team plan — a minimum of 10 seats, capped at 150; the individual tiers start at 1. */
 export interface SeatBounds {
@@ -51,7 +54,15 @@ export function trialDaysForTier(tier: PaidTier): number {
 
 /** A validated checkout request, or a typed rejection carrying the HTTP status. */
 export type CheckoutValidation =
-  | { ok: true; tier: PaidTier; seats: number; bounds: SeatBounds }
+  | {
+      ok: true
+      tier: PaidTier
+      seats: number
+      bounds: SeatBounds
+      billingPeriod: BillingPeriod
+      /** True only for the Worker-first compatibility path where the field was absent. */
+      billingPeriodDefaulted: boolean
+    }
   | { ok: false; status: 400; error: string }
 
 /**
@@ -60,12 +71,26 @@ export type CheckoutValidation =
  * integer within the tier's bounds. When `seats` is omitted it defaults to the
  * tier minimum (so a bare `{tier:"teams"}` is a valid 10-seat checkout).
  */
-export function validateCheckoutRequest(body: { tier?: unknown; seats?: unknown }): CheckoutValidation {
+export function validateCheckoutRequest(body: {
+  tier?: unknown
+  seats?: unknown
+  billingPeriod?: unknown
+}): CheckoutValidation {
   const { tier } = body
   if (!isPaidTier(tier)) {
     return { ok: false, status: 400, error: "invalid_tier" }
   }
   const bounds = SEAT_BOUNDS[tier]
+
+  const billingPeriodDefaulted = body.billingPeriod === undefined
+  let billingPeriod: BillingPeriod
+  if (billingPeriodDefaulted) {
+    billingPeriod = "monthly"
+  } else if (body.billingPeriod === "monthly" || body.billingPeriod === "annual") {
+    billingPeriod = body.billingPeriod
+  } else {
+    return { ok: false, status: 400, error: "invalid_billing_period" }
+  }
 
   const rawSeats = body.seats
   let seats: number
@@ -80,7 +105,7 @@ export function validateCheckoutRequest(body: { tier?: unknown; seats?: unknown 
   if (seats < bounds.min || seats > bounds.max) {
     return { ok: false, status: 400, error: "seats_out_of_range" }
   }
-  return { ok: true, tier, seats, bounds }
+  return { ok: true, tier, seats, bounds, billingPeriod, billingPeriodDefaulted }
 }
 
 /**
@@ -89,8 +114,9 @@ export function validateCheckoutRequest(body: { tier?: unknown; seats?: unknown 
  * disagree). Returns null when the founder hasn't set that tier's price id — the
  * caller returns 503 rather than guessing.
  */
-export function resolvePriceForTier(tier: PaidTier, cfg: PriceTierConfig): string | null {
-  const id = cfg[tier]
+export function resolvePriceForTier(tier: PaidTier, billingPeriod: BillingPeriod, cfg: PriceTierConfig): string | null {
+  const annualKey = `${tier}Annual` as const
+  const id = billingPeriod === "annual" ? cfg[annualKey] : cfg[tier]
   return typeof id === "string" && id.length > 0 ? id : null
 }
 
@@ -100,6 +126,8 @@ export interface CheckoutFormInput {
   bounds: SeatBounds
   /** The validated, server-derived tier — decides trial eligibility (Pro-only). */
   tier: PaidTier
+  /** The validated Stripe Price cadence, recorded as operational subscription metadata. */
+  billingPeriod: BillingPeriod
   /** SERVER-VERIFIED installation id (admin-gated) — the anti-spoof link the webhook reads. */
   installationId: number
   /** The Stripe customer carrying metadata[installation_id] — resolved/created by the adapter. */
@@ -135,6 +163,7 @@ export function buildCheckoutForm(input: CheckoutFormInput): URLSearchParams {
     form.set("subscription_data[trial_period_days]", String(trialDays))
   }
   form.set("subscription_data[metadata][installation_id]", String(input.installationId))
+  form.set("subscription_data[metadata][billing_period]", input.billingPeriod)
   // The anti-spoof link the webhook reads FIRST (server-side, never from the body).
   form.set("client_reference_id", String(input.installationId))
   form.set("customer", input.customerId)

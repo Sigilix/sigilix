@@ -21,6 +21,10 @@ export interface PriceTierConfig {
   teams?: string | undefined
   max?: string | undefined
   ultra?: string | undefined
+  proAnnual?: string | undefined
+  teamsAnnual?: string | undefined
+  maxAnnual?: string | undefined
+  ultraAnnual?: string | undefined
 }
 
 /** The Stripe events we act on; every other event type is acked + ignored. */
@@ -137,10 +141,10 @@ export function mapPriceToTier(price: StripePrice | undefined, cfg: PriceTierCon
   if (!price) return null
   const id = asString(price.id)
   if (id) {
-    if (cfg.ultra && id === cfg.ultra) return "ultra"
-    if (cfg.max && id === cfg.max) return "max"
-    if (cfg.teams && id === cfg.teams) return "teams"
-    if (cfg.pro && id === cfg.pro) return "pro"
+    if ((cfg.ultra && id === cfg.ultra) || (cfg.ultraAnnual && id === cfg.ultraAnnual)) return "ultra"
+    if ((cfg.max && id === cfg.max) || (cfg.maxAnnual && id === cfg.maxAnnual)) return "max"
+    if ((cfg.teams && id === cfg.teams) || (cfg.teamsAnnual && id === cfg.teamsAnnual)) return "teams"
+    if ((cfg.pro && id === cfg.pro) || (cfg.proAnnual && id === cfg.proAnnual)) return "pro"
   }
   const key = `${asString(price.lookup_key) ?? ""} ${asString(price.nickname) ?? ""}`.toLowerCase()
   // Check highest tier first so "ultra"/"max" win over a generic match. Token match on

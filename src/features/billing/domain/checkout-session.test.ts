@@ -40,6 +40,34 @@ describe("validateCheckoutRequest — tier gate", () => {
     const pro = validateCheckoutRequest({ tier: "pro" })
     expect(pro).toMatchObject({ ok: true, tier: "pro", seats: 1 })
   })
+
+  it("accepts monthly/annual billing periods and defaults an omitted period to monthly", () => {
+    expect(validateCheckoutRequest({ tier: "pro", billingPeriod: "monthly" })).toMatchObject({
+      ok: true,
+      billingPeriod: "monthly",
+      billingPeriodDefaulted: false,
+    })
+    expect(validateCheckoutRequest({ tier: "max", billingPeriod: "annual" })).toMatchObject({
+      ok: true,
+      billingPeriod: "annual",
+      billingPeriodDefaulted: false,
+    })
+    expect(validateCheckoutRequest({ tier: "ultra" })).toMatchObject({
+      ok: true,
+      billingPeriod: "monthly",
+      billingPeriodDefaulted: true,
+    })
+  })
+
+  it("rejects every provided billing period outside monthly|annual", () => {
+    for (const billingPeriod of ["yearly", "MONTHLY", "", null, 12]) {
+      expect(validateCheckoutRequest({ tier: "pro", billingPeriod })).toMatchObject({
+        ok: false,
+        status: 400,
+        error: "invalid_billing_period",
+      })
+    }
+  })
 })
 
 describe("validateCheckoutRequest — seat bounds (server-side)", () => {
@@ -67,14 +95,25 @@ describe("validateCheckoutRequest — seat bounds (server-side)", () => {
 })
 
 describe("resolvePriceForTier", () => {
-  const cfg = { pro: "price_pro", teams: "price_teams", max: undefined, ultra: "" }
-  it("returns the configured price id", () => {
-    expect(resolvePriceForTier("pro", cfg)).toBe("price_pro")
-    expect(resolvePriceForTier("teams", cfg)).toBe("price_teams")
+  const cfg = {
+    pro: "price_pro",
+    teams: "price_teams",
+    max: undefined,
+    ultra: "",
+    proAnnual: "price_pro_annual",
+    teamsAnnual: "price_teams_annual",
+  }
+  it("returns the configured monthly or annual price id", () => {
+    expect(resolvePriceForTier("pro", "monthly", cfg)).toBe("price_pro")
+    expect(resolvePriceForTier("teams", "monthly", cfg)).toBe("price_teams")
+    expect(resolvePriceForTier("pro", "annual", cfg)).toBe("price_pro_annual")
+    expect(resolvePriceForTier("teams", "annual", cfg)).toBe("price_teams_annual")
   })
   it("returns null for an unconfigured (undefined/empty) tier price", () => {
-    expect(resolvePriceForTier("max", cfg)).toBeNull()
-    expect(resolvePriceForTier("ultra", cfg)).toBeNull()
+    expect(resolvePriceForTier("max", "monthly", cfg)).toBeNull()
+    expect(resolvePriceForTier("ultra", "monthly", cfg)).toBeNull()
+    expect(resolvePriceForTier("max", "annual", cfg)).toBeNull()
+    expect(resolvePriceForTier("ultra", "annual", cfg)).toBeNull()
   })
 })
 
@@ -96,6 +135,7 @@ describe("buildCheckoutForm — the Stripe form fields", () => {
     seats: 12,
     bounds: SEAT_BOUNDS.teams,
     tier: "teams",
+    billingPeriod: "monthly",
     installationId: 987654,
     customerId: "cus_ABC",
     successUrl: "https://app.sigilix.ai/org?checkout=success",
@@ -108,6 +148,7 @@ describe("buildCheckoutForm — the Stripe form fields", () => {
       seats: 1,
       bounds: SEAT_BOUNDS.pro,
       tier: "pro",
+      billingPeriod: "monthly",
       installationId: 987654,
       customerId: "cus_ABC",
       successUrl: "https://app.sigilix.ai/org?checkout=success",
@@ -123,6 +164,7 @@ describe("buildCheckoutForm — the Stripe form fields", () => {
         seats: SEAT_BOUNDS[tier].min,
         bounds: SEAT_BOUNDS[tier],
         tier,
+        billingPeriod: "monthly",
         installationId: 987654,
         customerId: "cus_ABC",
         successUrl: "https://app.sigilix.ai/org?checkout=success",
@@ -136,6 +178,7 @@ describe("buildCheckoutForm — the Stripe form fields", () => {
   it("sets client_reference_id AND subscription metadata to the installation id", () => {
     expect(form.get("client_reference_id")).toBe("987654")
     expect(form.get("subscription_data[metadata][installation_id]")).toBe("987654")
+    expect(form.get("subscription_data[metadata][billing_period]")).toBe("monthly")
   })
 
   it("carries the price, quantity, and adjustable-quantity bounds", () => {

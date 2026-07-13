@@ -7,7 +7,16 @@ import {
   type StripeEvent,
 } from "@/src/features/billing/domain/stripe-events"
 
-const CFG: PriceTierConfig = { pro: "price_pro", teams: "price_teams", max: "price_max", ultra: "price_ultra" }
+const CFG: PriceTierConfig = {
+  pro: "price_pro",
+  teams: "price_teams",
+  max: "price_max",
+  ultra: "price_ultra",
+  proAnnual: "price_pro_annual",
+  teamsAnnual: "price_teams_annual",
+  maxAnnual: "price_max_annual",
+  ultraAnnual: "price_ultra_annual",
+}
 
 describe("parseInstallationId", () => {
   it("accepts positive int number and numeric string", () => {
@@ -29,6 +38,12 @@ describe("mapPriceToTier", () => {
     expect(mapPriceToTier({ id: "price_teams" }, CFG)).toBe("teams")
     expect(mapPriceToTier({ id: "price_max" }, CFG)).toBe("max")
     expect(mapPriceToTier({ id: "price_ultra" }, CFG)).toBe("ultra")
+  })
+  it("maps every annual price by exact configured price id", () => {
+    expect(mapPriceToTier({ id: "price_pro_annual" }, CFG)).toBe("pro")
+    expect(mapPriceToTier({ id: "price_teams_annual" }, CFG)).toBe("teams")
+    expect(mapPriceToTier({ id: "price_max_annual" }, CFG)).toBe("max")
+    expect(mapPriceToTier({ id: "price_ultra_annual" }, CFG)).toBe("ultra")
   })
   it("falls back to lookup_key / nickname substring when id unmapped", () => {
     expect(mapPriceToTier({ id: "price_x", lookup_key: "ultra_monthly" }, CFG)).toBe("ultra")

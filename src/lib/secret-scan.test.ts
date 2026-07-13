@@ -4,11 +4,24 @@
 import { describe, it, expect } from "vitest"
 
 import {
+  hasHighConfidenceSecretText,
   runSecretScan,
   renderSecretHitsForPrompt,
   containsCredentialToken,
   secretAllowlistReason,
 } from "@/src/lib/secret-scan"
+
+describe("hasHighConfidenceSecretText", () => {
+  it("rejects provider credentials and private-key material", () => {
+    expect(hasHighConfidenceSecretText("Use sk_live_4eC39HqLyjWDarjtT1zdp7dc for tests.")).toBe(true)
+    expect(hasHighConfidenceSecretText("-----BEGIN PRIVATE KEY-----\nnot-the-body")).toBe(true)
+  })
+
+  it("does not reject warning-only high-entropy text or ordinary guidance", () => {
+    expect(hasHighConfidenceSecretText("QzM4xT9YpA2RnE7vK0sH4uIoLcG6dF1jW8bV5kHrNm2QpZ")).toBe(false)
+    expect(hasHighConfidenceSecretText("Run the integration tests before opening a pull request.")).toBe(false)
+  })
+})
 
 const mkDiff = (path: string, addedLines: string[]) => {
   const lines = [

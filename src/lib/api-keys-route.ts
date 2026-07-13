@@ -2,21 +2,21 @@
 // endpoints: POST /v1/keys (mint) + DELETE /v1/keys/:id (revoke).
 //
 // Cookie-authed via requireSession (the same browser session as
-// /auth/welcome, /auth/me). Authorization beyond "is logged in" is checked
-// against `account_tenant` via api-key-store.ts's isLinkedToInstallation,
-// which FAILS CLOSED on a D1 error (denies, never grants). A minted
-// plaintext key is returned in the response body exactly once and is NEVER
-// logged — only its SHA-256 hash (api-key-store.ts's insertApiKey) is
-// persisted.
+// /auth/welcome, /auth/me). Mint authorization uses requireOrgAccess for the
+// exact installation: fresh GitHub visibility in rollout-off mode, plus active
+// managed access in rollout-on mode. Personal revoke is creator-owned by the
+// immutable GitHub id; admin member removal owns bulk revocation. A minted
+// plaintext key is returned exactly once and is NEVER logged — only its SHA-256
+// hash (api-key-store.ts's insertApiKey) is persisted.
 
 import { requireSession } from "@/src/lib/auth-middleware"
 import { sha256Hex } from "@/src/lib/auth-bearer"
+import { requireOrgAccess } from "@/src/lib/org-access"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import {
   API_KEY_PREFIX,
   getApiKeyById,
   insertApiKey,
-  isLinkedToInstallation,
   listApiKeysByCreator,
   mintApiKeyPlaintext,
   revokeApiKeyById,
@@ -31,7 +31,10 @@ const MASKED_KEY = `${API_KEY_PREFIX}••••••••`
 const MAX_KEY_NAME = 60
 
 function json(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", "cache-control": "private, no-store" },
+  })
 }
 
 /** Read an optional trimmed `name` label from a parsed body. Null when absent/blank/over-long. */
@@ -86,8 +89,14 @@ export async function handleCreateApiKeyRoute(request: Request, env: Env, ctx?: 
   }
 
   const githubUserId = String(authed.record.githubUserId)
-  const authorized = await isLinkedToInstallation(db, githubUserId, installationId)
-  if (!authorized) return json({ error: "forbidden" }, 403)
+  // account_tenant is legacy compatibility metadata, not authorization. The
+  // central exact-installation guard requires fresh GitHub visibility in
+  // rollout-off mode and active managed access in rollout-on mode.
+  const access = await requireOrgAccess(request, env, ctx, installationId, { requiredRole: "member" })
+  if (!access.ok) return access.response
+  // Belt-and-suspenders only: requireOrgAccess already derives this identity
+  // from the authenticated session while performing the real authorization.
+  if (access.githubUserId !== githubUserId) return json({ error: "forbidden" }, 403)
 
   const name = extractKeyName(body)
   const plaintext = mintApiKeyPlaintext()
@@ -138,7 +147,7 @@ export async function handleListApiKeysRoute(request: Request, env: Env, ctx?: E
   return json({ keys }, 200)
 }
 
-/** DELETE /v1/keys/:id — revoke a key the caller is linked to (via its installation). */
+/** DELETE /v1/keys/:id — revoke one key minted by this exact GitHub account. */
 export async function handleRevokeApiKeyRoute(
   request: Request,
   env: Env,
@@ -155,8 +164,10 @@ export async function handleRevokeApiKeyRoute(
   if (!existing) return json({ error: "not_found" }, 404)
 
   const githubUserId = String(authed.record.githubUserId)
-  const authorized = await isLinkedToInstallation(db, githubUserId, existing.installationId)
-  if (!authorized) return json({ error: "forbidden" }, 403)
+  // Personal key IDs are creator-owned, not installation-member capabilities.
+  // Hide another creator's random UUID behind the same 404 as an unknown id.
+  // Admin member removal owns the separate exact-install bulk-revocation path.
+  if (existing.createdBy !== githubUserId) return json({ error: "not_found" }, 404)
 
   if (existing.revokedAt) return json({ ok: true, alreadyRevoked: true }, 200)
 

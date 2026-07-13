@@ -63,7 +63,7 @@ describe("insertApiKey + getApiKeyById", () => {
     expect(JSON.stringify(row)).not.toContain(plaintext)
 
     const found = await getApiKeyById(db, "key-1")
-    expect(found).toEqual({ installationId: 42, revokedAt: null })
+    expect(found).toEqual({ installationId: 42, createdBy: "123", revokedAt: null })
   })
 
   it("getApiKeyById returns null for an unknown id", async () => {

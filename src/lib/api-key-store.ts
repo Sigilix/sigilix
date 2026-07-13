@@ -4,12 +4,9 @@
 // POST/DELETE /v1/keys management endpoints (api-keys-route.ts), so the two
 // callers can't drift on the INSERT/UPDATE shape.
 //
-// AUTH-CRITICAL — `isLinkedToInstallation` gates who may mint or revoke a
-// key for an installation. It FAILS CLOSED: a D1 error returns false (deny),
-// the same direction as api-key-resolver.ts's fail-closed read path. This is
-// the opposite of this repo's usual fail-open D1 convention (see
-// d1-tenant-store.ts) — intentional here because the call site is an
-// authorization decision, not a best-effort cache/telemetry read.
+// `isLinkedToInstallation` remains a fail-closed legacy-link read helper, but
+// browser key management no longer treats account_tenant as authorization;
+// exact access is resolved by org-access.ts instead.
 //
 // Plaintext keys are generated here and returned to the caller; this module
 // NEVER logs a plaintext key or a key_hash value.
@@ -63,12 +60,12 @@ export async function insertApiKey(
     .run()
 }
 
-function validInstallationId(value: number): boolean {
-  return Number.isSafeInteger(value) && value > 0
+function validInstallationId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
 }
 
-function validGithubUserId(value: string): boolean {
-  if (!/^[1-9]\d*$/.test(value)) return false
+function validGithubUserId(value: unknown): value is string {
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) return false
   const numeric = Number(value)
   return Number.isSafeInteger(numeric) && numeric > 0 && String(numeric) === value
 }
@@ -199,18 +196,27 @@ export async function isLinkedToInstallation(
   }
 }
 
-/** Look up an api_key row by id. Returns null when absent or on a D1 error. */
+/** Look up creator-owned api_key metadata by id. Returns null when absent,
+ * malformed, or on a D1 error. */
 export async function getApiKeyById(
   db: D1Database,
   id: string,
-): Promise<{ installationId: number; revokedAt: string | null } | null> {
+): Promise<{ installationId: number; createdBy: string; revokedAt: string | null } | null> {
   try {
     const row = await db
-      .prepare("SELECT installation_id, revoked_at FROM api_key WHERE id = ?")
+      .prepare("SELECT installation_id, created_by, revoked_at FROM api_key WHERE id = ?")
       .bind(id)
-      .first<{ installation_id: number; revoked_at: string | null }>()
+      .first<{ installation_id: unknown; created_by: unknown; revoked_at: unknown }>()
     if (row == null) return null
-    return { installationId: row.installation_id, revokedAt: row.revoked_at }
+    if (
+      !validInstallationId(row.installation_id) ||
+      !validGithubUserId(row.created_by) ||
+      (row.revoked_at !== null && typeof row.revoked_at !== "string")
+    ) {
+      console.error(JSON.stringify({ event: "api-key-store-get-by-id-malformed-row" }))
+      return null
+    }
+    return { installationId: row.installation_id, createdBy: row.created_by, revokedAt: row.revoked_at }
   } catch (error) {
     console.error(
       JSON.stringify({

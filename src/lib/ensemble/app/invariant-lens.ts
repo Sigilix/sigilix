@@ -102,8 +102,10 @@ export function startInvariantLens(a: InvariantLensStartArgs): InvariantLensHand
 
   const chatEnabled = a.env.OLLAMA_CHAT_ENABLE === "on" ? ("on" as const) : ("off" as const)
   // SIG-369(b): default-off second-pass model override. Off → undefined → the
-  // call uses SPECIALIST_CONFIGS.logic (deepseek-v4-pro:cloud on Ollama Turbo) exactly
-  // as today (byte-identical). On → routes these lens re-runs to the cheaper reasoner.
+  // call uses SPECIALIST_CONFIGS.logic (deepseek/deepseek-v4-pro on OpenRouter) exactly
+  // as today (byte-identical). On → routes these lens re-runs to the override model,
+  // which post-2026-07-13 is the SAME v4-pro/provider as the primary (no cheaper-reasoner
+  // saving anymore — see secondpass-reasoner.ts).
   const lensModelOverride = secondPassReasonerOverride({
     mode: parseSecondPassReasonerMode(a.env.OPENCLAW_SECONDPASS_REASONER_MODE),
     baseConfig: SPECIALIST_CONFIGS.logic,

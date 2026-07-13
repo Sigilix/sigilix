@@ -73,38 +73,33 @@ import { attemptChat } from "./model-provider-attempt"
  * (logic+tests medium) + the recall/reasoning prompt suffixes are env-applied via
  * `wrangler.toml [vars]`, so code defaults stay off for local/tests.
  *
- * EXCEPTION (2026-07-12): `logic` runs on **Ollama Turbo** (`deepseek-v4-pro:cloud`),
- * NOT OpenRouter — a deliberate move of the heaviest role off OpenRouter to cut the
- * founder's #1 cost. The `chat` router + per-call key selection are shape-driven, so a
- * `:cloud` primary auto-routes to Ollama with the Ollama key (no rewire, no key leak).
+ * LOGIC (2026-07-13): primary is v4-pro on OpenRouter (`deepseek/deepseek-v4-pro`) with a
+ * cross-provider Ollama Turbo fallback (`deepseek-v4-pro:cloud`) — the Turbo primary was
+ * timing out (~8min) on real full-size PRs and degrading reviews to the "partial" banner;
+ * OpenRouter serves the same base model fast at a few cents/PR. Keys are shape-driven and
+ * resolve PER LEG (`resolveConfigKeys`): the OpenRouter primary gets the OpenRouter key, the
+ * `:cloud` fallback gets the Ollama key — no rewire, no key leak. See the `logic` config below.
  *
- * Local eval testing still hits Ollama Turbo with NO OpenRouter spend: the `chat`
- * router dispatches by model-id shape, so a `:cloud` override (the eval harness's
- * `FIXTURE_EVAL_MODEL_<role>` / `LOGIC_RECALL_MODEL`) routes to Ollama and the key
- * is picked by shape. Pre-alpha Ollama lineup history lives in git.
+ * Local eval testing can still hit Ollama Turbo with NO OpenRouter spend: the `chat` router
+ * dispatches by model-id shape, so a `:cloud` override (the eval harness's
+ * `FIXTURE_EVAL_MODEL_<role>` / `LOGIC_RECALL_MODEL`) routes to Ollama and the key is picked
+ * by shape. Pre-alpha Ollama lineup history lives in git.
  */
 export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
-  // logic — deepseek-v4-pro:cloud (2026-07-12): moves the logic specialist OFF
-  // OpenRouter onto **Ollama Turbo**, replacing moonshotai/kimi-k2.7-code (SIG-450).
-  // Won the K=12 subtle-logic recall bake-off: 99% recall / 23% FP — Pareto-better than
-  // Kimi (93/31) AND glm-5.2 (89/18, rejected: recall too low + 5 errored attempts). The
-  // `:cloud` tag routes to Ollama Turbo (a flat subscription), so the heaviest role now
-  // costs ZERO marginal OpenRouter spend (founder's #1 cost); preferred over the OpenRouter
-  // `deepseek/deepseek-v4-pro` id per the prod-Ollama-for-cost policy. Reasoning effort
-  // HIGH via [vars] (tests stays medium). Prod has OLLAMA_API_KEY (a required Env field);
-  // the shape-driven key selector routes this `:cloud` primary to it automatically.
+  // logic — deepseek/deepseek-v4-pro on **OpenRouter** (2026-07-13). v4-pro won the K=12
+  // subtle-logic recall bake-off (99% recall / 23% FP — Pareto-better than Kimi 93/31 and
+  // glm-5.2 89/18), replacing moonshotai/kimi-k2.7-code (SIG-450). Primary runs on OpenRouter
+  // (a few cents/PR) because the Ollama Turbo v4-pro twin was timing out (~8min) on real
+  // full-size PRs and degrading reviews to the "partial" banner; the Turbo twin
+  // `deepseek-v4-pro:cloud` (same model/quality, different provider) is the cross-provider
+  // FALLBACK — kills the single-provider SPOF, fires ONLY on OpenRouter failure/exhaustion.
+  // Keys resolve per leg by model-id shape (primary→OPENROUTER_API_KEY, fallback→OLLAMA_API_KEY);
+  // an unset leg key is stripped (primary still runs); both-fail → recall-safe "unavailable" banner.
+  // Reasoning effort HIGH via [vars] (tests stays medium).
   //
-  // retries:2 (SIG-450): the heaviest role was blanking first under burst. SIG-369
-  // (2026-06-16): per-attempt cap = SPECIALIST_TIMEOUT_MS (the role wall) — the
-  // sole limiter, so one deep pass can use the FULL wall and a fast-fail retry uses the
-  // REMAINING wall time; total wall-clock stays bounded at SPECIALIST_TIMEOUT_MS.
-  // provider (2026-07-13, revised): primary is v4-pro on **OpenRouter** — Ollama Turbo
-  // v4-pro was timing out (~8min) on real full-size PRs and degrading reviews to the
-  // "partial" banner; OpenRouter serves the same model fast, at a few cents/PR. The Ollama
-  // twin `deepseek-v4-pro:cloud` (same model/quality, different provider) is the fallback —
-  // kills the single-provider SPOF, fires ONLY on OpenRouter failure/exhaustion. Keys resolve
-  // per leg by model-id shape; if a leg's key is unset it is stripped (primary still runs).
-  // Both-fail → recall-safe "specialist unavailable" banner.
+  // retries:2 (SIG-450): the heaviest role blanked first under burst. SIG-369 (2026-06-16):
+  // per-attempt cap = SPECIALIST_TIMEOUT_MS (the role wall) — the sole limiter, so one deep pass
+  // can use the FULL wall and a fast-fail retry uses the REMAINING wall; total stays bounded.
   logic: {
     primary: "deepseek/deepseek-v4-pro",
     retries: 2,

@@ -23,7 +23,11 @@ import {
   makeLogicInputCompositionRecorder,
 } from "@/src/lib/ensemble/domain/logic-input-composition"
 import { type EnsembleRunCtx, emitLogicInputComposition } from "@/src/lib/ensemble-perf-telemetry"
-import { SPECIALIST_MODELS, type SpecialistRunArgs } from "@/src/lib/ensemble/adapters/model-provider"
+import {
+  SPECIALIST_CONFIGS,
+  SPECIALIST_MODELS,
+  type SpecialistRunArgs,
+} from "@/src/lib/ensemble/adapters/model-provider"
 import type { TokenUsageByModel } from "@/src/lib/ensemble-slo-telemetry"
 
 /** The captured logic model input + live recorder, held by the caller between the
@@ -108,17 +112,20 @@ export function emitAndAttachLogicInputComposition(args: {
       recorder: capture.recorder,
     })
     args.telemetry.logicInputComposition = composition
-    // Reconcile against the configured PRIMARY logic model. This is exact today
-    // because `SPECIALIST_CONFIGS.logic.fallback === null` — every logic call is
-    // the configured primary (`moonshotai/kimi-k2.7-code`, SIG-450), so the recorder's
-    // per-call sum equals `tokenUsageByModel[that model].inputTokens`. If logic ever gains a
-    // cross-provider fallback, switch this to the model that actually answered
-    // (or sum across the logic attempt's model keys) so the reconciliation
-    // doesn't read a spurious mismatch.
+    // Reconcile against the logic attempt's model keys. Logic normally answers on its
+    // PRIMARY (`deepseek-v4-pro:cloud`, Ollama Turbo), but on a Turbo outage it can answer on
+    // its cross-provider fallback (`deepseek/deepseek-v4-pro`, OpenRouter — 2026-07-13), so sum
+    // inputTokens across BOTH possible logic model keys; otherwise the reconciliation reads a
+    // spurious mismatch when the fallback fires. `undefined` when neither key is present (no
+    // logic call), preserving the "no data" signal.
     const logicModel = SPECIALIST_MODELS.logic
+    const logicModelKeys = [logicModel, SPECIALIST_CONFIGS.logic.fallback].filter((m): m is string => m !== null)
+    const presentSums = logicModelKeys
+      .map((m) => args.telemetry.tokenUsageByModel[m]?.inputTokens)
+      .filter((n): n is number => n !== undefined)
     emitLogicInputComposition(args.perfCtx, composition, {
       logicModel,
-      summedFromTokenUsage: args.telemetry.tokenUsageByModel[logicModel]?.inputTokens,
+      summedFromTokenUsage: presentSums.length > 0 ? presentSums.reduce((a, b) => a + b, 0) : undefined,
     })
   } catch (err) {
     console.warn(

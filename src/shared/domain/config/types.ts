@@ -654,7 +654,7 @@ export const KNOWN_MODELS: ReadonlySet<string> = new Set([
   "kimi-k2.5:cloud", // logic + performance fallback
   "qwen3-coder:480b-cloud", // reserved for per-repo overrides
   "qwen3-coder-next:cloud", // logic fallback (was security primary; swapped to a reasoner after pr/07)
-  "deepseek-v4-pro:cloud", // logic primary (2026-06-05) + security fallback
+  "deepseek-v4-pro:cloud", // logic primary on Ollama Turbo (2026-07-12)
   "deepseek-v4-flash:cloud", // security + tests primary (reasoner), synth fallback
   "minimax-m3:cloud", // tests fallback (SIG-349; upgraded from m2.5, 2026-06-05)
   "gpt-oss:120b-cloud", // former synth primary (kept valid for user configs)
@@ -663,7 +663,7 @@ export const KNOWN_MODELS: ReadonlySet<string> = new Set([
   // `commands.review.model` configs may name these; the `:cloud` tags above stay
   // valid for non-review command paths + local eval overrides.
   "openai/o3", // legacy logic (API removes it Aug 26 2026)
-  "moonshotai/kimi-k2.7-code", // logic primary (SIG-450, replaces o3)
+  "moonshotai/kimi-k2.7-code", // prior logic primary (SIG-450); now a Bedrock/command fallback
   "deepseek/deepseek-v4-flash", // security + claim-extractor
   "deepseek/deepseek-v4-pro", // tests
   "z-ai/glm-5.1", // performance

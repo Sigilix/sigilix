@@ -17,13 +17,11 @@
 // GitHub identity, and a per-installation service key has no such identity. No
 // session → 401.
 //
-// ADMIN GATE — PER-INSTALLATION, not aggregate. The caller must be an admin of
-// THIS installation via isAdminOfInstallation (NOT resolveUserRole, whose
-// aggregate "admin of ANY connected install" would let a mere member of org B
-// mutate org B's seats). Not an admin of this installation → 403. This also
-// enforces TENANT ISOLATION: an installation the caller's token can't see is
-// never an installation they're an admin of, so a cross-tenant target 403s and
-// no row is written.
+// ADMIN GATE — PER-INSTALLATION, not aggregate. requireOrgAccess proves exact
+// live GitHub installation visibility and resolves the authoritative role from
+// org_workspace_access while managed membership is on (or the exact live role
+// while rollout is off). A revoked stored admin cannot mutate billable seats.
+// Cross-tenant targets fail closed and no row is written.
 //
 // TARGET — must be a MEMBER of the installation, proven case-insensitively by
 // either real usage activity or the installed App's GitHub roster. A complete
@@ -39,9 +37,8 @@
 // provider doubt → 503. A write only happens once every gate has passed.
 
 import { requireSession } from "@/src/lib/auth-middleware"
-import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { fetchInstallationRoster } from "@/src/lib/org-members-roster"
-import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
+import { requireOrgAccess } from "@/src/lib/org-access"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import type { Env } from "@/src/shared/types/env"
 
@@ -268,32 +265,14 @@ export async function handleOrgSeatRoute(
   const assigned = await parseAssigned(request)
   if (assigned === null) return json({ error: "body must be { assigned: boolean }" }, 400)
 
-  if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) {
-    console.error(JSON.stringify({ event: "org-seat-encryption-key-missing" }))
-    return json({ error: "misconfigured" }, 503)
-  }
+  // Keep the cheap session check above the CSRF/body validation so anonymous
+  // callers still receive 401, then run the central exact-installation gate
+  // only after the request is safe to authorize. In managed mode its stored
+  // role is authoritative even when GitHub still reports the caller as admin.
+  const access = await requireOrgAccess(request, env, ctx, installationId, { requiredRole: "admin" })
+  if (!access.ok) return access.response
 
-  let accessToken: string
-  try {
-    accessToken = await getValidGithubToken({
-      env,
-      sessionId: session.sessionId,
-      record: session.record,
-      encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-    })
-  } catch (error) {
-    // Never log the token — only that decryption failed.
-    console.error(
-      JSON.stringify({ event: "org-seat-decrypt-failed", err: error instanceof Error ? error.message : String(error) }),
-    )
-    return json({ error: "seat_failed" }, 500)
-  }
-
-  const callerLogin = session.record.login
-  // Per-installation admin gate. Also enforces tenant isolation: an installation
-  // the caller's token can't see is never one they're an admin of → 403.
-  const isAdmin = await isAdminOfInstallation(accessToken, callerLogin, installationId)
-  if (!isAdmin) return json({ error: "forbidden" }, 403)
+  const callerLogin = access.login
 
   if (!env.SIGILIX_PLATFORM_DB) {
     console.error(JSON.stringify({ event: "org-seat-platform-db-missing", installationId }))
@@ -323,8 +302,8 @@ export async function handleOrgSeatRoute(
   // guard reliably protects the case we CAN verify (self-lockout) plus any seat
   // an admin has self-marked by managing it, but two never-self-marked admins
   // could unassign each other. That is bounded, NOT a lockout: endpoint access
-  // is gated on GitHub admin role (isAdminOfInstallation), not on holding a seat,
-  // so any admin can always sign back in and re-assign a seat to recover.
+  // is gated on the installation-scoped org admin role, not on holding a seat,
+  // so any active admin can always sign back in and re-assign a seat to recover.
   if (!assigned) {
     const targetIsKnownAdmin = targetKey === callerKey || (await storedTargetIsAdmin(env, installationId, targetKey))
     if (targetIsKnownAdmin && (await countOtherAssignedAdmins(env, installationId, targetKey)) === 0) {

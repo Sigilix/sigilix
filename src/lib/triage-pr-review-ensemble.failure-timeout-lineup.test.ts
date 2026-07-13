@@ -199,12 +199,14 @@ describe("SIG-406 — OpenRouter alpha model lineup", () => {
   // concurrent-PR burst; tests/synth stay `retries: 1`. SIG-369 (2026-06-16) then set every
   // per-attempt cap = the role wall (all-roles uncap; the role-wall signal is the sole limiter).
   // Source of truth: SPECIALIST_CONFIGS / SYNTHESIZER_CONFIG.
-  it("logic specialist runs deepseek-v4-pro:cloud on Ollama Turbo (2026-07-12; retries:2, no fallback; SIG-369 cap = role wall)", () => {
+  it("logic specialist runs deepseek-v4-pro:cloud on Ollama Turbo w/ OpenRouter v4-pro fallback (retries:2; SIG-369 cap = role wall)", () => {
     // Moved OFF OpenRouter onto Ollama Turbo — won the K=12 subtle-logic recall
     // bake-off (99% recall / 23% FP vs Kimi 93/31), zero marginal OpenRouter spend.
+    // 2026-07-13: gained a cross-provider fallback to the OpenRouter v4-pro twin (same
+    // model) so a Turbo outage degrades to OpenRouter instead of dropping the role.
     expect(SPECIALIST_CONFIGS.logic.primary).toBe("deepseek-v4-pro:cloud")
     expect(SPECIALIST_CONFIGS.logic.retries).toBe(2)
-    expect(SPECIALIST_CONFIGS.logic.fallback).toBeNull()
+    expect(SPECIALIST_CONFIGS.logic.fallback).toBe("deepseek/deepseek-v4-pro")
     // SIG-369: per-attempt cap = the role wall → the absolute role-wall signal is the sole limiter.
     expect(SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs).toBe(SPECIALIST_TIMEOUT_MS)
   })
@@ -258,24 +260,23 @@ describe("SIG-406 — OpenRouter alpha model lineup", () => {
     expect(SYNTHESIZER_CONFIG.perAttemptTimeoutMs).toBe(150_000)
   })
 
-  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (16)", () => {
+  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (17)", () => {
     // The production constant is what `dailyBudgetAvailable()` reserves before
     // admitting a PR, so the regression asserts against it directly — not a
     // hand-calc that would silently drift. Pre-flight retrieve is a Vectorize
     // call, not a model call, so it is intentionally NOT counted here.
     //
     // Worst-case model calls per ensemble run (SIG-449: security/perf retries:2; SIG-450: logic retries:2):
-    //   logic:       primary + 2 retries (SIG-450)            = 3
+    //   logic:       primary + 2 retries (SIG-450) + fallback = 4 (2026-07-13 OpenRouter v4-pro fallback)
     //   security:    primary + 2 retries (SIG-449) + fallback = 4 (SIG-468 v4-pro fallback)
     //   performance: primary + 2 retries (SIG-449)            = 3
     //   tests:       primary + 1 retry                        = 2
     //   synth:       primary + 1 retry                        = 2
     //   synth retry: primary + 1 retry                        = 2 (ARC-278
     //                retry path, fires when attempt 1 fails)
-    //   total: 16.  Only security carries a fallback model (SIG-468); the OpenRouter
-    //   roles rely on OpenRouter's per-call upstream routing, and logic (Ollama Turbo,
-    //   2026-07-12) relies on its retries:2 + the unavailable-banner degrade.
-    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(16)
+    //   total: 17.  logic + security each carry a cross-provider fallback model; performance
+    //   and tests rely on OpenRouter's per-call upstream routing (fallback:null).
+    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(17)
 
     // Cross-check: the constant matches the sum of `1 + retries + (fallback ? 1 : 0)`
     // across the 4 specialists + 2 synth runs (attempt + ARC-278 retry).

@@ -18,6 +18,7 @@ import {
   SYNTHESIZER_CONFIG,
   CLAIM_EXTRACTOR_CONFIG,
   selectConfigApiKey,
+  resolveConfigKeys,
   modelApiKeys,
   runSpecialist,
 } from "@/src/lib/ensemble/adapters/model-provider"
@@ -57,32 +58,44 @@ describe("selectConfigApiKey — per-provider key, fail-closed, mixed-provider g
   })
 })
 
-describe("invariant: no shipped config mixes providers", () => {
-  it("selectConfigApiKey never throws for any reachable config", () => {
-    const reachable: ModelConfig[] = [...Object.values(SPECIALIST_CONFIGS), SYNTHESIZER_CONFIG, CLAIM_EXTRACTOR_CONFIG]
-    for (const config of reachable) {
+describe("invariant: no shipped SINGLE-KEY config mixes providers", () => {
+  it("selectConfigApiKey never throws for any single-key config; logic (cross-provider) MUST use resolveConfigKeys", () => {
+    // The one-key `selectConfigApiKey` serves configs whose primary+fallback share a provider
+    // (synth, extractor, and the same-provider specialists). Logic is DELIBERATELY cross-provider
+    // (2026-07-13: Ollama primary + OpenRouter fallback) — it never rides the one-key path (it goes
+    // through runSpecialist → resolveConfigKeys, per-leg), so selectConfigApiKey is EXPECTED to throw
+    // for it. That throw is the guard: it fails loud if a future edit routes logic through one key.
+    // Iterate SPECIALIST_CONFIGS dynamically so a NEW same-provider role is auto-covered; the only
+    // sanctioned cross-provider config is `logic` (a new one would trip the else-branch — a feature).
+    for (const [role, config] of Object.entries(SPECIALIST_CONFIGS)) {
+      if (role === "logic") {
+        expect(() => selectConfigApiKey(config, BOTH_KEYS), role).toThrow(/mixes providers/)
+      } else {
+        expect(() => selectConfigApiKey(config, BOTH_KEYS), role).not.toThrow()
+      }
+    }
+    for (const config of [SYNTHESIZER_CONFIG, CLAIM_EXTRACTOR_CONFIG]) {
       expect(() => selectConfigApiKey(config, BOTH_KEYS)).not.toThrow()
     }
   })
 
-  it("every shipped config EXCEPT logic resolves to the OpenRouter key; logic resolves to the Ollama key", () => {
-    // SIG-406: synth + the claim-extractor + every specialist EXCEPT logic are on
-    // OpenRouter, so the key selector must return the OpenRouter key for each. Since
-    // 2026-07-12 `logic` runs on Ollama Turbo (`deepseek-v4-pro:cloud`), so its key
-    // follows the same shape rule to the OLLAMA key — this proves the switch does NOT
-    // resurface the claim-extractor key-leak class: the key tracks the config's model
-    // shape, so an Ollama-shaped primary can never be handed the OpenRouter key.
-    const openRouterConfigs: ModelConfig[] = [
-      SPECIALIST_CONFIGS.security,
-      SPECIALIST_CONFIGS.performance,
-      SPECIALIST_CONFIGS.tests,
-      SYNTHESIZER_CONFIG,
-      CLAIM_EXTRACTOR_CONFIG,
-    ]
-    for (const config of openRouterConfigs) {
+  it("single-key configs resolve to the OpenRouter key; logic resolves per-leg (Ollama primary + OpenRouter fallback)", () => {
+    // SIG-406: synth + the claim-extractor + every SAME-PROVIDER specialist are on OpenRouter, so
+    // the one-key selector returns the OpenRouter key for each. Logic runs on Ollama Turbo
+    // (`deepseek-v4-pro:cloud`) with an OpenRouter fallback — resolveConfigKeys keys each leg by
+    // shape (primary → Ollama key, fallback → OpenRouter key), proving the switch never hands an
+    // Ollama-shaped primary the OpenRouter key (no key-leak) while still wiring the fallback leg.
+    // Dynamic iteration (skip logic) so a new same-provider specialist is auto-covered.
+    for (const [role, config] of Object.entries(SPECIALIST_CONFIGS)) {
+      if (role === "logic") continue
+      expect(selectConfigApiKey(config, BOTH_KEYS), role).toBe("openrouter-key")
+    }
+    for (const config of [SYNTHESIZER_CONFIG, CLAIM_EXTRACTOR_CONFIG]) {
       expect(selectConfigApiKey(config, BOTH_KEYS)).toBe("openrouter-key")
     }
-    expect(selectConfigApiKey(SPECIALIST_CONFIGS.logic, BOTH_KEYS)).toBe("ollama-key")
+    const logicKeys = resolveConfigKeys(SPECIALIST_CONFIGS.logic, BOTH_KEYS)
+    expect(logicKeys.apiKey).toBe("ollama-key")
+    expect(logicKeys.fallbackApiKey).toBe("openrouter-key")
   })
 })
 

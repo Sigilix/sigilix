@@ -98,14 +98,14 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   // (2026-06-16): per-attempt cap = SPECIALIST_TIMEOUT_MS (the role wall) — the
   // sole limiter, so one deep pass can use the FULL wall and a fast-fail retry uses the
   // REMAINING wall time; total wall-clock stays bounded at SPECIALIST_TIMEOUT_MS.
-  // fallback null: no upstream self-routing here (unlike the OpenRouter roles), so on total
-  // Ollama-Turbo failure the role degrades to the "logic specialist unavailable" banner
-  // (non-zero exit, never a clean pass — recall-safe), as `tests` (v4-pro) / `performance`
-  // (glm) also run fallback-free.
+  // fallback (2026-07-13): the OpenRouter twin `deepseek/deepseek-v4-pro` (same model/quality,
+  // different provider) kills the single-provider SPOF — normal path stays all-Ollama (≈zero
+  // OpenRouter cost); it fires ONLY on Turbo failure/exhaustion. Keys resolve per leg; if
+  // OPENROUTER_API_KEY is unset the leg is stripped (primary still runs). Both-fail → banner.
   logic: {
     primary: "deepseek-v4-pro:cloud",
     retries: 2,
-    fallback: null,
+    fallback: "deepseek/deepseek-v4-pro",
     perAttemptTimeoutMs: SPECIALIST_TIMEOUT_MS,
   },
   // security — deepseek/deepseek-v4-flash: fast reasoner; reasoning stays OFF (it
@@ -214,10 +214,10 @@ export function buildCostProjectionLineup(): CostProjectionLineup {
 
 // SIG-406: baseline fanout + synth reservation ONLY. SIG-449 raised security +
 // performance to retries:2 (maxAttempts 3 each); SIG-450 raised logic to retries:2 too
-// (burst resilience); SIG-468 gave security a v4-pro fallback (+1 attempt → maxAttempts 4),
-// so the worst case is now logic(3) + security(4) + performance(3) +
-// tests(2) + 2×synth(2) = 16. The SIG-393 re-sweep + SIG-395 invariant-lens add-on phases
-// make extra `runSpecialist` calls NOT counted here (unchanged from pre-alpha accounting;
+// (burst resilience); SIG-468 gave security a v4-pro fallback (maxAttempts 4); 2026-07-13
+// logic gained a cross-provider OpenRouter v4-pro fallback (maxAttempts 4). Worst case:
+// logic(4) + security(4) + performance(3) + tests(2) + 2×synth(2) = 17. The SIG-393 re-sweep + SIG-395 invariant-lens add-on phases make extra `runSpecialist` calls
+// NOT counted here (unchanged from pre-alpha accounting;
 // full add-on budgeting is SIG-369). NOTE: this constant is DERIVED from the configs, so it
 // tracks a retries bump automatically — the literal lives only in the lineup test.
 export const MAX_CALLS_PER_ENSEMBLE_RUN =

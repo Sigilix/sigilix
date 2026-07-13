@@ -36,12 +36,14 @@ const REPEATS = (() => {
 })()
 // Optional model swap (LOGIC_RECALL_MODEL) — measure a different logic model
 // (e.g. deepseek-v4-pro:cloud) against the SAME corpus + prompt + think:false path.
-// Defaults to the prod logic primary; when overriding we null the fallback so every
-// scored run is the requested model (a fallback would silently mix a 2nd model in).
+// Defaults to the prod logic primary. We ALWAYS null the fallback so every scored run
+// is exactly the measured model — the prod logic config now carries a cross-provider
+// fallback (deepseek/deepseek-v4-pro), and a fallback would silently mix a 2nd model in
+// (and make the single-key `selectConfigApiKey` below throw on the cross-provider mix).
 const MODEL_OVERRIDE = process.env.LOGIC_RECALL_MODEL?.trim()
 const LOGIC_CONFIG = MODEL_OVERRIDE
   ? { ...SPECIALIST_CONFIGS.logic, primary: MODEL_OVERRIDE, fallback: null }
-  : SPECIALIST_CONFIGS.logic
+  : { ...SPECIALIST_CONFIGS.logic, fallback: null }
 // SIG-406: select the key by the EFFECTIVE logic model's shape — a `:cloud` override
 // (LOGIC_RECALL_MODEL=deepseek-v4-pro:cloud) → Ollama Turbo (no OpenRouter spend); the
 // prod default `openai/o3` (or LOGIC_RECALL_MODEL=openai/o3) → OPENROUTER_API_KEY. The

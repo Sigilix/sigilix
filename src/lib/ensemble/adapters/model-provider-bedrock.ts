@@ -75,8 +75,10 @@ export const BEDROCK_SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   // default logic path: it activates only via SIGILIX_ENSEMBLE_PROVIDER_LOGIC.
   logic: {
     primary: "us.anthropic.claude-sonnet-5",
-    retries: 1,
-    fallback: "deepseek-v4-pro:cloud", // today's logic (Ollama Turbo, 2026-07-12) — degrade to the shipped model
+    // retries:2 (2026-07-13): matches prod logic's maxAttempts (1+2 retries+fallback = 4)
+    // after logic gained its cross-provider fallback, preserving attempt-count parity.
+    retries: 2,
+    fallback: "deepseek-v4-pro:cloud", // today's logic (Ollama Turbo) — degrade to the shipped model
     perAttemptTimeoutMs: SPECIALIST_TIMEOUT_MS,
   },
   security: {

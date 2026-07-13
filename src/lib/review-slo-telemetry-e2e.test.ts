@@ -402,16 +402,17 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
   })
 
   it("records nothing when chat() throws (HTTP/timeout) — no usage, no phantom cost", async () => {
-    // SIG-212: usage is absent on the exception path (no tokens exchanged). SIG-406:
-    // logic = retries:2 (SIG-450) + no fallback; reject EVERY attempt so the whole ladder
-    // exhausts with zero recorded spend.
+    // SIG-212: usage is absent on the exception path (no tokens exchanged). logic =
+    // retries:2 + a cross-provider fallback (2026-07-13), so BOTH keys are present and
+    // mockChat rejects EVERY call — the primary (Ollama) attempts AND the OpenRouter
+    // fallback leg all exhaust, degrading recall-safe (verdict null) with zero recorded spend.
     const sink: TokenUsageByModel = {}
     const perfCtx: EnsembleRunCtx = { ...PERF_CTX, recordTokens: makeTokenRecorder(sink) }
 
-    mockChat.mockRejectedValue(new Error("Ollama HTTP 503: overloaded"))
+    mockChat.mockRejectedValue(new Error("HTTP 503: overloaded"))
     const res = await runSpecialist({
       role: "logic",
-      apiKeys: { ollama: undefined, openrouter: "k" },
+      apiKeys: { ollama: "k", openrouter: "k" },
       systemPrompt: "system",
       initialMessage: "user",
       chatEnabled: "on",

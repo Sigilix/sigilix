@@ -31,6 +31,8 @@ import {
 } from "./auth-session"
 import { parseGithubTokenSet } from "./github-user-token"
 import { upsertGithubIdentity } from "./user-identity-store"
+import { listUserInstallationIds } from "@/src/shared/adapters/github/user-installation-access"
+import { linkAccountTenant } from "@/src/lib/api-key-store"
 
 const STATE_KV_PREFIX = "auth_state:"
 const STATE_TTL_SECONDS = 600
@@ -411,6 +413,33 @@ export async function handleGitHubAuthCallback(request: Request, env: AuthOauthE
     if (identity) {
       identityUserId = identity.userId
       identityEmail = identity.email ?? undefined
+    }
+
+    // 5b. Always link the user to every org tenant they belong to
+    //     (account_tenant), so a signed-in user is NEVER tenant-less — each
+    //     tenant carries its own fairness/isolation, so membership must exist the
+    //     moment they sign in, not only after /setup. BEST-EFFORT (login already
+    //     succeeded — a lookup/D1 fault must not block sign-in) + idempotent
+    //     (linkAccountTenant is ON CONFLICT DO NOTHING, so it never downgrades an
+    //     existing admin link to member).
+    try {
+      const installationIds = await listUserInstallationIds(accessToken)
+      const linkNowIso = new Date().toISOString()
+      for (const installationId of installationIds) {
+        await linkAccountTenant(env.SIGILIX_PLATFORM_DB, {
+          githubUserId: String(user.id),
+          installationId,
+          role: "member",
+          nowIso: linkNowIso,
+        })
+      }
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: "login-link-account-tenant-failed",
+          err: error instanceof Error ? error.message : String(error),
+        }),
+      )
     }
   }
 

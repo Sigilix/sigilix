@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { userCanAccessInstallation } from "./user-installation-access"
+import { listUserInstallationIds, userCanAccessInstallation } from "./user-installation-access"
 
 function installation(id: number): { id: number } {
   return { id }
@@ -126,5 +126,40 @@ describe("userCanAccessInstallation", () => {
     await expect(
       userCanAccessInstallation("github-user-token", 42, { fetchImpl: vi.fn(implementation) }),
     ).resolves.toEqual({ ok: false, reason: "lookup_failed" })
+  })
+})
+
+describe("listUserInstallationIds", () => {
+  it("returns every installation id across pages", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => installation(index + 1))
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const page = new URL(input.toString()).searchParams.get("page")
+      return new Response(
+        JSON.stringify({ installations: page === "1" ? firstPage : [installation(200), installation(201)] }),
+      )
+    })
+
+    await expect(listUserInstallationIds("github-user-token", { fetchImpl })).resolves.toEqual([
+      ...firstPage.map((i) => i.id),
+      200,
+      201,
+    ])
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it("drops non-positive / non-integer ids", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(JSON.stringify({ installations: [{ id: 7 }, { id: 0 }, { id: -3 }, {}, { id: 1.5 }] })),
+    )
+    await expect(listUserInstallationIds("github-user-token", { fetchImpl })).resolves.toEqual([7])
+  })
+
+  it("fail-soft: returns [] on a non-ok response (login never blocks)", async () => {
+    const fetchImpl = vi.fn(async () => new Response("nope", { status: 500 }))
+    await expect(listUserInstallationIds("github-user-token", { fetchImpl })).resolves.toEqual([])
+  })
+
+  it("fail-soft: returns [] when the token is empty", async () => {
+    await expect(listUserInstallationIds("")).resolves.toEqual([])
   })
 })

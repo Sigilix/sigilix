@@ -51,6 +51,7 @@ import type { ChatArgs, ChatMessage, ChatResult, LlmUsage, ToolCall } from "@/sr
 import { signAwsRequestV4 } from "@/src/shared/adapters/aws-sigv4"
 import { parseRetryAfterMs } from "@/src/shared/util/retry-after"
 import { ProviderRateLimitError } from "@/src/shared/adapters/model/provider-errors"
+import { isAnthropicModel, sanitizeSchemaForAnthropic } from "@/src/shared/adapters/model/anthropic-schema"
 import { computeCostUsd } from "@/src/shared/domain/model-pricing"
 
 /** SigV4 service name for the Bedrock RUNTIME data plane. */
@@ -235,11 +236,15 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
     if (!usesTools && args.format) {
       // Converse has no response_format — enforce the schema by instruction
       // (see file header; a glitch is a normal parse failure → retry/fallback).
+      // Anthropic-on-Bedrock rejects min/max on integer/number nodes, so strip
+      // them from the copy embedded for Anthropic ids only; every other Bedrock
+      // id embeds the original `args.format` — byte-identical to today.
+      const schema = isAnthropicModel(args.model) ? sanitizeSchemaForAnthropic(args.format) : args.format
       system.push({
         text:
           "You MUST respond with a SINGLE JSON object that conforms to this JSON Schema. " +
           "No markdown fences, no prose before or after the object.\n" +
-          JSON.stringify(args.format),
+          JSON.stringify(schema),
       })
     }
     const body: Record<string, unknown> = {

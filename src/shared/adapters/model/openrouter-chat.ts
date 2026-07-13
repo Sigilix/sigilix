@@ -35,6 +35,7 @@
 import type { LlmUsage, ChatMessage, ChatArgs, ChatResult, ToolCall } from "@/src/shared/ports/model"
 import { parseRetryAfterMs } from "@/src/shared/util/retry-after"
 import { ProviderRateLimitError } from "@/src/shared/adapters/model/provider-errors"
+import { isAnthropicModel, sanitizeSchemaForAnthropic } from "@/src/shared/adapters/model/anthropic-schema"
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -104,9 +105,13 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
     body.tool_choice = "auto"
     body.parallel_tool_calls = true
   } else if (args.format) {
+    // Anthropic's structured-output API rejects min/max on integer/number nodes;
+    // strip them from the copy sent to Anthropic only. Non-Anthropic ids pass the
+    // original `args.format` reference through — byte-identical to today.
+    const schema = isAnthropicModel(args.model) ? sanitizeSchemaForAnthropic(args.format) : args.format
     body.response_format = {
       type: "json_schema",
-      json_schema: { name: "pr_review", strict: false, schema: args.format },
+      json_schema: { name: "pr_review", strict: false, schema },
     }
     // Mirror ollama-chat: reasoning level applies only on schema-constrained calls.
     if (args.reasoning !== undefined) body.reasoning = { effort: args.reasoning }

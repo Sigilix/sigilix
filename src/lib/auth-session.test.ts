@@ -212,13 +212,15 @@ describe("remember-me session lifetime (KV TTL)", () => {
   const DAY = 24 * 60 * 60
   const THIRTY_DAYS = 30 * DAY
 
-  it("sessionTtlSeconds maps remember true/absent → 30d, false → 1d", () => {
+  it("sessionTtlSeconds always returns the persistent 30-day TTL (remember no longer shortens)", () => {
+    // sig-always-persistent-session: every session is 30 days regardless of the
+    // login's remember-me choice.
     expect(sessionTtlSeconds(true)).toBe(THIRTY_DAYS)
-    expect(sessionTtlSeconds(undefined)).toBe(THIRTY_DAYS) // legacy records stay persistent
-    expect(sessionTtlSeconds(false)).toBe(DAY)
+    expect(sessionTtlSeconds(undefined)).toBe(THIRTY_DAYS)
+    expect(sessionTtlSeconds(false)).toBe(THIRTY_DAYS)
   })
 
-  it("createSession with remember:false writes the SHORT (1-day) KV TTL + stores the flag", async () => {
+  it("createSession with remember:false STILL writes the persistent 30-day KV TTL (always-persistent), keeping the stored flag", async () => {
     const kv = makeKV()
     const record = await createSession({
       kv: kv as unknown as KVNamespace,
@@ -228,11 +230,12 @@ describe("remember-me session lifetime (KV TTL)", () => {
       remember: false,
       encryptionKeyB64url: TEST_KEY,
     })
+    // The flag round-trips for back-compat/audit, but no longer shortens the TTL.
     expect(record.remember).toBe(false)
     expect(kv.put).toHaveBeenCalledWith(
       "auth_session:short-id",
       expect.any(String),
-      expect.objectContaining({ expirationTtl: DAY }),
+      expect.objectContaining({ expirationTtl: THIRTY_DAYS }),
     )
   })
 
@@ -253,7 +256,7 @@ describe("remember-me session lifetime (KV TTL)", () => {
     )
   })
 
-  it("touchSession keeps a remember:false session on the SHORT TTL (never promotes to 30d)", async () => {
+  it("touchSession keeps a remember:false session persistent (30-day TTL — no short sessions anymore)", async () => {
     const kv = makeKV()
     const record = await createSession({
       kv: kv as unknown as KVNamespace,
@@ -268,7 +271,7 @@ describe("remember-me session lifetime (KV TTL)", () => {
     expect(kv.put).toHaveBeenCalledWith(
       "auth_session:short-id",
       expect.any(String),
-      expect.objectContaining({ expirationTtl: DAY }),
+      expect.objectContaining({ expirationTtl: THIRTY_DAYS }),
     )
   })
 
@@ -343,13 +346,13 @@ describe("cookie helpers", () => {
     expect(c).not.toContain("Domain=")
   })
 
-  it("remember me OFF → browser-SESSION cookie (no Max-Age/Expires) but same secure flags", () => {
+  it("remember me OFF → STILL a persistent 30-day cookie (always-persistent), same secure flags", () => {
+    // sig-always-persistent-session: the remember argument no longer produces a
+    // browser-session cookie; every session cookie is persistent.
     const c = setSessionCookie("session-abc", false)
     expect(c).toContain("__Host-sigilix_session=session-abc")
-    // A session cookie carries NO Max-Age and NO Expires → cleared on browser close.
-    expect(c).not.toContain("Max-Age")
+    expect(c).toContain("Max-Age=2592000") // 30 days, even with remember=false
     expect(c).not.toContain("Expires")
-    // Every existing session protection stays intact on the short-lived path.
     expect(c).toContain("HttpOnly")
     expect(c).toContain("Secure")
     expect(c).toContain("SameSite=None")

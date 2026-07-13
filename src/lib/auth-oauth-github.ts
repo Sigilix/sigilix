@@ -81,8 +81,9 @@ export async function handleGitHubAuthKickoff(request: Request, env: AuthOauthEn
   }
 
   const url = new URL(request.url)
-  // Persistent 30-day session unless the login form explicitly opted out
-  // (`?remember=0`). Any other value keeps the persistent default.
+  // Parsed + stored for back-compat only; every session is a persistent 30-day
+  // session now (sig-always-persistent-session), so `?remember=0` no longer
+  // shortens it.
   const remember = url.searchParams.get("remember") !== "0"
   const rawRedirect = url.searchParams.get("redirectAfter") ?? undefined
   // Only validate + store a redirectAfter when the CALLER explicitly asked

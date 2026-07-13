@@ -6,10 +6,10 @@
 // via `usage_ledger.cost_usd`) and holds ~$1,000 of AWS credits — moving the
 // ensemble's Bedrock-servable roles onto Bedrock spends credits instead of
 // cash. FOUR roles migrate (security, tests, performance, synth); LOGIC ships on
-// Ollama Turbo (`deepseek-v4-pro:cloud`, 2026-07-12) — off both Bedrock and
-// OpenRouter — so the Bedrock logic entry stays a SELECTABLE bake-off candidate
-// only (Claude Sonnet 5 + Mistral Large 3 wired below, nothing more; Anthropic
-// Bedrock access is still AccessDenied as of 2026-07-12).
+// OpenRouter v4-pro (`deepseek/deepseek-v4-pro`, 2026-07-13) with an Ollama Turbo
+// v4-pro fallback — off Bedrock — so the Bedrock logic entry stays a SELECTABLE
+// bake-off candidate only (Claude Sonnet 5 + Mistral Large 3 wired below, nothing
+// more; Anthropic Bedrock access is still AccessDenied as of 2026-07-12).
 //
 // DEFAULT-OFF: with `SIGILIX_ENSEMBLE_PROVIDER` unset (or ANY unrecognized
 // value) every resolver here returns `undefined` and the shipped OpenRouter
@@ -19,7 +19,7 @@
 //
 // DECORRELATION (SIG-406): the migrated-family split survives the migration —
 // security+tests=DeepSeek, performance=GLM (Z.ai), synth=Nvidia (logic ships on
-// Ollama Turbo v4-pro, outside this lineup). The synth stays a generalist
+// OpenRouter v4-pro, outside this lineup). The synth stays a generalist
 // adjudicator decorrelated from every specialist family, so it remains an
 // unbiased judge with no self-preference. Do not collapse families when editing
 // this lineup.
@@ -32,7 +32,7 @@
 // FALLBACK = TODAY'S SHIPPED MODEL per role: a Bedrock outage degrades to exactly
 // the lineup that runs today (keys resolved per leg by `resolveConfigKeys` — the
 // Bedrock envelope for the primary, and the OpenRouter key for the OpenRouter
-// fallbacks / the Ollama key for logic's `deepseek-v4-pro:cloud` fallback).
+// fallbacks, incl. logic's `deepseek/deepseek-v4-pro` fallback).
 
 import type { ModelConfig } from "@/src/lib/ensemble/domain/model-policy"
 import { SPECIALIST_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
@@ -78,7 +78,7 @@ export const BEDROCK_SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     // retries:2 (2026-07-13): matches prod logic's maxAttempts (1+2 retries+fallback = 4)
     // after logic gained its cross-provider fallback, preserving attempt-count parity.
     retries: 2,
-    fallback: "deepseek-v4-pro:cloud", // today's logic (Ollama Turbo) — degrade to the shipped model
+    fallback: "deepseek/deepseek-v4-pro", // today's logic primary (OpenRouter v4-pro, 2026-07-13) — degrade to the shipped model
     perAttemptTimeoutMs: SPECIALIST_TIMEOUT_MS,
   },
   security: {

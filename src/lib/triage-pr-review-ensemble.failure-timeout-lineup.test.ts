@@ -199,14 +199,15 @@ describe("SIG-406 — OpenRouter alpha model lineup", () => {
   // concurrent-PR burst; tests/synth stay `retries: 1`. SIG-369 (2026-06-16) then set every
   // per-attempt cap = the role wall (all-roles uncap; the role-wall signal is the sole limiter).
   // Source of truth: SPECIALIST_CONFIGS / SYNTHESIZER_CONFIG.
-  it("logic specialist runs deepseek-v4-pro:cloud on Ollama Turbo w/ OpenRouter v4-pro fallback (retries:2; SIG-369 cap = role wall)", () => {
-    // Moved OFF OpenRouter onto Ollama Turbo — won the K=12 subtle-logic recall
-    // bake-off (99% recall / 23% FP vs Kimi 93/31), zero marginal OpenRouter spend.
-    // 2026-07-13: gained a cross-provider fallback to the OpenRouter v4-pro twin (same
-    // model) so a Turbo outage degrades to OpenRouter instead of dropping the role.
-    expect(SPECIALIST_CONFIGS.logic.primary).toBe("deepseek-v4-pro:cloud")
+  it("logic specialist runs deepseek/deepseek-v4-pro on OpenRouter w/ Ollama Turbo v4-pro fallback (retries:2; SIG-369 cap = role wall)", () => {
+    // v4-pro won the K=12 subtle-logic recall bake-off (99% recall / 23% FP vs Kimi 93/31).
+    // Primary is the OpenRouter build (a few cents/PR): Ollama Turbo was timing out (~8min)
+    // on real full-size PRs and degrading reviews to the "partial" banner. The Ollama twin
+    // `deepseek-v4-pro:cloud` (same model) is the cross-provider fallback so an OpenRouter
+    // outage degrades to Turbo instead of dropping the role.
+    expect(SPECIALIST_CONFIGS.logic.primary).toBe("deepseek/deepseek-v4-pro")
     expect(SPECIALIST_CONFIGS.logic.retries).toBe(2)
-    expect(SPECIALIST_CONFIGS.logic.fallback).toBe("deepseek/deepseek-v4-pro")
+    expect(SPECIALIST_CONFIGS.logic.fallback).toBe("deepseek-v4-pro:cloud")
     // SIG-369: per-attempt cap = the role wall → the absolute role-wall signal is the sole limiter.
     expect(SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs).toBe(SPECIALIST_TIMEOUT_MS)
   })
@@ -235,19 +236,24 @@ describe("SIG-406 — OpenRouter alpha model lineup", () => {
     expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs).toBe(SPECIALIST_TIMEOUT_MS)
   })
 
-  it("security and tests are now DISTINCT DeepSeek models (flash vs pro); 4 unique specialist primaries", () => {
+  it("security and tests are DISTINCT DeepSeek models (flash vs pro); logic shares tests' v4-pro id after the 2026-07-13 cutover → 3 unique specialist primaries", () => {
     // SIG-349 had tests SHARE security's flash on Ollama. SIG-406 splits them:
     // security = deepseek/deepseek-v4-flash, tests = deepseek/deepseek-v4-pro
-    // (pro edges flash on subtle test-quality cases). All four specialist
-    // primaries are now distinct again.
+    // (pro edges flash on subtle test-quality cases). That flash-vs-pro split holds.
     expect(SPECIALIST_CONFIGS.tests.primary).not.toBe(SPECIALIST_CONFIGS.security.primary)
+    // 2026-07-13 OpenRouter cutover: logic's primary moved from `deepseek-v4-pro:cloud`
+    // (v4-pro on Ollama Turbo) to `deepseek/deepseek-v4-pro` (the same base v4-pro on
+    // OpenRouter), which is ALSO tests' primary — so logic and tests now share one primary
+    // id. They were already the same base model pre-cutover, distinguished only by provider
+    // id (`:cloud` vs `/`); the cutover collapsed the ids too. Unique primaries: 3.
+    expect(SPECIALIST_CONFIGS.logic.primary).toBe(SPECIALIST_CONFIGS.tests.primary)
     const primaries = [
       SPECIALIST_CONFIGS.logic.primary,
       SPECIALIST_CONFIGS.security.primary,
       SPECIALIST_CONFIGS.performance.primary,
       SPECIALIST_CONFIGS.tests.primary,
     ]
-    expect(new Set(primaries).size).toBe(4)
+    expect(new Set(primaries).size).toBe(3)
   })
 
   it("synthesizer runs nvidia/nemotron-3-ultra (retries:1, no fallback, 150s attempt cap)", () => {

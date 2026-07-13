@@ -296,7 +296,8 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
     for (const role of ALL_SPECIALISTS) {
       const res = await runSpecialist({
         role,
-        // logic runs on Ollama Turbo now; the rest on OpenRouter — provide both keys.
+        // logic's primary runs on OpenRouter with an Ollama Turbo fallback; the rest on
+        // OpenRouter — provide both keys so every leg resolves.
         apiKeys: { ollama: "k", openrouter: "k" },
         systemPrompt: "system",
         initialMessage: "user",
@@ -404,7 +405,7 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
   it("records nothing when chat() throws (HTTP/timeout) — no usage, no phantom cost", async () => {
     // SIG-212: usage is absent on the exception path (no tokens exchanged). logic =
     // retries:2 + a cross-provider fallback (2026-07-13), so BOTH keys are present and
-    // mockChat rejects EVERY call — the primary (Ollama) attempts AND the OpenRouter
+    // mockChat rejects EVERY call — the primary (OpenRouter) attempts AND the Ollama Turbo
     // fallback leg all exhaust, degrading recall-safe (verdict null) with zero recorded spend.
     const sink: TokenUsageByModel = {}
     const perfCtx: EnsembleRunCtx = { ...PERF_CTX, recordTokens: makeTokenRecorder(sink) }

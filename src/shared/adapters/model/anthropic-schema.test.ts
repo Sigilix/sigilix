@@ -89,7 +89,7 @@ describe("sanitizeSchemaForAnthropic", () => {
     })
   })
 
-  it("preserves siblings, required, enum, descriptions, and string/array nodes untouched", () => {
+  it("preserves siblings, required, enum, descriptions, and item schemas — strips only the constraint keywords", () => {
     const input = {
       type: "object",
       properties: {
@@ -105,7 +105,8 @@ describe("sanitizeSchemaForAnthropic", () => {
       type: "object",
       properties: {
         category: { type: "string", enum: ["logic", "security"], description: "the bucket" },
-        labels: { type: "array", maxItems: 3, items: { type: "string" } },
+        // `maxItems` stripped from the array node; `items` schema preserved.
+        labels: { type: "array", items: { type: "string" } },
         confidence: { type: "integer", description: "1-5" },
       },
       required: ["category", "confidence"],
@@ -113,7 +114,54 @@ describe("sanitizeSchemaForAnthropic", () => {
     })
   })
 
-  it("leaves a schema with no integer/number bounds unchanged (deep-equal)", () => {
+  it("strips array-cardinality keywords (minItems/maxItems/uniqueItems) from a typed array node", () => {
+    const out = sanitizeSchemaForAnthropic({
+      type: "array",
+      minItems: 1,
+      maxItems: 8,
+      uniqueItems: true,
+      items: { type: "string" },
+    })
+    expect(out).toEqual({ type: "array", items: { type: "string" } })
+  })
+
+  it("strips string-validation keywords (minLength/maxLength/pattern/format) from a typed string node", () => {
+    const out = sanitizeSchemaForAnthropic({
+      type: "string",
+      minLength: 1,
+      maxLength: 512,
+      pattern: "^[0-9a-fA-F]{40}$",
+      format: "date-time",
+      description: "keep me",
+    })
+    expect(out).toEqual({ type: "string", description: "keep me" })
+  })
+
+  it("strips the remaining numeric keywords (exclusiveMinimum/exclusiveMaximum/multipleOf)", () => {
+    const out = sanitizeSchemaForAnthropic({
+      type: "number",
+      exclusiveMinimum: 0,
+      exclusiveMaximum: 100,
+      multipleOf: 0.5,
+    })
+    expect(out).toEqual({ type: "number" })
+  })
+
+  it("strips constraint keywords inside anyOf/oneOf/allOf branch schemas", () => {
+    const out = sanitizeSchemaForAnthropic({
+      anyOf: [
+        { type: "integer", minimum: 1, maximum: 5 },
+        { type: "string", maxLength: 10, pattern: "^x" },
+      ],
+      allOf: [{ type: "array", maxItems: 2, items: { type: "string", format: "email" } }],
+    })
+    expect(out).toEqual({
+      anyOf: [{ type: "integer" }, { type: "string" }],
+      allOf: [{ type: "array", items: { type: "string" } }],
+    })
+  })
+
+  it("leaves a schema with no constraint keywords unchanged (deep-equal)", () => {
     const input = {
       type: "object",
       properties: {
@@ -126,16 +174,19 @@ describe("sanitizeSchemaForAnthropic", () => {
     expect(sanitizeSchemaForAnthropic(input)).toEqual(input)
   })
 
-  it("does NOT strip a schema PROPERTY literally named minimum/maximum on an object node", () => {
-    // `minimum` here is a property key under an object node, not a numeric
-    // constraint — its owning node is type:object, so it must survive.
+  it("does NOT strip schema PROPERTIES literally named after a constraint keyword", () => {
+    // These are property KEYS under a `properties` map (its container is a plain
+    // map with no `type`), not constraints on a typed node — they must survive.
     const input = {
       type: "object",
       properties: {
         minimum: { type: "string" },
         maximum: { type: "string" },
+        pattern: { type: "string" },
+        format: { type: "string" },
+        maxItems: { type: "integer" },
       },
-      required: ["minimum"],
+      required: ["minimum", "pattern", "format"],
     }
     expect(sanitizeSchemaForAnthropic(input)).toEqual(input)
   })
@@ -152,12 +203,16 @@ describe("sanitizeSchemaForAnthropic", () => {
     expect((out.properties as Record<string, unknown>).score).not.toBe(input.properties.score)
   })
 
-  it("removes every min/max from the real PR_REVIEW_SCHEMA while keeping its shape", () => {
+  it("removes every unsupported constraint keyword from the real PR_REVIEW_SCHEMA while keeping its shape", () => {
     const out = sanitizeSchemaForAnthropic(PR_REVIEW_SCHEMA as unknown as Record<string, unknown>)
-    // No `minimum`/`maximum` anywhere in the sanitized copy…
-    expect(JSON.stringify(out)).not.toMatch(/"minimum"|"maximum"/)
-    // …but the original canonical schema still carries them (not mutated).
+    // None of the unsupported keywords appear anywhere in the sanitized copy…
+    expect(JSON.stringify(out)).not.toMatch(
+      /"(minimum|maximum|exclusiveMinimum|exclusiveMaximum|multipleOf|minItems|maxItems|uniqueItems|minLength|maxLength|pattern|format)"/,
+    )
+    // …but the original canonical schema still carries them (not mutated) — it
+    // has both `minimum` (score/line) and `maxItems` (the findings array).
     expect(JSON.stringify(PR_REVIEW_SCHEMA)).toMatch(/"minimum"/)
+    expect(JSON.stringify(PR_REVIEW_SCHEMA)).toMatch(/"maxItems"/)
     // Core required keys + the integer `score` field survive.
     expect((out as { required: string[] }).required).toContain("findings")
     const findingProps = (

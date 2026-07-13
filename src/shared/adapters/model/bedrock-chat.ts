@@ -236,7 +236,8 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
     if (!usesTools && args.format) {
       // Converse has no response_format — enforce the schema by instruction
       // (see file header; a glitch is a normal parse failure → retry/fallback).
-      // Anthropic-on-Bedrock rejects min/max on integer/number nodes, so strip
+      // Anthropic-on-Bedrock rejects the JSON-Schema validation keyword family
+      // (min/max, minItems/maxItems, pattern, format, …) on typed nodes, so strip
       // them from the copy embedded for Anthropic ids only; every other Bedrock
       // id embeds the original `args.format` — byte-identical to today.
       const schema = isAnthropicModel(args.model) ? sanitizeSchemaForAnthropic(args.format) : args.format

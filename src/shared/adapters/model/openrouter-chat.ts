@@ -105,9 +105,10 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
     body.tool_choice = "auto"
     body.parallel_tool_calls = true
   } else if (args.format) {
-    // Anthropic's structured-output API rejects min/max on integer/number nodes;
-    // strip them from the copy sent to Anthropic only. Non-Anthropic ids pass the
-    // original `args.format` reference through — byte-identical to today.
+    // Anthropic's structured-output API rejects the JSON-Schema validation
+    // keyword family (min/max, minItems/maxItems, pattern, format, …) on typed
+    // nodes; strip them from the copy sent to Anthropic only. Non-Anthropic ids
+    // pass the original `args.format` reference through — byte-identical to today.
     const schema = isAnthropicModel(args.model) ? sanitizeSchemaForAnthropic(args.format) : args.format
     body.response_format = {
       type: "json_schema",

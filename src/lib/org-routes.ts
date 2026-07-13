@@ -16,6 +16,7 @@
 // nothing under /v1/org/ matches, so index.ts falls through to its own routing.
 
 import { handleGetDataConsent, handleSetDataConsent } from "@/src/lib/data-consent-route"
+import { handleCreateAppMemory, handleDeleteAppMemory, handleListAppMemories } from "@/src/lib/app-memory-route"
 import { handleOrgOverviewRoute } from "@/src/lib/org-overview-route"
 import { handleOrgSeatRoute } from "@/src/lib/org-seat-route"
 import { handleGetReviewConfig, handleSetReviewConfig } from "@/src/lib/review-config-route"
@@ -33,6 +34,7 @@ const REVIEW_CONFIG_PATH_RE = /^\/v1\/org\/([^/]+)\/review-config$/
 const LINEAR_CONFIG_PATH_RE = /^\/v1\/org\/([^/]+)\/linear-config$/
 const LINEAR_INSTALL_PATH_RE = /^\/v1\/org\/([^/]+)\/linear\/install$/
 const SLACK_CONFIG_PATH_RE = /^\/v1\/org\/([^/]+)\/slack-config$/
+const APP_MEMORY_PATH_RE = /^\/v1\/org\/([^/]+)\/apps\/([^/]+)\/memories(?:\/([^/]+))?$/
 
 /** True for a path this surface serves — overview, seat, data-consent, or review-config. */
 function isOrgPath(pathname: string): boolean {
@@ -43,7 +45,8 @@ function isOrgPath(pathname: string): boolean {
     REVIEW_CONFIG_PATH_RE.test(pathname) ||
     LINEAR_CONFIG_PATH_RE.test(pathname) ||
     LINEAR_INSTALL_PATH_RE.test(pathname) ||
-    SLACK_CONFIG_PATH_RE.test(pathname)
+    SLACK_CONFIG_PATH_RE.test(pathname) ||
+    APP_MEMORY_PATH_RE.test(pathname)
   )
 }
 
@@ -118,5 +121,37 @@ export async function handleOrgRoutes(request: Request, env: Env, ctx: Execution
     const iid = Number(decodeURIComponent(linearInstallMatch[1]!))
     return withPortalCors(request, await handleLinearTenantInstall(request, env, ctx, iid), env)
   }
+  const appMemoryMatch = APP_MEMORY_PATH_RE.exec(url.pathname)
+  if (appMemoryMatch) {
+    let appId: string
+    let memoryId: string | undefined
+    try {
+      appId = decodeURIComponent(appMemoryMatch[2]!)
+      memoryId = appMemoryMatch[3] === undefined ? undefined : decodeURIComponent(appMemoryMatch[3])
+    } catch {
+      return withPortalCors(request, json({ error: "invalid app memory path" }, 400), env)
+    }
+    const installationId = Number(appMemoryMatch[1])
+    if (request.method === "GET" && memoryId === undefined) {
+      return withPortalCors(request, await handleListAppMemories(request, env, ctx, installationId, appId), env)
+    }
+    if (request.method === "POST" && memoryId === undefined) {
+      return withPortalCors(request, await handleCreateAppMemory(request, env, ctx, installationId, appId), env)
+    }
+    if (request.method === "DELETE" && memoryId !== undefined) {
+      return withPortalCors(
+        request,
+        await handleDeleteAppMemory(request, env, ctx, installationId, appId, memoryId),
+        env,
+      )
+    }
+  }
   return null
+}
+
+function json(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", "cache-control": "private, no-store" },
+  })
 }

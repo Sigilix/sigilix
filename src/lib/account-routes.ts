@@ -23,7 +23,13 @@
 import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
 import { clearSessionCookie } from "@/src/lib/auth-session"
 import { hasJsonContentType, handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
-import { gatherAccountExport, purgeUserAccount, revokeUserSessions, subjectFromSession } from "@/src/lib/account-store"
+import {
+  AccountSubjectIntegrityError,
+  gatherAccountExport,
+  purgeUserAccount,
+  revokeUserSessions,
+  subjectFromSession,
+} from "@/src/lib/account-store"
 import type { Env } from "@/src/shared/types/env"
 
 function json(body: unknown, status: number, extraHeaders?: Record<string, string>): Response {
@@ -70,6 +76,9 @@ async function handleDeleteAccount(request: Request, env: Env, ctx: ExecutionCon
   try {
     purged = await purgeUserAccount(env.SIGILIX_PLATFORM_DB, subject)
   } catch (error) {
+    if (error instanceof AccountSubjectIntegrityError) {
+      return json({ error: "unauthenticated" }, 401, { "set-cookie": clearSessionCookie() })
+    }
     console.error(
       JSON.stringify({
         event: "account-delete-purge-failed",
@@ -94,7 +103,21 @@ async function handleExportAccount(request: Request, env: Env, ctx: ExecutionCon
   if (!env.SIGILIX_PLATFORM_DB) return json({ error: "platform_db_not_configured" }, 503)
 
   const subject = subjectFromSession(session.record)
-  const data = await gatherAccountExport(env.SIGILIX_PLATFORM_DB, subject)
+  let data: Awaited<ReturnType<typeof gatherAccountExport>>
+  try {
+    data = await gatherAccountExport(env.SIGILIX_PLATFORM_DB, subject)
+  } catch (error) {
+    if (error instanceof AccountSubjectIntegrityError) {
+      return json({ error: "unauthenticated" }, 401, { "set-cookie": clearSessionCookie() })
+    }
+    console.error(
+      JSON.stringify({
+        event: "account-export-failed",
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return json({ error: "export_failed" }, 500)
+  }
   const filename = `sigilix-account-export-${new Date().toISOString().slice(0, 10)}.json`
   return new Response(JSON.stringify(data, null, 2), {
     status: 200,

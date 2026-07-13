@@ -59,6 +59,12 @@ function sessionRecord(over: Partial<SessionRecord>): SessionRecord {
   }
 }
 
+function legacySessionRecord(over: Partial<SessionRecord> = {}): SessionRecord {
+  const record = sessionRecord(over)
+  delete record.userId
+  return record
+}
+
 async function seedSession(kv: KVNamespace, sessionId: string, over: Partial<SessionRecord> = {}): Promise<void> {
   await kv.put(`auth_session:${sessionId}`, JSON.stringify(sessionRecord(over)))
 }
@@ -80,6 +86,7 @@ async function makeEnv(): Promise<{ env: Env; db: D1Database; kv: KVNamespace & 
   await db.exec(migration("0008_create_email_verification_token.sql"))
   await db.exec(migration("0009_add_api_key_name.sql"))
   await db.exec(migration("0010_add_gitlab_id_to_user_identity.sql"))
+  await db.exec(migration("0021_create_app_memory.sql"))
   const kv = makeKV()
   const env = {
     OPENCLAW_STATE: kv,
@@ -87,6 +94,31 @@ async function makeEnv(): Promise<{ env: Env; db: D1Database; kv: KVNamespace & 
     SIGILIX_PORTAL_ORIGIN: "https://app.sigilix.ai",
   } as unknown as Env
   return { env, db, kv }
+}
+
+async function seedPersonalAppMemory(
+  db: D1Database,
+  args: { id: string; userId: string; content: string; installationId?: number },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO app_memory
+        (id, installation_id, scope, owner_user_id, app_id, content, content_hash, created_at_ms)
+       VALUES (?, ?, 'personal', ?, 'cli', ?, ?, 100)`,
+    )
+    .bind(args.id, args.installationId ?? 42, args.userId, args.content, "a".repeat(64))
+    .run()
+}
+
+async function seedOrganizationAppMemory(db: D1Database): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO app_memory
+        (id, installation_id, scope, owner_user_id, app_id, content, content_hash, created_at_ms)
+       VALUES ('appmem_org', 42, 'organization', '', 'cli', 'Organization memory.', ?, 100)`,
+    )
+    .bind("b".repeat(64))
+    .run()
 }
 
 /** Seed a full account footprint for a GitHub user (identity, profile, tenant, key, usage). */
@@ -140,6 +172,8 @@ describe("DELETE /v1/account", () => {
   beforeEach(async () => {
     ;({ env, db, kv } = await makeEnv())
     await seedAccount(db, { userId: "user-a", githubUserId: "111", login: "octocat", email: "cat@x.com" })
+    await seedPersonalAppMemory(db, { id: "appmem_user_a", userId: "user-a", content: "My CLI preference." })
+    await seedOrganizationAppMemory(db)
   })
 
   it("401 without a session", async () => {
@@ -184,6 +218,27 @@ describe("DELETE /v1/account", () => {
     expect(row).not.toBeNull()
   })
 
+  it("401 and NO purge when durable identity disagrees with the session", async () => {
+    await seedAccount(db, { userId: "user-b", githubUserId: "222", login: "hubot" })
+    await seedSession(kv, "mismatch", { userId: "user-a", githubUserId: 222, login: "octocat" })
+
+    const res = await tryHandleAccountRoute(
+      req("https://x/v1/account", "mismatch", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: "octocat" }),
+      }),
+      env,
+      ctx,
+      new URL("https://x/v1/account"),
+    )
+
+    expect(res?.status).toBe(401)
+    expect(res?.headers.get("set-cookie")).toContain("__Host-sigilix_session=")
+    expect(await db.prepare("SELECT user_id FROM user_identity WHERE user_id = 'user-a'").first()).not.toBeNull()
+    expect(await db.prepare("SELECT user_id FROM user_identity WHERE user_id = 'user-b'").first()).not.toBeNull()
+  })
+
   it("purges EVERY store, revokes the session, and clears the cookie on a matching confirmation", async () => {
     await seedSession(kv, "s1")
     const res = await tryHandleAccountRoute(
@@ -208,12 +263,14 @@ describe("DELETE /v1/account", () => {
       ["SELECT 1 FROM api_key WHERE created_by = ?", "111"],
       ["SELECT 1 FROM usage_events WHERE user_key = ?", "gh:111"],
       ["SELECT 1 FROM email_verification_token WHERE user_id = ?", "user-a"],
+      ["SELECT 1 FROM app_memory WHERE scope = 'personal' AND owner_user_id = ?", "user-a"],
     ] as const) {
       const row = await db.prepare(sql).bind(bind).first()
       expect(row, sql).toBeNull()
     }
     // Session revoked.
     expect(kv._store.has("auth_session:s1")).toBe(false)
+    expect(await db.prepare("SELECT id FROM app_memory WHERE id = 'appmem_org'").first()).not.toBeNull()
   })
 
   it("purgeUserAccount is idempotent — a re-run deletes 0 rows", async () => {
@@ -223,12 +280,22 @@ describe("DELETE /v1/account", () => {
     expect(first.apiKey).toBe(1)
     expect(first.usageEvents).toBe(1)
     expect(first.emailVerificationToken).toBe(1)
+    expect(first.appMemory).toBe(1)
     const second = await purgeUserAccount(db, subject)
     expect(second.userIdentity).toBe(0)
     expect(second.userCredential).toBe(0)
     expect(second.apiKey).toBe(0)
     expect(second.usageEvents).toBe(0)
     expect(second.emailVerificationToken).toBe(0)
+    expect(second.appMemory).toBe(0)
+  })
+
+  it("resolves a legacy GitHub session before purging its personal app memories", async () => {
+    const legacy = subjectFromSession(legacySessionRecord())
+    expect(legacy.userId).toBeNull()
+    const purged = await purgeUserAccount(db, legacy)
+    expect(purged.appMemory).toBe(1)
+    expect(await db.prepare("SELECT id FROM app_memory WHERE id = 'appmem_user_a'").first()).toBeNull()
   })
 })
 
@@ -237,6 +304,8 @@ describe("GET /v1/account/export", () => {
     const { env, db, kv } = await makeEnv()
     await seedAccount(db, { userId: "user-a", githubUserId: "111", login: "octocat", email: "cat@x.com" })
     await seedAccount(db, { userId: "user-b", githubUserId: "222", login: "hubot", email: "bot@x.com" })
+    await seedPersonalAppMemory(db, { id: "appmem_user_a", userId: "user-a", content: "Caller CLI memory." })
+    await seedPersonalAppMemory(db, { id: "appmem_user_b", userId: "user-b", content: "Other user's memory." })
     await seedSession(kv, "s1", { userId: "user-a", githubUserId: 111, login: "octocat" })
 
     const res = await tryHandleAccountRoute(
@@ -252,11 +321,15 @@ describe("GET /v1/account/export", () => {
       identity: { userId: string } | null
       apiKeys: { installationId: number }[]
       usageEvents: unknown[]
+      appMemories: Array<{ appId: string; content: string; scope: string }>
     }
     expect(body.subject.githubUserId).toBe("111")
     expect(body.identity?.userId).toBe("user-a")
     expect(body.apiKeys.length).toBe(1)
     expect(body.usageEvents.length).toBe(1)
+    expect(body.appMemories).toEqual([
+      expect.objectContaining({ appId: "cli", content: "Caller CLI memory.", scope: "personal" }),
+    ])
     // The serialized export must not mention the OTHER user anywhere.
     const raw = JSON.stringify(body)
     expect(raw).not.toContain("user-b")
@@ -273,6 +346,42 @@ describe("GET /v1/account/export", () => {
       new URL("https://x/v1/account/export"),
     )
     expect(res?.status).toBe(401)
+  })
+
+  it("401 without exporting either identity when durable identity disagrees with the session", async () => {
+    const { env, db, kv } = await makeEnv()
+    await seedAccount(db, { userId: "user-a", githubUserId: "111", login: "octocat" })
+    await seedAccount(db, { userId: "user-b", githubUserId: "222", login: "hubot" })
+    await seedSession(kv, "mismatch", { userId: "user-a", githubUserId: 222, login: "octocat" })
+
+    const res = await tryHandleAccountRoute(
+      req("https://x/v1/account/export", "mismatch"),
+      env,
+      ctx,
+      new URL("https://x/v1/account/export"),
+    )
+
+    expect(res?.status).toBe(401)
+    expect(res?.headers.get("set-cookie")).toContain("__Host-sigilix_session=")
+    expect(await res?.json()).toEqual({ error: "unauthenticated" })
+  })
+
+  it("exports personal memories for a legacy GitHub session after durable identity resolution", async () => {
+    const { env, db, kv } = await makeEnv()
+    await seedAccount(db, { userId: "user-a", githubUserId: "111", login: "octocat" })
+    await seedPersonalAppMemory(db, { id: "appmem_legacy", userId: "user-a", content: "Legacy session memory." })
+    await kv.put("auth_session:legacy", JSON.stringify(legacySessionRecord({ githubUserId: 111 })))
+
+    const res = await tryHandleAccountRoute(
+      req("https://x/v1/account/export", "legacy"),
+      env,
+      ctx,
+      new URL("https://x/v1/account/export"),
+    )
+    expect(res?.status).toBe(200)
+    const body = (await res!.json()) as { subject: { userId: string }; appMemories: Array<{ id: string }> }
+    expect(body.subject.userId).toBe("user-a")
+    expect(body.appMemories).toEqual([expect.objectContaining({ id: "appmem_legacy" })])
   })
 })
 

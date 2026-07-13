@@ -2,7 +2,8 @@
 //
 // The data layer behind the portal Danger Zone (account-routes.ts):
 //   • purgeUserAccount  — hard-delete every D1 row that IS this user (identity,
-//                         credential, profile, tenant links, api keys).
+//                         credential, profile, tenant links, api keys, and
+//                         caller-owned app memories).
 //   • revokeUserSessions— delete every KV session record this user holds (the
 //                         "sign out everywhere" sweep; also runs inside delete).
 //   • gatherAccountExport — assemble the user's OWN data for a JSON download.
@@ -20,7 +21,7 @@
 //   • revokeUserSessions best-effort-deletes matches and returns the count.
 
 import { listSessionsPage, type SessionRecord } from "@/src/lib/auth-session"
-import { findByUserId, type UserIdentity } from "@/src/lib/user-identity-store"
+import { findByGithubUserId, findByUserId, type UserIdentity } from "@/src/lib/user-identity-store"
 
 /** The caller's identity keys — the ONLY scope any of these operations touch. */
 export interface AccountSubject {
@@ -34,6 +35,14 @@ export interface AccountSubject {
   provider: "github" | "google" | "gitlab" | "password"
 }
 
+/** Raised when two durable identifiers on the same session resolve to different users. */
+export class AccountSubjectIntegrityError extends Error {
+  constructor() {
+    super("account session identity mismatch")
+    this.name = "AccountSubjectIntegrityError"
+  }
+}
+
 /** Derive the caller's {@link AccountSubject} from a live session record. */
 export function subjectFromSession(record: SessionRecord): AccountSubject {
   return {
@@ -42,6 +51,22 @@ export function subjectFromSession(record: SessionRecord): AccountSubject {
     login: record.login,
     provider: record.provider ?? "github",
   }
+}
+
+/**
+ * Re-resolve a GitHub session through the durable identity table. Legacy
+ * sessions predate SessionRecord.userId but can still own newer personal data;
+ * filling that id here keeps export/delete complete. A stored mismatch is a
+ * session-integrity fault and fails closed before any row is read or deleted.
+ */
+async function resolveDurableSubject(db: D1Database, subject: AccountSubject): Promise<AccountSubject> {
+  if (subject.githubUserId === null) return subject
+  const identity = await findByGithubUserId(db, subject.githubUserId)
+  if (!identity) return subject
+  if (subject.userId !== null && subject.userId !== identity.userId) {
+    throw new AccountSubjectIntegrityError()
+  }
+  return { ...subject, userId: identity.userId }
 }
 
 /**
@@ -112,6 +137,7 @@ export interface PurgeCounts {
   apiKey: number
   emailVerificationToken: number
   usageEvents: number
+  appMemory: number
 }
 
 function changes(result: D1Result | undefined): number {
@@ -126,11 +152,12 @@ const EMPTY_PURGE: PurgeCounts = {
   apiKey: 0,
   emailVerificationToken: 0,
   usageEvents: 0,
+  appMemory: 0,
 }
 
 /**
  * Hard-delete EVERY D1 row that IS this user, in ONE batch (atomic on D1):
- *   • user_credential / user_identity / email_verification_token — keyed by `userId`
+ *   • user_credential / user_identity / email_verification_token / personal app memory — keyed by `userId`
  *   • user_profile / account_tenant / api_key — keyed by `githubUserId`
  *   • usage_events — keyed by the seat key `gh:<githubUserId>`
  * Rows keyed by an identifier the caller doesn't have (e.g. a Google-only account
@@ -138,11 +165,15 @@ const EMPTY_PURGE: PurgeCounts = {
  * returns 500); idempotent — a re-run deletes 0 rows.
  */
 export async function purgeUserAccount(db: D1Database, subject: AccountSubject): Promise<PurgeCounts> {
+  subject = await resolveDurableSubject(db, subject)
   const statements: D1PreparedStatement[] = []
   // Order: credential before identity (credential FK-conceptually depends on
   // identity), though D1 has no enforced FK here — batch runs atomically anyway.
   if (subject.userId != null) {
     statements.push(db.prepare("DELETE FROM user_credential WHERE user_id = ?").bind(subject.userId))
+    statements.push(
+      db.prepare("DELETE FROM app_memory WHERE scope = 'personal' AND owner_user_id = ?").bind(subject.userId),
+    )
     statements.push(db.prepare("DELETE FROM user_identity WHERE user_id = ?").bind(subject.userId))
     statements.push(db.prepare("DELETE FROM email_verification_token WHERE user_id = ?").bind(subject.userId))
   }
@@ -163,6 +194,7 @@ export async function purgeUserAccount(db: D1Database, subject: AccountSubject):
   const counts: PurgeCounts = { ...EMPTY_PURGE }
   if (subject.userId != null) {
     counts.userCredential = changes(results[i++])
+    counts.appMemory = changes(results[i++])
     counts.userIdentity = changes(results[i++])
     counts.emailVerificationToken = changes(results[i++])
   }
@@ -191,6 +223,14 @@ export interface AccountExport {
     revokedAt: string | null
   }>
   usageEvents: Array<{ meter: string; surface: string; installationId: number; createdAt: string }>
+  appMemories: Array<{
+    id: string
+    installationId: number
+    appId: string
+    scope: "personal"
+    content: string
+    createdAt: string
+  }>
 }
 
 async function safeFirst<T>(db: D1Database, sql: string, ...binds: unknown[]): Promise<T | null> {
@@ -218,7 +258,7 @@ async function safeAll<T>(db: D1Database, sql: string, ...binds: unknown[]): Pro
 
 /**
  * Assemble the caller's OWN account data (identity, profile, installation links,
- * api-key metadata, usage events) for a GDPR-style JSON export. Every query is
+ * api-key metadata, usage events, personal app memories) for a GDPR-style JSON export. Every query is
  * keyed by the caller's identity, so ONLY the caller's data is ever returned.
  * NEVER includes a secret: identity excludes mfa_secret/password_hash (the store
  * type omits them), and api keys are metadata-only (no hash). FAILS SOFT per
@@ -226,6 +266,7 @@ async function safeAll<T>(db: D1Database, sql: string, ...binds: unknown[]): Pro
  * export failing.
  */
 export async function gatherAccountExport(db: D1Database, subject: AccountSubject): Promise<AccountExport> {
+  subject = await resolveDurableSubject(db, subject)
   const identity = subject.userId != null ? await findByUserId(db, subject.userId).catch(() => null) : null
 
   const profileRow =
@@ -281,6 +322,25 @@ export async function gatherAccountExport(db: D1Database, subject: AccountSubjec
         )
       : []
 
+  const appMemories =
+    subject.userId != null
+      ? await safeAll<{
+          id: string
+          installation_id: number
+          app_id: string
+          content: string
+          created_at_ms: number
+        }>(
+          db,
+          `SELECT id, installation_id, app_id, content, created_at_ms
+             FROM app_memory
+            WHERE scope = 'personal' AND owner_user_id = ?
+            ORDER BY created_at_ms DESC, id DESC
+            LIMIT 1000`,
+          subject.userId,
+        )
+      : []
+
   return {
     exportedAt: new Date().toISOString(),
     subject: {
@@ -316,6 +376,14 @@ export async function gatherAccountExport(db: D1Database, subject: AccountSubjec
       surface: r.surface,
       installationId: r.installation_id,
       createdAt: r.created_at,
+    })),
+    appMemories: appMemories.map((r) => ({
+      id: r.id,
+      installationId: r.installation_id,
+      appId: r.app_id,
+      scope: "personal",
+      content: r.content,
+      createdAt: new Date(r.created_at_ms).toISOString(),
     })),
   }
 }

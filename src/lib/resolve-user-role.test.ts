@@ -3,7 +3,12 @@
 // machinery (see auth-me-route.test.ts for the full /auth/me integration).
 
 import { describe, expect, it, vi } from "vitest"
-import { resolveUserRole, isAdminOfInstallation } from "@/src/lib/resolve-user-role"
+import {
+  resolveDefaultUserInstallationScope,
+  resolveExactUserInstallationScope,
+  resolveUserRole,
+  isAdminOfInstallation,
+} from "@/src/lib/resolve-user-role"
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
@@ -214,6 +219,42 @@ describe("resolveUserRole", () => {
     }
     logSpy.mockRestore()
     errorSpy.mockRestore()
+  })
+})
+
+describe("installation-scoped user role", () => {
+  it("resolves the exact selected installation instead of aggregate admin status", async () => {
+    const fetchImpl = stubFetch(
+      [
+        { id: 1, account: { type: "User", login: "octocat" } },
+        { id: 2, account: { type: "Organization", login: "org-b" } },
+      ],
+      { "org-b": { role: "member" } },
+    )
+
+    await expect(resolveExactUserInstallationScope("token", "octocat", 2, fetchImpl)).resolves.toEqual({
+      installationId: 2,
+      account: { type: "Organization", login: "org-b" },
+      role: "member",
+    })
+  })
+
+  it("exact selection fails closed when the installation is not visible", async () => {
+    const fetchImpl = stubFetch([{ id: 1, account: { type: "User", login: "octocat" } }])
+    await expect(resolveExactUserInstallationScope("token", "octocat", 999, fetchImpl)).resolves.toBeNull()
+  })
+
+  it("default selection explicitly preserves GitHub's first visible installation", async () => {
+    const fetchImpl = stubFetch([
+      { id: 7, account: { type: "Organization", login: "first-org" } },
+      { id: 2, account: { type: "User", login: "octocat" } },
+    ])
+
+    await expect(resolveDefaultUserInstallationScope("token", "octocat", fetchImpl)).resolves.toEqual({
+      installationId: 7,
+      account: { type: "Organization", login: "first-org" },
+      role: "member",
+    })
   })
 })
 

@@ -28,6 +28,8 @@ import type { Env } from "@/src/shared/types/env"
 export interface RosterResult {
   /** The GitHub members (org members or repo collaborators). Empty on any fault. */
   members: GitHubMember[]
+  /** True only when every App-roster page was consumed without an error/cap. */
+  complete: boolean
   /** Which listing produced `members` (or "none" when the fetch was skipped/failed). */
   source: "org" | "collaborators" | "none"
   /** A short machine reason when the roster is empty/partial (for the caller to log). */
@@ -45,10 +47,10 @@ export async function fetchInstallationRoster(
   accountType: string,
 ): Promise<RosterResult> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY || !env.OPENCLAW_STATE) {
-    return { members: [], source: "none", reason: "app_unconfigured" }
+    return { members: [], complete: false, source: "none", reason: "app_unconfigured" }
   }
   if (!Number.isInteger(installationId) || installationId <= 0) {
-    return { members: [], source: "none", reason: "no_installation" }
+    return { members: [], complete: false, source: "none", reason: "no_installation" }
   }
 
   const common = {
@@ -65,6 +67,7 @@ export async function fetchInstallationRoster(
     const res = await listOrgMembers(common.kv, common.appId, common.privateKey, common.installationId, accountLogin)
     return {
       members: res.items,
+      complete: res.complete,
       source: "org",
       ...(res.items.length === 0 || !res.complete ? { reason: "org_members_unavailable" } : {}),
     }
@@ -73,6 +76,7 @@ export async function fetchInstallationRoster(
   const res = await listInstallationCollaborators(common.kv, common.appId, common.privateKey, common.installationId)
   return {
     members: res.items,
+    complete: res.complete,
     source: "collaborators",
     ...(res.items.length === 0 || !res.complete ? { reason: "collaborators_unavailable" } : {}),
   }

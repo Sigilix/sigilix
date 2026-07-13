@@ -7,6 +7,7 @@ import {
   listCustomerSubscriptions,
   listSubscriptionItems,
   cancelSubscription,
+  updateSubscriptionItemQuantity,
 } from "@/src/features/billing/adapters/stripe-api"
 
 const KEY = "sk_test"
@@ -377,5 +378,111 @@ describe("cancelSubscription", () => {
     )
     const res = await cancelSubscription(KEY, "sub_x")
     expect(res).toMatchObject({ ok: false, status: 402 })
+  })
+})
+
+describe("updateSubscriptionItemQuantity", () => {
+  it("POSTs an absolute quantity with prorations, exact idempotency key, and AbortSignal", async () => {
+    const controller = new AbortController()
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ id: "si /primary", quantity: 7 }),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      updateSubscriptionItemQuantity(KEY, {
+        subscriptionItemId: "si /primary",
+        quantity: 7,
+        idempotencyKey: "seat-capacity:operation:123",
+        signal: controller.signal,
+      }),
+    ).resolves.toEqual({ ok: true, subscriptionItemId: "si /primary", quantity: 7 })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [input, init] = fetchMock.mock.calls[0]!
+    expect(typeof input === "string" ? input : input.toString()).toBe(
+      "https://api.stripe.com/v1/subscription_items/si%20%2Fprimary",
+    )
+    expect(init?.method).toBe("POST")
+    expect(init?.signal).toBe(controller.signal)
+    const headers = new Headers(init?.headers)
+    expect(headers.get("authorization")).toBe(`Bearer ${KEY}`)
+    expect(headers.get("idempotency-key")).toBe("seat-capacity:operation:123")
+    expect(headers.get("content-type")).toBe("application/x-www-form-urlencoded")
+    const body = new URLSearchParams(String(init?.body))
+    expect([...body.entries()]).toEqual([
+      ["quantity", "7"],
+      ["proration_behavior", "create_prorations"],
+    ])
+  })
+
+  it("rejects invalid item ids, quantities, and idempotency keys before calling Stripe", async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+
+    const invalidInputs: unknown[] = [
+      { subscriptionItemId: "", quantity: 2, idempotencyKey: "operation-1" },
+      { subscriptionItemId: null, quantity: 2, idempotencyKey: "operation-1" },
+      { subscriptionItemId: "si_primary", quantity: 0, idempotencyKey: "operation-1" },
+      { subscriptionItemId: "si_primary", quantity: -1, idempotencyKey: "operation-1" },
+      { subscriptionItemId: "si_primary", quantity: 1.5, idempotencyKey: "operation-1" },
+      { subscriptionItemId: "si_primary", quantity: Number.MAX_SAFE_INTEGER + 1, idempotencyKey: "operation-1" },
+      { subscriptionItemId: "si_primary", quantity: 2, idempotencyKey: "" },
+      { subscriptionItemId: "si_primary", quantity: 2, idempotencyKey: "   " },
+      { subscriptionItemId: "si_primary", quantity: 2, idempotencyKey: null },
+    ]
+    for (const input of invalidInputs) {
+      await expect(
+        updateSubscriptionItemQuantity(KEY, input as Parameters<typeof updateSubscriptionItemQuantity>[1]),
+      ).resolves.toEqual({
+        ok: false,
+        error: "invalid subscription item quantity update",
+        status: 400,
+      })
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("fails closed unless Stripe echoes the exact requested item id and quantity", async () => {
+    const bodies = [
+      { id: "si_other", quantity: 3 },
+      { id: "si_primary", quantity: 2 },
+      { id: "si_primary", quantity: "3" },
+      { id: "si_primary" },
+      null,
+    ]
+
+    for (const body of bodies) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json(body)),
+      )
+      await expect(
+        updateSubscriptionItemQuantity(KEY, {
+          subscriptionItemId: "si_primary",
+          quantity: 3,
+          idempotencyKey: "operation-2",
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: "invalid stripe subscription item response",
+        status: 502,
+      })
+    }
+  })
+
+  it("does not expose the Stripe secret when transport errors include it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Promise.reject(new Error(`transport leaked ${KEY}`))),
+    )
+
+    const result = await updateSubscriptionItemQuantity(KEY, {
+      subscriptionItemId: "si_primary",
+      quantity: 3,
+      idempotencyKey: "operation-3",
+    })
+    expect(result).toEqual({ ok: false, error: "stripe request failed", status: 502 })
+    expect(JSON.stringify(result)).not.toContain(KEY)
   })
 })

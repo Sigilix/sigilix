@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import worker from "@/src/index"
 import { handleAddOrgMember, handleDeleteOrgMember, handleUpdateOrgMemberRole } from "@/src/lib/org-members-route"
-import { addOrgWorkspaceMember, readOrgWorkspaceAccess, setOrgWorkspaceRole } from "@/src/features/org-membership"
+import {
+  addOrgWorkspaceMember,
+  readOrgWorkspaceAccess,
+  removeOrgWorkspaceAccess,
+  setOrgWorkspaceRole,
+} from "@/src/features/org-membership"
+import { recoverOrgSeatBillingOperation } from "@/src/features/billing"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import type { Env } from "@/src/shared/types/env"
 
@@ -28,7 +34,9 @@ async function makeDb(): Promise<D1Database> {
   await db.exec(migration("0001_create_tenant_repo_usage.sql"))
   await db.exec(migration("0003_create_account_tenant_and_api_key.sql"))
   await db.exec(migration("0007_create_org_seat_assignment.sql"))
+  await db.exec(migration("0020_create_stripe_seat_reconciliation.sql"))
   await db.exec(migration("0022_create_org_workspace_access.sql"))
+  await db.exec(migration("0023_add_org_seat_billing_operation_context.sql"))
   await db
     .prepare(
       "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
@@ -123,6 +131,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks()
+  vi.restoreAllMocks()
 })
 
 describe("organization member mutation authorization", () => {
@@ -351,10 +360,283 @@ describe("PATCH /v1/org/:installationId/members/:githubUserId", () => {
 })
 
 describe("DELETE /v1/org/:installationId/members/:githubUserId", () => {
+  it("does not cancel another member's active seat expansion", async () => {
+    const db = await makeDb()
+    await seedAccess(db, ACTOR_ID, "admin")
+    await seedAccess(db, TARGET_ID, "member")
+    await db
+      .prepare(
+        `INSERT INTO org_seat_billing_operation
+          (operation_id, installation_id, revision, login, actor_login, target_is_admin,
+           requested_assigned, previous_assigned, desired_quantity, state,
+           stripe_subscription_id, stripe_subscription_item_id, stripe_observed_quantity,
+           idempotency_key, attempts, next_attempt_at_ms, created_at_ms, updated_at_ms)
+         VALUES ('op-other-member', ?, 1, 'alice', 'owner', 0,
+                 1, 0, 2, 'pending', 'sub_1', 'si_1', 1,
+                 'sigilix-seat-op-other-member', 0, 1, 1, 1)`,
+      )
+      .bind(INSTALLATION_ID)
+      .run()
+
+    const response = await handleDeleteOrgMember(
+      request("DELETE", `/v1/org/${INSTALLATION_ID}/members/${TARGET_ID}`),
+      env(db),
+      undefined,
+      INSTALLATION_ID,
+      TARGET_ID,
+    )
+
+    expect(response.status).toBe(503)
+    await expect(
+      db.prepare("SELECT state FROM org_seat_billing_operation WHERE operation_id = 'op-other-member'").first(),
+    ).resolves.toEqual({ state: "pending" })
+    await expect(readOrgWorkspaceAccess(db, INSTALLATION_ID, TARGET_ID)).resolves.toMatchObject({ revokedAt: null })
+    await expect(
+      db
+        .prepare("SELECT assigned FROM org_seat_assignment WHERE installation_id = ? AND login = 'alice'")
+        .bind(INSTALLATION_ID)
+        .first(),
+    ).resolves.toBeNull()
+  })
+
+  it("cancels an active seat expansion in the same transaction before removing the member", async () => {
+    const db = await makeDb()
+    const providerFetch = vi.spyOn(globalThis, "fetch")
+    await seedAccess(db, ACTOR_ID, "admin")
+    await seedAccess(db, TARGET_ID, "member")
+    await db
+      .prepare(
+        "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
+          " VALUES (99, 'other', 'Organization', ?, ?)",
+      )
+      .bind(NOW, NOW)
+      .run()
+    await db
+      .prepare(
+        `INSERT INTO org_seat_billing_operation
+          (operation_id, installation_id, revision, login, actor_login, target_is_admin,
+           requested_assigned, previous_assigned, desired_quantity, state,
+           stripe_subscription_id, stripe_subscription_item_id, stripe_observed_quantity,
+           idempotency_key, attempts, next_attempt_at_ms, created_at_ms, updated_at_ms)
+         VALUES ('op-remove-target', ?, 1, 'target', 'owner', 0,
+                 1, 0, 2, 'pending', 'sub_1', 'si_1', 1,
+                 'sigilix-seat-op-remove-target', 0, 1, 1, 1)`,
+      )
+      .bind(INSTALLATION_ID)
+      .run()
+    await db
+      .prepare(
+        `INSERT INTO org_seat_billing_operation
+          (operation_id, installation_id, revision, login, actor_login, target_is_admin,
+           requested_assigned, previous_assigned, desired_quantity, state,
+           stripe_subscription_id, stripe_subscription_item_id, stripe_observed_quantity,
+           idempotency_key, attempts, next_attempt_at_ms, created_at_ms, updated_at_ms)
+         VALUES ('op-foreign-tenant', 99, 1, 'target', 'other-owner', 0,
+                 1, 0, 2, 'pending', 'sub_99', 'si_99', 1,
+                 'sigilix-seat-op-foreign-tenant', 0, 1, 1, 1)`,
+      )
+      .run()
+
+    const response = await handleDeleteOrgMember(
+      request("DELETE", `/v1/org/${INSTALLATION_ID}/members/${TARGET_ID}`),
+      env(db),
+      undefined,
+      INSTALLATION_ID,
+      TARGET_ID,
+    )
+
+    expect(response.status).toBe(200)
+    await expect(
+      db
+        .prepare("SELECT state, error_code FROM org_seat_billing_operation WHERE operation_id = ?")
+        .bind("op-remove-target")
+        .first(),
+    ).resolves.toEqual({ state: "canceled", error_code: "member_removed" })
+    await expect(readOrgWorkspaceAccess(db, INSTALLATION_ID, TARGET_ID)).resolves.toMatchObject({
+      revokedAt: expect.any(String),
+    })
+    await expect(
+      db.prepare("SELECT state FROM org_seat_billing_operation WHERE operation_id = 'op-foreign-tenant'").first(),
+    ).resolves.toEqual({ state: "pending" })
+
+    await expect(
+      recoverOrgSeatBillingOperation(env(db), {
+        type: "org-seat-billing-reconcile",
+        installationId: INSTALLATION_ID,
+        operationId: "op-remove-target",
+      }),
+    ).resolves.toBeUndefined()
+    await expect(
+      db
+        .prepare("SELECT assigned FROM org_seat_assignment WHERE installation_id = ? AND login = 'target'")
+        .bind(INSTALLATION_ID)
+        .first(),
+    ).resolves.toEqual({ assigned: 0 })
+    expect(providerFetch).not.toHaveBeenCalled()
+    providerFetch.mockRestore()
+  })
+
+  it("finalizes a Stripe-applied expansion without shrinking paid capacity or calling Stripe", async () => {
+    const db = await makeDb()
+    const providerFetch = vi.spyOn(globalThis, "fetch")
+    await seedAccess(db, ACTOR_ID, "admin")
+    await seedAccess(db, TARGET_ID, "member")
+    await db
+      .prepare(
+        `INSERT INTO stripe_seat_subscription
+          (installation_id, stripe_customer_id, stripe_subscription_id, stripe_subscription_item_id,
+           stripe_price_id, subscription_status, observed_quantity, derived_quantity, revision,
+           snapshot_state, last_refreshed_at_ms, created_at_ms, updated_at_ms)
+         VALUES (?, 'cus_1', 'sub_1', 'si_1', 'price_1', 'active', 2, 2, 1, 'ready', 1, 1, 1)`,
+      )
+      .bind(INSTALLATION_ID)
+      .run()
+    await db
+      .prepare(
+        `INSERT INTO org_seat_billing_operation
+          (operation_id, installation_id, revision, login, actor_login, target_is_admin,
+           requested_assigned, previous_assigned, desired_quantity, state,
+           stripe_subscription_id, stripe_subscription_item_id, stripe_observed_quantity,
+           idempotency_key, attempts, next_attempt_at_ms, created_at_ms, updated_at_ms,
+           stripe_applied_at_ms)
+         VALUES ('op-applied-remove', ?, 1, 'target', 'owner', 0,
+                 1, 0, 2, 'stripe_applied', 'sub_1', 'si_1', 2,
+                 'sigilix-seat-op-applied-remove', 1, 2, 1, 2, 2)`,
+      )
+      .bind(INSTALLATION_ID)
+      .run()
+
+    const response = await handleDeleteOrgMember(
+      request("DELETE", `/v1/org/${INSTALLATION_ID}/members/${TARGET_ID}`),
+      env(db),
+      undefined,
+      INSTALLATION_ID,
+      TARGET_ID,
+    )
+
+    expect(response.status).toBe(200)
+    await expect(
+      db
+        .prepare("SELECT state, error_code FROM org_seat_billing_operation WHERE operation_id = ?")
+        .bind("op-applied-remove")
+        .first(),
+    ).resolves.toEqual({ state: "committed", error_code: null })
+    await expect(
+      db
+        .prepare("SELECT observed_quantity, derived_quantity FROM stripe_seat_subscription WHERE installation_id = ?")
+        .bind(INSTALLATION_ID)
+        .first(),
+    ).resolves.toEqual({ observed_quantity: 2, derived_quantity: 2 })
+    expect(providerFetch).not.toHaveBeenCalled()
+    providerFetch.mockRestore()
+  })
+
+  it("settles a pre-existing active expansion for an already-tombstoned member", async () => {
+    const db = await makeDb()
+    await seedAccess(db, ACTOR_ID, "admin")
+    await seedAccess(db, TARGET_ID, "member")
+    await expect(
+      removeOrgWorkspaceAccess(db, {
+        installationId: INSTALLATION_ID,
+        githubUserId: TARGET_ID,
+        login: "target",
+        nowIso: "2026-07-13T03:59:00.000Z",
+        updatedBy: "legacy-removal",
+      }),
+    ).resolves.toEqual({ status: "removed" })
+    await db
+      .prepare(
+        `INSERT INTO org_seat_billing_operation
+          (operation_id, installation_id, revision, login, actor_login, target_is_admin,
+           requested_assigned, previous_assigned, desired_quantity, state,
+           stripe_subscription_id, stripe_subscription_item_id, stripe_observed_quantity,
+           idempotency_key, attempts, next_attempt_at_ms, created_at_ms, updated_at_ms)
+         VALUES ('op-after-legacy-removal', ?, 1, 'target', 'owner', 0,
+                 1, 0, 2, 'pending', 'sub_1', 'si_1', 1,
+                 'sigilix-seat-op-after-legacy-removal', 0, 1, 1, 1)`,
+      )
+      .bind(INSTALLATION_ID)
+      .run()
+
+    const response = await handleDeleteOrgMember(
+      request("DELETE", `/v1/org/${INSTALLATION_ID}/members/${TARGET_ID}`),
+      env(db),
+      undefined,
+      INSTALLATION_ID,
+      TARGET_ID,
+    )
+
+    expect(response.status).toBe(404)
+    await expect(
+      db.prepare("SELECT state FROM org_seat_billing_operation WHERE operation_id = 'op-after-legacy-removal'").first(),
+    ).resolves.toEqual({ state: "canceled" })
+    await expect(
+      db
+        .prepare("SELECT assigned FROM org_seat_assignment WHERE installation_id = ? AND login = 'target'")
+        .bind(INSTALLATION_ID)
+        .first(),
+    ).resolves.toEqual({ assigned: 0 })
+  })
+
+  it("fails unavailable instead of hiding an unsettled operation behind an old tombstone", async () => {
+    const db = await makeDb()
+    await seedAccess(db, ACTOR_ID, "admin")
+    await seedAccess(db, TARGET_ID, "member")
+    await removeOrgWorkspaceAccess(db, {
+      installationId: INSTALLATION_ID,
+      githubUserId: TARGET_ID,
+      login: "target",
+      nowIso: "2026-07-13T03:59:00.000Z",
+      updatedBy: "legacy-removal",
+    })
+    await db
+      .prepare(
+        `INSERT INTO org_seat_billing_operation
+          (operation_id, installation_id, revision, login, actor_login, target_is_admin,
+           requested_assigned, previous_assigned, desired_quantity, state,
+           stripe_subscription_id, stripe_subscription_item_id, stripe_observed_quantity,
+           idempotency_key, attempts, next_attempt_at_ms, created_at_ms, updated_at_ms,
+           stripe_applied_at_ms)
+         VALUES ('op-unsettled-old-tombstone', ?, 1, 'target', 'owner', 0,
+                 1, 0, 2, 'stripe_applied', 'sub_missing', 'si_missing', 2,
+                 'sigilix-seat-op-unsettled-old-tombstone', 1, 2, 1, 2, 2)`,
+      )
+      .bind(INSTALLATION_ID)
+      .run()
+
+    const response = await handleDeleteOrgMember(
+      request("DELETE", `/v1/org/${INSTALLATION_ID}/members/${TARGET_ID}`),
+      env(db),
+      undefined,
+      INSTALLATION_ID,
+      TARGET_ID,
+    )
+
+    expect(response.status).toBe(503)
+    await expect(
+      db
+        .prepare("SELECT state FROM org_seat_billing_operation WHERE operation_id = 'op-unsettled-old-tombstone'")
+        .first(),
+    ).resolves.toEqual({ state: "stripe_applied" })
+  })
+
   it("returns 409 instead of removing the last active admin", async () => {
     const db = await makeDb()
     await seedAccess(db, ACTOR_ID, "admin")
     mocks.fetchInstallationRoster.mockResolvedValue(completeRoster({ githubUserId: ACTOR_ID, login: "owner" }))
+    await db
+      .prepare(
+        `INSERT INTO org_seat_billing_operation
+          (operation_id, installation_id, revision, login, actor_login, target_is_admin,
+           requested_assigned, previous_assigned, desired_quantity, state,
+           stripe_subscription_id, stripe_subscription_item_id, stripe_observed_quantity,
+           idempotency_key, attempts, next_attempt_at_ms, created_at_ms, updated_at_ms)
+         VALUES ('op-last-admin', ?, 1, 'owner', 'owner', 1,
+                 1, 0, 1, 'pending', 'sub_1', 'si_1', 0,
+                 'sigilix-seat-op-last-admin', 0, 1, 1, 1)`,
+      )
+      .bind(INSTALLATION_ID)
+      .run()
 
     const response = await handleDeleteOrgMember(
       request("DELETE", `/v1/org/${INSTALLATION_ID}/members/${ACTOR_ID}`),
@@ -366,6 +648,9 @@ describe("DELETE /v1/org/:installationId/members/:githubUserId", () => {
 
     expect(response.status).toBe(409)
     await expect(readOrgWorkspaceAccess(db, INSTALLATION_ID, ACTOR_ID)).resolves.toMatchObject({ revokedAt: null })
+    await expect(
+      db.prepare("SELECT state FROM org_seat_billing_operation WHERE operation_id = 'op-last-admin'").first(),
+    ).resolves.toEqual({ state: "pending" })
   })
 
   it("removes access, revokes only target-tenant keys, and unassigns the roster-derived legacy seat", async () => {
@@ -424,7 +709,7 @@ describe("DELETE /v1/org/:installationId/members/:githubUserId", () => {
     })
   })
 
-  it("revokes stored access even after the target has left the current GitHub roster", async () => {
+  it("retries departed-member removal after an unjoinable active operation settles", async () => {
     const db = await makeDb()
     await seedAccess(db, ACTOR_ID, "admin")
     await seedAccess(db, TARGET_ID, "member")
@@ -432,6 +717,45 @@ describe("DELETE /v1/org/:installationId/members/:githubUserId", () => {
     await db
       .prepare("INSERT INTO api_key (id, key_hash, installation_id, created_by, created_at) VALUES (?, ?, ?, ?, ?)")
       .bind("departed-member-key", "hash-departed-member-key", INSTALLATION_ID, TARGET_ID, NOW)
+      .run()
+    await db
+      .prepare(
+        `INSERT INTO org_seat_billing_operation
+          (operation_id, installation_id, revision, login, actor_login, target_is_admin,
+           requested_assigned, previous_assigned, desired_quantity, state,
+           stripe_subscription_id, stripe_subscription_item_id, stripe_observed_quantity,
+           idempotency_key, attempts, next_attempt_at_ms, created_at_ms, updated_at_ms)
+         VALUES ('op-departed-member', ?, 1, 'old-login', 'owner', 0,
+                 1, 0, 2, 'pending', 'sub_1', 'si_1', 1,
+                 'sigilix-seat-op-departed-member', 0, 1, 1, 1)`,
+      )
+      .bind(INSTALLATION_ID)
+      .run()
+
+    const busy = await handleDeleteOrgMember(
+      request("DELETE", `/v1/org/${INSTALLATION_ID}/members/${TARGET_ID}`),
+      env(db),
+      undefined,
+      INSTALLATION_ID,
+      TARGET_ID,
+    )
+
+    expect(busy.status).toBe(503)
+    await expect(readOrgWorkspaceAccess(db, INSTALLATION_ID, TARGET_ID)).resolves.toMatchObject({ revokedAt: null })
+    await expect(
+      db.prepare("SELECT revoked_at FROM api_key WHERE id = 'departed-member-key'").first(),
+    ).resolves.toEqual({ revoked_at: null })
+    await expect(
+      db.prepare("SELECT state FROM org_seat_billing_operation WHERE operation_id = 'op-departed-member'").first(),
+    ).resolves.toEqual({ state: "pending" })
+
+    await db
+      .prepare(
+        `UPDATE org_seat_billing_operation
+            SET state = 'canceled', error_code = 'test_settled', next_attempt_at_ms = NULL,
+                updated_at_ms = 2, completed_at_ms = 2
+          WHERE operation_id = 'op-departed-member' AND state = 'pending'`,
+      )
       .run()
 
     const response = await handleDeleteOrgMember(
@@ -451,6 +775,9 @@ describe("DELETE /v1/org/:installationId/members/:githubUserId", () => {
     ).resolves.toEqual({
       revoked_at: expect.any(String),
     })
+    await expect(
+      db.prepare("SELECT state FROM org_seat_billing_operation WHERE operation_id = 'op-departed-member'").first(),
+    ).resolves.toEqual({ state: "canceled" })
   })
 })
 

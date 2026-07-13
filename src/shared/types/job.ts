@@ -499,6 +499,12 @@ export type JobMessage =
   // posts a Linear agent `response` activity into that session instead of a plain
   // comment ack; absent (the assignee path) → the legacy comment ack.
   | ({ type: "linear-agent-run"; issueId: string; sessionId?: string } & LinearJobTenantContext)
+  | {
+      /** Durable retry for one installation-scoped Stripe seat expansion. */
+      type: "org-seat-billing-reconcile"
+      installationId: number
+      operationId: string
+    }
   // sig-gitlab-adapter (GitLab support PR 2): a GitLab Merge Request Hook passed
   // the review-trigger decision and was enqueued for review. This is a DISTINCT
   // job type from `pr-review` (which is GitHub-App-specific — installation

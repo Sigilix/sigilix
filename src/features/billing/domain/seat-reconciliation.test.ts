@@ -91,6 +91,8 @@ describe("decodeOrgSeatBillingOperationRow", () => {
       installation_id: 42,
       revision: 1,
       login: "alice",
+      actor_login: "owner",
+      target_is_admin: 0,
       requested_assigned: 0,
       previous_assigned: 1,
       desired_quantity: 2,
@@ -112,6 +114,8 @@ describe("decodeOrgSeatBillingOperationRow", () => {
       installationId: 42,
       revision: 1,
       login: "alice",
+      actorLogin: "owner",
+      targetIsAdmin: false,
       requestedAssigned: false,
       previousAssigned: true,
       desiredQuantity: 2,
@@ -157,5 +161,46 @@ describe("decodeOrgSeatBillingOperationRow", () => {
         error_code: "stripe_error",
       }),
     ).not.toBeNull()
+    expect(decodeOrgSeatBillingOperationRow({ ...row, actor_login: null })).toBeNull()
+    expect(decodeOrgSeatBillingOperationRow({ ...row, target_is_admin: null })).toBeNull()
+  })
+
+  it("keeps terminal historical rows readable while failing active recovery closed without context", () => {
+    const historical = {
+      operation_id: "op-legacy",
+      installation_id: 42,
+      revision: 1,
+      login: "alice",
+      actor_login: null,
+      target_is_admin: null,
+      requested_assigned: 1,
+      previous_assigned: 0,
+      desired_quantity: 2,
+      state: "canceled",
+      stripe_subscription_id: "sub_42",
+      stripe_subscription_item_id: "si_42",
+      stripe_observed_quantity: 1,
+      idempotency_key: "seat-42-legacy",
+      attempts: 0,
+      error_code: "superseded",
+      next_attempt_at_ms: null,
+      created_at_ms: 1,
+      updated_at_ms: 2,
+      stripe_applied_at_ms: null,
+      completed_at_ms: 2,
+    }
+
+    expect(decodeOrgSeatBillingOperationRow(historical)).toEqual(
+      expect.objectContaining({ actorLogin: null, targetIsAdmin: null, state: "canceled" }),
+    )
+    expect(
+      decodeOrgSeatBillingOperationRow({
+        ...historical,
+        state: "pending",
+        error_code: null,
+        next_attempt_at_ms: 3,
+        completed_at_ms: null,
+      }),
+    ).toBeNull()
   })
 })

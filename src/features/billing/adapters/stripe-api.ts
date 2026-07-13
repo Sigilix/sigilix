@@ -19,12 +19,13 @@ interface StripeErrorBody {
   error?: { message?: unknown; type?: unknown }
 }
 
-/** POST a form-encoded body to Stripe. `idempotencyKey` makes a create safely retryable. */
+/** POST a form-encoded body to Stripe, optionally with retry and cancellation controls. */
 async function stripePost(
   secret: string,
   path: string,
   form: URLSearchParams,
   idempotencyKey?: string,
+  signal?: AbortSignal,
 ): Promise<{ ok: true; body: unknown } | { ok: false; error: string; status: number }> {
   const headers: Record<string, string> = {
     authorization: `Bearer ${secret}`,
@@ -34,10 +35,15 @@ async function stripePost(
 
   let res: Response
   try {
-    res = await fetch(`${STRIPE_API_BASE}${path}`, { method: "POST", headers, body: form.toString() })
-  } catch (err) {
-    // Network/transport error — never contains the secret.
-    return { ok: false, error: err instanceof Error ? err.message : "stripe request failed", status: 502 }
+    res = await fetch(`${STRIPE_API_BASE}${path}`, {
+      method: "POST",
+      headers,
+      body: form.toString(),
+      ...(signal ? { signal } : {}),
+    })
+  } catch {
+    // A runtime error message is untrusted and could echo request headers.
+    return { ok: false, error: "stripe request failed", status: 502 }
   }
 
   let body: unknown = null
@@ -319,6 +325,52 @@ export async function listSubscriptionItems(
     return { ok: false, error: "subscription item list too large to page", status: 502 }
   }
   return { ok: true, items }
+}
+
+/**
+ * Set one exact licensed subscription item's absolute seat quantity. The caller supplies a
+ * persisted operation key so retries are idempotent across Worker invocations.
+ */
+export async function updateSubscriptionItemQuantity(
+  secret: string,
+  input: {
+    subscriptionItemId: string
+    quantity: number
+    idempotencyKey: string
+    signal?: AbortSignal
+  },
+): Promise<{ ok: true; subscriptionItemId: string; quantity: number } | { ok: false; error: string; status: number }> {
+  if (
+    typeof input.subscriptionItemId !== "string" ||
+    input.subscriptionItemId.trim().length === 0 ||
+    !Number.isSafeInteger(input.quantity) ||
+    input.quantity <= 0 ||
+    typeof input.idempotencyKey !== "string" ||
+    input.idempotencyKey.trim().length === 0
+  ) {
+    return { ok: false, error: "invalid subscription item quantity update", status: 400 }
+  }
+
+  const form = new URLSearchParams()
+  form.set("quantity", String(input.quantity))
+  form.set("proration_behavior", "create_prorations")
+  const result = await stripePost(
+    secret,
+    `/v1/subscription_items/${encodeURIComponent(input.subscriptionItemId)}`,
+    form,
+    input.idempotencyKey,
+    input.signal,
+  )
+  if (!result.ok) return result
+
+  if (typeof result.body !== "object" || result.body === null) {
+    return { ok: false, error: "invalid stripe subscription item response", status: 502 }
+  }
+  const body = result.body as { id?: unknown; quantity?: unknown }
+  if (body.id !== input.subscriptionItemId || body.quantity !== input.quantity) {
+    return { ok: false, error: "invalid stripe subscription item response", status: 502 }
+  }
+  return { ok: true, subscriptionItemId: input.subscriptionItemId, quantity: input.quantity }
 }
 
 /**

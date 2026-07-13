@@ -26,7 +26,7 @@ class D1StmtShim {
     return new D1StmtShim(this.db, this.sql, args)
   }
 
-  async run(): Promise<D1Result> {
+  runSync(): D1Result {
     const stmt = this.db.prepare(this.sql)
     const info = stmt.run(...(this.params as Parameters<typeof stmt.run>))
     return {
@@ -39,7 +39,11 @@ class D1StmtShim {
     } as unknown as D1Result
   }
 
-  async all<T = Record<string, unknown>>(): Promise<D1Result<T>> {
+  async run(): Promise<D1Result> {
+    return this.runSync()
+  }
+
+  allSync<T = Record<string, unknown>>(): D1Result<T> {
     const stmt = this.db.prepare(this.sql)
     const rows = stmt.all(...(this.params as Parameters<typeof stmt.all>)) as T[]
     return {
@@ -47,6 +51,10 @@ class D1StmtShim {
       results: rows,
       meta: { changes: 0, last_row_id: 0 },
     } as unknown as D1Result<T>
+  }
+
+  async all<T = Record<string, unknown>>(): Promise<D1Result<T>> {
+    return this.allSync<T>()
   }
 
   async first<T = Record<string, unknown>>(colName?: string): Promise<T | null> {
@@ -71,16 +79,27 @@ export class D1DatabaseShim {
 
   async batch<T = unknown>(stmts: D1StmtShim[]): Promise<D1Result<T>[]> {
     const out: D1Result<T>[] = []
-    for (const s of stmts) {
-      // SELECT statements need all() to return rows; writes use run() for meta.
-      if (s.isSelect) {
-        out.push(await s.all<T>())
-      } else {
-        const runResult = await s.run()
-        out.push({ ...runResult, results: [] as T[] } as D1Result<T>)
+    this.db.exec("BEGIN")
+    try {
+      for (const s of stmts) {
+        // SELECT statements need all() to return rows; writes use run() for meta.
+        if (s.isSelect) {
+          out.push(s.allSync<T>())
+        } else {
+          const runResult = s.runSync()
+          out.push({ ...runResult, results: [] as T[] } as D1Result<T>)
+        }
       }
+      this.db.exec("COMMIT")
+      return out
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK")
+      } catch {
+        // Preserve the original statement/commit failure if rollback also fails.
+      }
+      throw error
     }
-    return out
   }
 
   async exec(sql: string): Promise<{ count: number; duration: number }> {

@@ -37,6 +37,7 @@
 // provider doubt → 503. A write only happens once every gate has passed.
 
 import { requireSession } from "@/src/lib/auth-middleware"
+import { reconcileOrgSeatAssignment } from "@/src/features/billing"
 import { fetchInstallationRoster } from "@/src/lib/org-members-roster"
 import { requireOrgAccess } from "@/src/lib/org-access"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
@@ -201,44 +202,6 @@ async function storedTargetIsAdmin(
 }
 
 /**
- * Upsert the seat override. `assigned` sets the billable flag; `knownAdmin`
- * (true only when the caller acts on their OWN verified-admin seat) marks the
- * seat as a known-admin seat — MAX() preserves a prior admin mark so a later
- * non-admin-context write never clears it.
- */
-async function writeSeat(
-  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
-  args: {
-    installationId: number
-    loginKey: string
-    assigned: boolean
-    knownAdmin: boolean
-    updatedBy: string
-    nowIso: string
-  },
-): Promise<void> {
-  if (!env.SIGILIX_PLATFORM_DB) throw new Error("org seat write: SIGILIX_PLATFORM_DB binding absent")
-  await env.SIGILIX_PLATFORM_DB.prepare(
-    "INSERT INTO org_seat_assignment (installation_id, login, assigned, is_admin, updated_at, updated_by)" +
-      " VALUES (?, ?, ?, ?, ?, ?)" +
-      " ON CONFLICT(installation_id, login) DO UPDATE SET" +
-      " assigned = excluded.assigned," +
-      " is_admin = MAX(org_seat_assignment.is_admin, excluded.is_admin)," +
-      " updated_at = excluded.updated_at," +
-      " updated_by = excluded.updated_by",
-  )
-    .bind(
-      args.installationId,
-      args.loginKey,
-      args.assigned ? 1 : 0,
-      args.knownAdmin ? 1 : 0,
-      args.nowIso,
-      args.updatedBy,
-    )
-    .run()
-}
-
-/**
  * POST /v1/org/:installationId/members/:login/seat — see file header.
  * `installationId` / `login` are the already-decoded path segments.
  */
@@ -311,27 +274,46 @@ export async function handleOrgSeatRoute(
     }
   }
 
-  const nowIso = new Date().toISOString()
-  try {
-    await writeSeat(env, {
-      installationId,
-      loginKey: targetKey,
-      assigned,
-      // Mark known-admin only for the caller's own verified-admin seat.
-      knownAdmin: targetKey === callerKey,
-      updatedBy: callerLogin,
-      nowIso,
-    })
-  } catch (error) {
-    console.error(
-      JSON.stringify({
-        event: "org-seat-write-failed",
+  const reconciled = await reconcileOrgSeatAssignment(env, {
+    installationId,
+    login: targetKey,
+    requestedAssigned: assigned,
+    targetIsAdmin: targetKey === callerKey,
+    actorLogin: callerLogin,
+    ...(ctx ? { ctx } : {}),
+  })
+  if (reconciled.kind === "busy") return json({ error: "seat_reconciliation_busy" }, 503)
+  if (reconciled.kind === "pending") {
+    return json(
+      {
         installationId,
-        err: error instanceof Error ? error.message : String(error),
+        login: targetLogin,
+        assigned: reconciled.assigned,
+        updatedAt: reconciled.updatedAt,
+        pending: true,
+        operationId: reconciled.operationId,
+      },
+      202,
+    )
+  }
+  if (reconciled.kind !== "applied") {
+    console.warn(
+      JSON.stringify({
+        event: "org-seat-reconcile-failed",
+        installationId,
+        kind: reconciled.kind,
+        error: reconciled.error,
       }),
     )
-    return json({ error: "seat_failed" }, 500)
+    return json({ error: reconciled.error }, reconciled.kind === "invalid" ? 400 : 503)
   }
-
-  return json({ installationId, login: targetLogin, assigned, updatedAt: nowIso } satisfies SeatMutationResponse, 200)
+  return json(
+    {
+      installationId,
+      login: targetLogin,
+      assigned: reconciled.assigned,
+      updatedAt: reconciled.updatedAt,
+    } satisfies SeatMutationResponse,
+    200,
+  )
 }

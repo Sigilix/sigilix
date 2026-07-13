@@ -3,10 +3,15 @@ import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import {
   acquireOrgSeatBillingLease,
+  claimStripeSeatSubscriptionBinding,
+  ensureSeatReconciliationTenant,
+  readStripeCustomerBinding,
+  readStripeInstallationBinding,
   readActiveOrgSeatBillingOperation,
   readStripeSeatSubscription,
   readTenantBillingState,
   releaseOrgSeatBillingLease,
+  writeStripeSeatSubscriptionSnapshot,
 } from "./d1-seat-reconciliation-store"
 import type { Env } from "@/src/shared/types/env"
 
@@ -74,6 +79,23 @@ describe("D1 seat reconciliation store", () => {
     })
   })
 
+  it("creates a missing reconciliation tenant without overwriting an existing paid tier", async () => {
+    await expect(ensureSeatReconciliationTenant(env(db), 43, "2026-07-13T01:00:00.000Z")).resolves.toEqual({
+      kind: "ready",
+    })
+    await expect(
+      db.prepare("SELECT tier FROM tenant WHERE installation_id = 43").first<{ tier: string }>(),
+    ).resolves.toEqual({ tier: "free" })
+
+    await db.prepare("UPDATE tenant SET tier = 'max' WHERE installation_id = 43").run()
+    await expect(ensureSeatReconciliationTenant(env(db), 43, "2026-07-13T02:00:00.000Z")).resolves.toEqual({
+      kind: "ready",
+    })
+    await expect(
+      db.prepare("SELECT tier FROM tenant WHERE installation_id = 43").first<{ tier: string }>(),
+    ).resolves.toEqual({ tier: "max" })
+  })
+
   it("returns missing separately from a malformed or unavailable Stripe snapshot", async () => {
     await expect(readStripeSeatSubscription(env(db), 42)).resolves.toEqual({ kind: "missing" })
     await db
@@ -88,6 +110,231 @@ describe("D1 seat reconciliation store", () => {
       snapshot: expect.objectContaining({ installationId: 42, derivedQuantity: 2, snapshotState: "discovering" }),
     })
     await expect(readStripeSeatSubscription({}, 42)).resolves.toEqual({ kind: "error", reason: "unavailable" })
+  })
+
+  it("persists a provider-only ready snapshot and exposes its bidirectional D1 binding", async () => {
+    await expect(
+      writeStripeSeatSubscriptionSnapshot(env(db), {
+        installationId: 42,
+        expectedRevision: null,
+        state: "ready",
+        customerId: "cus_42",
+        subscriptionId: "sub_42",
+        subscriptionItemId: "si_42",
+        priceId: "price_42",
+        subscriptionStatus: "active",
+        quantity: 4,
+        eventId: "evt_42",
+        eventCreatedAtMs: 1_000,
+        eventReceivedAtMs: 1_100,
+        nowMs: 1_100,
+      }),
+    ).resolves.toEqual({ kind: "written", revision: 1 })
+
+    await expect(readStripeSeatSubscription(env(db), 42)).resolves.toEqual({
+      kind: "ok",
+      snapshot: expect.objectContaining({
+        stripeCustomerId: "cus_42",
+        stripeSubscriptionId: "sub_42",
+        stripeSubscriptionItemId: "si_42",
+        stripePriceId: "price_42",
+        subscriptionStatus: "active",
+        observedQuantity: 4,
+        derivedQuantity: 4,
+        snapshotState: "ready",
+        revision: 1,
+      }),
+    })
+    await expect(readStripeCustomerBinding(env(db), 42)).resolves.toEqual({ kind: "hit", customerId: "cus_42" })
+    await expect(readStripeInstallationBinding(env(db), "cus_42")).resolves.toEqual({
+      kind: "hit",
+      installationId: 42,
+    })
+  })
+
+  it("claims one durable customer-to-installation binding before any tier write", async () => {
+    await db
+      .prepare("INSERT INTO tenant (installation_id, tier, created_at, updated_at) VALUES (43, 'free', 't', 't')")
+      .run()
+    await expect(
+      claimStripeSeatSubscriptionBinding(env(db), {
+        installationId: 42,
+        customerId: "cus_claimed",
+        nowMs: 100,
+      }),
+    ).resolves.toEqual({ kind: "claimed", revision: 0 })
+    await expect(
+      claimStripeSeatSubscriptionBinding(env(db), {
+        installationId: 42,
+        customerId: "cus_claimed",
+        nowMs: 200,
+      }),
+    ).resolves.toEqual({ kind: "claimed", revision: 0 })
+    await expect(
+      claimStripeSeatSubscriptionBinding(env(db), {
+        installationId: 43,
+        customerId: "cus_claimed",
+        nowMs: 200,
+      }),
+    ).resolves.toEqual({ kind: "conflict" })
+    await expect(
+      claimStripeSeatSubscriptionBinding(env(db), {
+        installationId: 42,
+        customerId: "cus_other",
+        nowMs: 200,
+      }),
+    ).resolves.toEqual({ kind: "conflict" })
+    await expect(readStripeSeatSubscription(env(db), 42)).resolves.toEqual({
+      kind: "ok",
+      snapshot: expect.objectContaining({
+        stripeCustomerId: "cus_claimed",
+        snapshotState: "discovering",
+        revision: 0,
+      }),
+    })
+  })
+
+  it("revision-CAS prevents stale webhook state and preserves matching event-order audit metadata", async () => {
+    const base = {
+      installationId: 42,
+      customerId: "cus_42",
+      subscriptionId: "sub_42",
+      subscriptionItemId: "si_42",
+      priceId: "price_42",
+      subscriptionStatus: "active" as const,
+      quantity: 4,
+      eventReceivedAtMs: 2_100,
+      nowMs: 2_100,
+    }
+    await expect(
+      writeStripeSeatSubscriptionSnapshot(env(db), {
+        ...base,
+        expectedRevision: null,
+        state: "ready",
+        eventId: "evt_new",
+        eventCreatedAtMs: 2_000,
+      }),
+    ).resolves.toEqual({ kind: "written", revision: 1 })
+    await expect(
+      writeStripeSeatSubscriptionSnapshot(env(db), {
+        ...base,
+        expectedRevision: 0,
+        state: "ready",
+        eventId: "evt_stale_writer",
+        eventCreatedAtMs: 3_000,
+      }),
+    ).resolves.toEqual({ kind: "conflict" })
+    await expect(
+      writeStripeSeatSubscriptionSnapshot(env(db), {
+        ...base,
+        expectedRevision: 1,
+        state: "ready",
+        eventId: "evt_old_delivery",
+        eventCreatedAtMs: 1_000,
+        eventReceivedAtMs: 2_200,
+        nowMs: 2_200,
+      }),
+    ).resolves.toEqual({ kind: "written", revision: 2 })
+
+    const snapshot = await readStripeSeatSubscription(env(db), 42)
+    expect(snapshot).toEqual({
+      kind: "ok",
+      snapshot: expect.objectContaining({
+        revision: 2,
+        lastStripeEventId: "evt_new",
+        lastStripeEventCreatedAtMs: 2_000,
+        lastStripeEventReceivedAtMs: 2_200,
+      }),
+    })
+  })
+
+  it("clears phantom capacity for not-applicable and blocked provider states", async () => {
+    await expect(
+      writeStripeSeatSubscriptionSnapshot(env(db), {
+        installationId: 42,
+        expectedRevision: null,
+        state: "not_applicable",
+        customerId: "cus_42",
+        eventId: "evt_none",
+        eventCreatedAtMs: 1_000,
+        eventReceivedAtMs: 1_100,
+        nowMs: 1_100,
+      }),
+    ).resolves.toEqual({ kind: "written", revision: 1 })
+    const none = await readStripeSeatSubscription(env(db), 42)
+    expect(none).toEqual({
+      kind: "ok",
+      snapshot: expect.objectContaining({
+        stripeCustomerId: "cus_42",
+        stripeSubscriptionId: null,
+        stripeSubscriptionItemId: null,
+        stripePriceId: null,
+        observedQuantity: null,
+        derivedQuantity: 0,
+        snapshotState: "not_applicable",
+      }),
+    })
+
+    await expect(
+      writeStripeSeatSubscriptionSnapshot(env(db), {
+        installationId: 42,
+        expectedRevision: 1,
+        state: "blocked",
+        customerId: "cus_42",
+        reason: "ambiguous_seat_items",
+        eventId: "evt_blocked",
+        eventCreatedAtMs: 2_000,
+        eventReceivedAtMs: 2_100,
+        nowMs: 2_100,
+      }),
+    ).resolves.toEqual({ kind: "written", revision: 2 })
+    const blocked = await readStripeSeatSubscription(env(db), 42)
+    expect(blocked).toEqual({
+      kind: "ok",
+      snapshot: expect.objectContaining({
+        observedQuantity: null,
+        derivedQuantity: 0,
+        snapshotState: "blocked",
+        blockReason: "ambiguous_seat_items",
+      }),
+    })
+  })
+
+  it("never lets one customer bind to two installations", async () => {
+    await db
+      .prepare("INSERT INTO tenant (installation_id, tier, created_at, updated_at) VALUES (43, 'teams', 't', 't')")
+      .run()
+    const initial = {
+      expectedRevision: null,
+      state: "ready" as const,
+      customerId: "cus_shared",
+      subscriptionId: "sub_42",
+      subscriptionItemId: "si_42",
+      priceId: "price_42",
+      subscriptionStatus: "active" as const,
+      quantity: 4,
+      eventId: "evt_42",
+      eventCreatedAtMs: 1_000,
+      eventReceivedAtMs: 1_100,
+      nowMs: 1_100,
+    }
+    await expect(writeStripeSeatSubscriptionSnapshot(env(db), { ...initial, installationId: 42 })).resolves.toEqual({
+      kind: "written",
+      revision: 1,
+    })
+    await expect(
+      writeStripeSeatSubscriptionSnapshot(env(db), {
+        ...initial,
+        installationId: 43,
+        subscriptionId: "sub_43",
+        subscriptionItemId: "si_43",
+        eventId: "evt_43",
+      }),
+    ).resolves.toEqual({ kind: "conflict" })
+    await expect(readStripeInstallationBinding(env(db), "cus_shared")).resolves.toEqual({
+      kind: "hit",
+      installationId: 42,
+    })
   })
 
   it("enforces snapshot states and blocked-reason coupling without constraining Stripe statuses", async () => {

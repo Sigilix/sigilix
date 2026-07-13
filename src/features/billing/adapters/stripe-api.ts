@@ -8,6 +8,7 @@
 // error message (safe, non-secret) plus the status; the caller maps that to a 502.
 
 import type { SubscriptionSummary } from "@/src/features/billing/domain/subscription-dedupe"
+import type { StripeSubscriptionItemSummary } from "@/src/features/billing/domain/stripe-seat-target"
 
 const STRIPE_API_BASE = "https://api.stripe.com"
 
@@ -73,10 +74,15 @@ async function stripeBodyless(
   method: "GET" | "DELETE",
   secret: string,
   path: string,
+  signal?: AbortSignal,
 ): Promise<{ ok: true; body: unknown } | { ok: false; error: string; status: number }> {
   let res: Response
   try {
-    res = await fetch(`${STRIPE_API_BASE}${path}`, { method, headers: { authorization: `Bearer ${secret}` } })
+    res = await fetch(`${STRIPE_API_BASE}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${secret}` },
+      ...(signal ? { signal } : {}),
+    })
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "stripe request failed", status: 502 }
   }
@@ -110,8 +116,8 @@ function parseSubscriptionSummary(item: unknown): SubscriptionSummary | null {
   const o = item as { id?: unknown; status?: unknown; created?: unknown; items?: { data?: unknown } }
   const id = typeof o.id === "string" && o.id.length > 0 ? o.id : null
   const status = typeof o.status === "string" && o.status.length > 0 ? o.status : null
-  if (!id || !status) return null
-  const created = typeof o.created === "number" && Number.isFinite(o.created) ? o.created : 0
+  const created = typeof o.created === "number" && Number.isSafeInteger(o.created) && o.created >= 0 ? o.created : null
+  if (!id || !status || created === null) return null
   const firstItem = Array.isArray(o.items?.data) ? o.items?.data[0] : null
   let price: SubscriptionSummary["price"] = null
   if (firstItem && typeof firstItem === "object") {
@@ -144,6 +150,9 @@ function rawEntryId(item: unknown): string | null {
  */
 const MAX_SUBSCRIPTION_PAGES = 20
 
+/** Same conservative termination bound as subscription discovery: 20×100 provider rows. */
+const MAX_SUBSCRIPTION_ITEM_PAGES = 20
+
 /**
  * List a customer's subscriptions (`GET /v1/subscriptions?customer=<id>&status=all`) as
  * minimal summaries — the input to the single-active-subscription dedupe guard. Walks
@@ -154,6 +163,7 @@ const MAX_SUBSCRIPTION_PAGES = 20
 export async function listCustomerSubscriptions(
   secret: string,
   customerId: string,
+  signal?: AbortSignal,
 ): Promise<{ ok: true; subscriptions: SubscriptionSummary[] } | { ok: false; error: string; status: number }> {
   const subscriptions: SubscriptionSummary[] = []
   let startingAfter: string | null = null
@@ -161,7 +171,7 @@ export async function listCustomerSubscriptions(
   for (let page = 0; page < MAX_SUBSCRIPTION_PAGES; page++) {
     const params = new URLSearchParams({ customer: customerId, status: "all", limit: "100" })
     if (startingAfter) params.set("starting_after", startingAfter)
-    const res = await stripeBodyless("GET", secret, `/v1/subscriptions?${params.toString()}`)
+    const res = await stripeBodyless("GET", secret, `/v1/subscriptions?${params.toString()}`, signal)
     if (!res.ok) return res
     const body = res.body as { data?: unknown; has_more?: unknown } | null
     const data = body?.data
@@ -174,7 +184,11 @@ export async function listCustomerSubscriptions(
     }
     for (const item of data) {
       const parsed = parseSubscriptionSummary(item)
-      if (parsed) subscriptions.push(parsed)
+      if (!parsed) {
+        console.error(JSON.stringify({ event: "stripe-subscriptions-malformed-entry", customerId }))
+        return { ok: false, error: "malformed subscription list", status: 502 }
+      }
+      subscriptions.push(parsed)
     }
     // Advance the cursor by the RAW last entry id (not a parsed one — a skipped/malformed
     // entry must not stall pagination). Stop on an empty page or when Stripe reports no more.
@@ -192,6 +206,121 @@ export async function listCustomerSubscriptions(
   return { ok: true, subscriptions }
 }
 
+function nullableStripeString(value: unknown): string | null | undefined {
+  if (value === null) return null
+  return typeof value === "string" ? value : undefined
+}
+
+/** Strictly narrow one Stripe subscription-item list entry into the seat-target shape. */
+function parseSubscriptionItem(item: unknown): StripeSubscriptionItemSummary | null {
+  if (typeof item !== "object" || item === null) return null
+  const raw = item as { id?: unknown; quantity?: unknown; price?: unknown }
+  if (typeof raw.id !== "string" || raw.id.length === 0) return null
+  // Zero is valid provider data and remains observable here; the product-aware resolver
+  // rejects it through the configured plan's positive minimum.
+  if (!Number.isSafeInteger(raw.quantity) || (raw.quantity as number) < 0) return null
+  if (typeof raw.price !== "object" || raw.price === null) return null
+
+  const price = raw.price as { id?: unknown; lookup_key?: unknown; nickname?: unknown; recurring?: unknown }
+  const lookupKey = nullableStripeString(price.lookup_key)
+  const nickname = nullableStripeString(price.nickname)
+  if (
+    typeof price.id !== "string" ||
+    price.id.length === 0 ||
+    lookupKey === undefined ||
+    nickname === undefined ||
+    typeof price.recurring !== "object" ||
+    price.recurring === null
+  ) {
+    return null
+  }
+
+  const recurring = price.recurring as { interval?: unknown; interval_count?: unknown; usage_type?: unknown }
+  if (
+    typeof recurring.interval !== "string" ||
+    recurring.interval.length === 0 ||
+    !Number.isSafeInteger(recurring.interval_count) ||
+    (recurring.interval_count as number) <= 0 ||
+    typeof recurring.usage_type !== "string" ||
+    recurring.usage_type.length === 0
+  ) {
+    return null
+  }
+
+  return {
+    id: raw.id,
+    quantity: raw.quantity as number,
+    price: {
+      id: price.id,
+      lookupKey,
+      nickname,
+      recurring: {
+        interval: recurring.interval,
+        intervalCount: recurring.interval_count as number,
+        usageType: recurring.usage_type,
+      },
+    },
+  }
+}
+
+/**
+ * Read every item for one exact subscription. This is intentionally stricter than the
+ * duplicate-subscription summary parser: a malformed or partial item view must never become
+ * the target of a quantity-changing Stripe request.
+ */
+export async function listSubscriptionItems(
+  secret: string,
+  subscriptionId: string,
+  signal?: AbortSignal,
+): Promise<{ ok: true; items: StripeSubscriptionItemSummary[] } | { ok: false; error: string; status: number }> {
+  const items: StripeSubscriptionItemSummary[] = []
+  const itemIds = new Set<string>()
+  let startingAfter: string | null = null
+  let moreRemaining = false
+
+  for (let page = 0; page < MAX_SUBSCRIPTION_ITEM_PAGES; page++) {
+    const params = new URLSearchParams({ subscription: subscriptionId, limit: "100" })
+    if (startingAfter) params.set("starting_after", startingAfter)
+    const result = await stripeBodyless("GET", secret, `/v1/subscription_items?${params.toString()}`, signal)
+    if (!result.ok) return result
+
+    const body = result.body as { data?: unknown; has_more?: unknown } | null
+    if (!Array.isArray(body?.data) || typeof body.has_more !== "boolean") {
+      console.error(JSON.stringify({ event: "stripe-subscription-items-malformed-list", subscriptionId }))
+      return { ok: false, error: "malformed subscription item list", status: 502 }
+    }
+
+    const pageItems: StripeSubscriptionItemSummary[] = []
+    for (const rawItem of body.data) {
+      const parsed = parseSubscriptionItem(rawItem)
+      // Provider mutation during pagination could repeat a row across pages. Treat that as
+      // an unstable/truncated view and fail closed instead of silently deduplicating it.
+      if (!parsed || itemIds.has(parsed.id)) {
+        console.error(JSON.stringify({ event: "stripe-subscription-items-malformed-entry", subscriptionId }))
+        return { ok: false, error: "malformed subscription item list", status: 502 }
+      }
+      itemIds.add(parsed.id)
+      pageItems.push(parsed)
+    }
+    items.push(...pageItems)
+
+    moreRemaining = body.has_more
+    if (!moreRemaining) break
+    const nextCursor = pageItems.at(-1)?.id ?? null
+    if (!nextCursor) {
+      console.error(JSON.stringify({ event: "stripe-subscription-items-missing-cursor", subscriptionId }))
+      return { ok: false, error: "malformed subscription item list", status: 502 }
+    }
+    startingAfter = nextCursor
+  }
+
+  if (moreRemaining) {
+    console.error(JSON.stringify({ event: "stripe-subscription-items-list-truncated", subscriptionId }))
+    return { ok: false, error: "subscription item list too large to page", status: 502 }
+  }
+  return { ok: true, items }
+}
+
 /**
  * Cancel a subscription IMMEDIATELY (`DELETE /v1/subscriptions/<id>`) — used to remove a
  * duplicate active subscription so it stops billing at once. Returns a failure result
@@ -200,8 +329,9 @@ export async function listCustomerSubscriptions(
 export async function cancelSubscription(
   secret: string,
   subscriptionId: string,
+  signal?: AbortSignal,
 ): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
-  const res = await stripeBodyless("DELETE", secret, `/v1/subscriptions/${encodeURIComponent(subscriptionId)}`)
+  const res = await stripeBodyless("DELETE", secret, `/v1/subscriptions/${encodeURIComponent(subscriptionId)}`, signal)
   return res.ok ? { ok: true } : res
 }
 

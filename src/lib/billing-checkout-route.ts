@@ -14,9 +14,10 @@
 //     its stored Sigilix role while managed membership is on (or the exact live
 //     role while rollout is off). Only the verified id reaches Stripe.
 //   • Seat bounds (Teams 10–150, others 1–500) are validated server-side.
-//   • Customer reuse: the KV installation→customer link is read FIRST; a returning
-//     org reuses its one customer (a KV read ERROR fails 503 rather than risk a
-//     duplicate). A deterministic Stripe idempotency key is the second guard.
+//   • Customer reuse: the D1 seat snapshot is authoritative once established;
+//     pre-snapshot checkouts fall back to the legacy KV link. Any read ERROR fails
+//     503 rather than risk a duplicate. A deterministic Stripe idempotency key is
+//     the second guard.
 //   • Unconfigured secret → 503. The secret is never leaked in any response.
 
 import type { Env } from "@/src/shared/types/env"
@@ -31,6 +32,7 @@ import {
   createCheckoutSession,
   createBillingPortalSession,
   linkCustomerToInstallation,
+  readStripeCustomerBinding,
   resolveCustomerForInstallation,
 } from "@/src/features/billing"
 
@@ -153,16 +155,23 @@ async function resolveAdminContext(
 }
 
 /**
- * Resolve (reuse) or create the org's Stripe customer. Reads the KV
- * installation→customer link FIRST so a returning org reuses its one customer; a
- * KV read ERROR fails (503) rather than risk a duplicate. A newly-created customer
- * is linked immediately (idempotent, anti-duplicate) — the webhook link is a fallback.
+ * Resolve (reuse) or create the org's Stripe customer. A materialized D1 seat
+ * snapshot is the durable binding; KV remains the bootstrap link for customers
+ * created before their first signed subscription webhook. Either storage error
+ * fails closed rather than minting a duplicate customer.
  */
 async function resolveOrCreateCustomer(
   env: Env,
   secret: string,
   installationId: number,
 ): Promise<{ ok: true; customerId: string } | { ok: false; response: Response }> {
+  const durable = await readStripeCustomerBinding(env, installationId)
+  if (durable.kind === "error") {
+    return { ok: false, response: json({ error: "billing_unavailable" }, 503) }
+  }
+  if (durable.kind === "hit") {
+    return { ok: true, customerId: durable.customerId }
+  }
   const link = await resolveCustomerForInstallation(env, installationId)
   if (link.kind === "error") {
     return { ok: false, response: json({ error: "billing_unavailable" }, 503) }

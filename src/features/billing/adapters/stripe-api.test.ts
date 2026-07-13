@@ -3,7 +3,11 @@
 // cancellations (keep-oldest correctness), plus the fail-soft error contract.
 
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { listCustomerSubscriptions, cancelSubscription } from "@/src/features/billing/adapters/stripe-api"
+import {
+  listCustomerSubscriptions,
+  listSubscriptionItems,
+  cancelSubscription,
+} from "@/src/features/billing/adapters/stripe-api"
 
 const KEY = "sk_test"
 
@@ -94,6 +98,252 @@ describe("listCustomerSubscriptions", () => {
     )
     const res = await listCustomerSubscriptions(KEY, "cus_bad")
     expect(res.ok).toBe(false)
+  })
+
+  it("fails closed when a subscription entry has no trustworthy creation order", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          object: "list",
+          has_more: false,
+          data: [{ id: "sub_bad_created", status: "active", created: "not-a-timestamp", items: { data: [] } }],
+        }),
+      ),
+    )
+
+    const res = await listCustomerSubscriptions(KEY, "cus_bad_created")
+
+    expect(res.ok).toBe(false)
+  })
+})
+
+describe("listSubscriptionItems", () => {
+  it("walks every page and strictly parses the complete subscription-item target shape", async () => {
+    const seen: Array<{
+      path: string
+      method: string | undefined
+      subscription: string | null
+      limit: string | null
+      after: string | null
+    }> = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" ? input : input.toString())
+      seen.push({
+        path: url.pathname,
+        method: init?.method,
+        subscription: url.searchParams.get("subscription"),
+        limit: url.searchParams.get("limit"),
+        after: url.searchParams.get("starting_after"),
+      })
+      const after = url.searchParams.get("starting_after")
+      const data = after
+        ? [
+            {
+              id: "si_year",
+              quantity: 12,
+              price: {
+                id: "price_max_annual",
+                lookup_key: "sigilix_max_annual",
+                nickname: "Max annual",
+                recurring: { interval: "year", interval_count: 1, usage_type: "licensed" },
+              },
+            },
+          ]
+        : [
+            {
+              id: "si_month",
+              quantity: 3,
+              price: {
+                id: "price_pro",
+                lookup_key: null,
+                nickname: null,
+                recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
+              },
+            },
+            {
+              id: "si_addon",
+              quantity: 2,
+              price: {
+                id: "price_addon",
+                lookup_key: "sigilix_addon",
+                nickname: "Add-on",
+                recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
+              },
+            },
+          ]
+      return new Response(JSON.stringify({ data, has_more: !after }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const result = await listSubscriptionItems(KEY, "sub /annual")
+
+    expect(result).toEqual({
+      ok: true,
+      items: [
+        {
+          id: "si_month",
+          quantity: 3,
+          price: {
+            id: "price_pro",
+            lookupKey: null,
+            nickname: null,
+            recurring: { interval: "month", intervalCount: 1, usageType: "licensed" },
+          },
+        },
+        {
+          id: "si_addon",
+          quantity: 2,
+          price: {
+            id: "price_addon",
+            lookupKey: "sigilix_addon",
+            nickname: "Add-on",
+            recurring: { interval: "month", intervalCount: 1, usageType: "licensed" },
+          },
+        },
+        {
+          id: "si_year",
+          quantity: 12,
+          price: {
+            id: "price_max_annual",
+            lookupKey: "sigilix_max_annual",
+            nickname: "Max annual",
+            recurring: { interval: "year", intervalCount: 1, usageType: "licensed" },
+          },
+        },
+      ],
+    })
+    expect(seen).toEqual([
+      {
+        path: "/v1/subscription_items",
+        method: "GET",
+        subscription: "sub /annual",
+        limit: "100",
+        after: null,
+      },
+      {
+        path: "/v1/subscription_items",
+        method: "GET",
+        subscription: "sub /annual",
+        limit: "100",
+        after: "si_addon",
+      },
+    ])
+  })
+
+  it("fails closed on malformed list envelopes and malformed item fields", async () => {
+    const malformedBodies: unknown[] = [
+      null,
+      { has_more: false },
+      { data: [], has_more: "false" },
+      { data: [], has_more: true },
+      { data: [{ id: "", quantity: 1, price: {} }], has_more: false },
+      {
+        data: [
+          {
+            id: "si_bad_quantity",
+            quantity: -1,
+            price: {
+              id: "price_pro",
+              lookup_key: null,
+              nickname: null,
+              recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
+            },
+          },
+        ],
+        has_more: false,
+      },
+      {
+        data: [
+          {
+            id: "si_bad_recurring",
+            quantity: 1,
+            price: { id: "price_pro", lookup_key: null, nickname: null, recurring: null },
+          },
+        ],
+        has_more: false,
+      },
+      {
+        data: [
+          {
+            id: "si_bad_lookup",
+            quantity: 1,
+            price: {
+              id: "price_pro",
+              lookup_key: 7,
+              nickname: null,
+              recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
+            },
+          },
+        ],
+        has_more: false,
+      },
+    ]
+
+    for (const body of malformedBodies) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(JSON.stringify(body), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+        ),
+      )
+      await expect(listSubscriptionItems(KEY, "sub_bad")).resolves.toMatchObject({ ok: false, status: 502 })
+    }
+  })
+
+  it("fails closed rather than returning a truncated view after the page cap", async () => {
+    let page = 0
+    const fetchMock = vi.fn(async () => {
+      page += 1
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: `si_${page}`,
+              quantity: 1,
+              price: {
+                id: "price_pro",
+                lookup_key: null,
+                nickname: null,
+                recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
+              },
+            },
+          ],
+          has_more: true,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(listSubscriptionItems(KEY, "sub_huge")).resolves.toEqual({
+      ok: false,
+      error: "subscription item list too large to page",
+      status: 502,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(20)
+  })
+
+  it("propagates a non-2xx Stripe response without throwing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: { message: "try later", type: "rate_limit_error" } }), {
+            status: 429,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    )
+
+    await expect(listSubscriptionItems(KEY, "sub_rate_limited")).resolves.toMatchObject({ ok: false, status: 429 })
   })
 })
 

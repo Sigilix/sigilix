@@ -205,9 +205,12 @@ describe("POST /v1/billing/checkout", () => {
     const captured: { checkoutBody?: string } = {}
     stubFetch({ installations: ADMIN_INSTALLS, captured })
     const db = {
-      prepare: () => ({
+      prepare: (sql: string) => ({
         bind: () => ({
-          first: async () => ({ subscription_status: "active", billing_source: "legacy_entitlement" }),
+          first: async () =>
+            sql.includes("stripe_seat_subscription")
+              ? null
+              : { subscription_status: "active", billing_source: "legacy_entitlement" },
         }),
       }),
     } as unknown as Env["SIGILIX_PLATFORM_DB"]
@@ -440,6 +443,42 @@ describe("POST /v1/billing/checkout", () => {
     expect(form.get("customer")).toBe("cus_existing")
   })
 
+  it("reuses the durable D1 customer binding when the legacy KV link is missing", async () => {
+    const db = makeD1()
+    await db.exec(migration("0001_create_tenant_repo_usage.sql"))
+    await db.exec(migration("0011_add_tenant_subscription_status.sql"))
+    await db.exec(migration("0012_add_tenant_billing_source.sql"))
+    await db.exec(migration("0020_create_stripe_seat_reconciliation.sql"))
+    await db
+      .prepare(
+        "INSERT INTO tenant" +
+          " (installation_id, tier, subscription_status, billing_source, created_at, updated_at)" +
+          " VALUES (555, 'free', 'canceled', 'stripe', '2026-07-13T00:00:00.000Z', '2026-07-13T00:00:00.000Z')",
+      )
+      .run()
+    await db
+      .prepare(
+        `INSERT INTO stripe_seat_subscription
+          (installation_id, stripe_customer_id, derived_quantity, revision, snapshot_state,
+           created_at_ms, updated_at_ms)
+         VALUES (555, 'cus_durable', 0, 1, 'not_applicable', 1, 1)`,
+      )
+      .run()
+    const { kv } = makeKV()
+    await seedSession(kv, "s1", "octocat")
+    const captured: { checkoutBody?: string; customerCalls?: number } = {}
+    stubFetch({ installations: ADMIN_INSTALLS, captured })
+
+    const response = await handleBillingCheckoutRoute(
+      post({ tier: "pro", seats: 1, installationId: 555 }, "s1"),
+      baseEnv(kv, { SIGILIX_PLATFORM_DB: db }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(captured.customerCalls).toBe(0)
+    expect(new URLSearchParams(captured.checkoutBody).get("customer")).toBe("cus_durable")
+  })
+
   it("creates + links a customer on first checkout (no prior link)", async () => {
     const { kv, store } = makeKV()
     await seedSession(kv, "s1", "octocat")
@@ -515,6 +554,7 @@ async function makeManagedEnv(options: {
   await db.exec(migration("0001_create_tenant_repo_usage.sql"))
   await db.exec(migration("0011_add_tenant_subscription_status.sql"))
   await db.exec(migration("0012_add_tenant_billing_source.sql"))
+  await db.exec(migration("0020_create_stripe_seat_reconciliation.sql"))
   await db.exec(migration("0022_create_org_workspace_access.sql"))
   await db
     .prepare(

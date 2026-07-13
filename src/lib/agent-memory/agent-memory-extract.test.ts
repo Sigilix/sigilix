@@ -90,10 +90,11 @@ function fakeIndex() {
 
 let kv: KVNamespace
 let idx: ReturnType<typeof fakeIndex>
+let defaultDb: D1Database
 
 function makeEnv(extra: Partial<Env> = {}): Env {
   return {
-    OPENCLAW_SIGILIX_API_KEY: TOKEN,
+    SIGILIX_PLATFORM_DB: defaultDb,
     OPENROUTER_API_KEY: "or-test-key", // the extractor config primary is an OpenRouter id
     OLLAMA_API_KEY: "",
     OLLAMA_CHAT_ENABLE: "on",
@@ -105,6 +106,10 @@ function makeEnv(extra: Partial<Env> = {}): Env {
 }
 const MIGRATION_SQL_API_KEY = readFileSync(
   new URL("../../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
+  "utf8",
+)
+const MIGRATION_SQL_IDENTITY = readFileSync(
+  new URL("../../../migrations/0006_create_user_identity.sql", import.meta.url),
   "utf8",
 )
 /** Throws on any operation — simulates a genuine D1 outage/fault. */
@@ -128,15 +133,43 @@ function unkeyedEnv(extra: Partial<Env> = {}): Env {
   } as unknown as Env
 }
 
-/** Env with the static bearer set but NO model api key (the fail-open case). */
+/** Env with a valid tenant bearer but NO model api key (the fail-open case). */
 function noModelKeyEnv(): Env {
-  return {
-    OPENCLAW_SIGILIX_API_KEY: TOKEN,
-    OLLAMA_API_KEY: "",
-    OPENCLAW_STATE: kv,
-    AI: fakeAi(),
-    OPENCLAW_AGENT_MEMORY_INDEX: idx.index,
-  } as unknown as Env
+  return makeEnv({ OPENROUTER_API_KEY: "", OLLAMA_API_KEY: "" })
+}
+
+async function seedIdentity(db: D1Database, userId = "user-1", githubUserId = "1"): Promise<void> {
+  await db
+    .prepare(
+      "INSERT INTO user_identity " +
+        "(user_id, github_user_id, providers, created_at, last_login_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(userId, githubUserId, '["github"]', "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+    .run()
+}
+
+async function makeTenantDb(
+  args: {
+    token?: string
+    keyId?: string
+    installationId?: number
+    createdBy?: string
+    userId?: string
+  } = {},
+): Promise<D1Database> {
+  const db = makeD1()
+  await db.exec(MIGRATION_SQL_API_KEY)
+  await db.exec(MIGRATION_SQL_IDENTITY)
+  const createdBy = args.createdBy ?? "1"
+  await seedIdentity(db, args.userId ?? "user-1", createdBy)
+  await insertApiKey(db, {
+    id: args.keyId ?? "key-1",
+    keyHash: await sha256Hex(args.token ?? TOKEN),
+    installationId: args.installationId ?? 42,
+    createdBy,
+    nowIso: "2026-01-01T00:00:00Z",
+  })
+  return db
 }
 
 function extractReq(body: unknown, token: string | null = TOKEN): Request {
@@ -159,11 +192,12 @@ interface ExtractResponse {
   facts: Array<{ kind: string; content: string; id: string; deduped: boolean }>
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   kv = fakeKV()
   idx = fakeIndex()
   mockModelOutput = '{"memories":[]}'
   lastMessages = null
+  defaultDb = await makeTenantDb()
 })
 
 describe("POST /v1/memory/extract — auth + validation", () => {
@@ -174,27 +208,18 @@ describe("POST /v1/memory/extract — auth + validation", () => {
     expect((await handleMemoryExtractRoute(extractReq(exchangeBody, "nope"), makeEnv())).status).toBe(401)
   })
 
-  // #155 slice 2: the route now authenticates via resolveApiKey (D1 api_key lookup,
-  // falling back to the legacy global key). These pin the new invariants at the
-  // route level (resolveApiKey's own unit suite covers the resolver exhaustively).
+  // #155 slice 2: the route authenticates via a D1 api_key lookup. These pin the
+  // route-level invariants (resolveApiKey's own unit suite covers the resolver).
   it("200 with a valid per-tenant api_key — NO global key configured at all", async () => {
-    const db = makeD1()
-    await db.exec(MIGRATION_SQL_API_KEY)
     const plaintext = "sigilix_live_extract_test"
-    await insertApiKey(db, {
-      id: "key-1",
-      keyHash: await sha256Hex(plaintext),
-      installationId: 42,
-      createdBy: "1",
-      nowIso: "2026-01-01T00:00:00Z",
-    })
+    const db = await makeTenantDb({ token: plaintext })
     const res = await handleMemoryExtractRoute(
       extractReq(exchangeBody, plaintext),
       unkeyedEnv({ SIGILIX_PLATFORM_DB: db }),
     )
     expect(res.status).toBe(200)
   })
-  it("401 on a genuine D1 fault — fails CLOSED even though the presented bearer is the valid global key", async () => {
+  it("401 on a genuine D1 fault — fails CLOSED", async () => {
     const res = await handleMemoryExtractRoute(
       extractReq(exchangeBody, TOKEN),
       makeEnv({ SIGILIX_PLATFORM_DB: makeBrokenDb() }),
@@ -277,40 +302,68 @@ describe("POST /v1/memory/extract — distill + store", () => {
     expect(idx.upsertCalls.length).toBe(1) // only the first write upserted a vector
   })
 
-  it("canonicalizes the tenant scope (mixed-case ids → lowercased namespace)", async () => {
+  it("uses the authenticated subject and canonicalizes a mixed-case repo id", async () => {
     mockModelOutput = JSON.stringify({ memories: [{ kind: "decision", content: "x" }] })
     await handleMemoryExtractRoute(extractReq({ ...exchangeBody, userId: "U1", repoId: "Sigilix/Boreas" }), makeEnv())
-    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe(memoryNamespace("U1", "Sigilix/Boreas"))
-    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe("u1/sigilix/boreas")
+    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe(memoryNamespace("inst:42:user:user-1", "Sigilix/Boreas"))
+    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe("inst:42:user:user-1/sigilix/boreas")
   })
 })
 
 describe("POST /v1/memory/extract — SIG-494 tenant-scope isolation", () => {
-  it("stores distilled facts under the installation-prefixed namespace for a per-tenant key", async () => {
+  it("derives the write subject from the authenticated key creator, never a spoofed body userId", async () => {
     const db = makeD1()
     await db.exec(MIGRATION_SQL_API_KEY)
-    const plaintext = "sigilix_live_extract_inst42"
+    await db.exec(MIGRATION_SQL_IDENTITY)
+    await db
+      .prepare(
+        "INSERT INTO user_identity " +
+          "(user_id, github_user_id, providers, created_at, last_login_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .bind("user-a", "111", '["github"]', "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+      .run()
+    const plaintext = "sigilix_live_extract_member_a"
     await insertApiKey(db, {
-      id: "key-1",
+      id: "key-member-a",
       keyHash: await sha256Hex(plaintext),
       installationId: 42,
-      createdBy: "1",
+      createdBy: "111",
       nowIso: "2026-01-01T00:00:00Z",
     })
+    mockModelOutput = JSON.stringify({ memories: [{ kind: "decision", content: "x" }] })
+
+    const res = await handleMemoryExtractRoute(
+      extractReq({ ...exchangeBody, userId: "user-b" }, plaintext),
+      unkeyedEnv({ SIGILIX_PLATFORM_DB: db }),
+    )
+
+    expect(res.status).toBe(200)
+    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe(memoryNamespace("inst:42:user:user-a", "sigilix/boreas"))
+  })
+
+  it("stores distilled facts under the installation-prefixed namespace for a per-tenant key", async () => {
+    const plaintext = "sigilix_live_extract_inst42"
+    const db = await makeTenantDb({ token: plaintext })
     mockModelOutput = JSON.stringify({ memories: [{ kind: "decision", content: "x" }] })
     const res = await handleMemoryExtractRoute(
       extractReq(exchangeBody, plaintext),
       unkeyedEnv({ SIGILIX_PLATFORM_DB: db }),
     )
     expect(res.status).toBe(200)
-    // Confined to the caller's installation, not the raw body-asserted subject.
-    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe(memoryNamespace("inst:42:u1", "sigilix/boreas"))
+    // Confined to the caller's installation and stable internal user identity,
+    // not the raw body-asserted subject.
+    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe(memoryNamespace("inst:42:user:user-1", "sigilix/boreas"))
   })
 
-  it("the legacy global key stays un-prefixed (broad) — namespace unchanged", async () => {
+  it("denies the legacy global key instead of granting broad personal-memory access", async () => {
     mockModelOutput = JSON.stringify({ memories: [{ kind: "decision", content: "x" }] })
-    await handleMemoryExtractRoute(extractReq(exchangeBody), makeEnv()) // legacy TOKEN → installationId -1
-    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe(memoryNamespace("u1", "sigilix/boreas"))
+    const res = await handleMemoryExtractRoute(
+      extractReq(exchangeBody),
+      unkeyedEnv({ OPENCLAW_SIGILIX_API_KEY: TOKEN }),
+    )
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: "memory_identity_unavailable" })
+    expect(idx.upsertCalls).toHaveLength(0)
   })
 })
 

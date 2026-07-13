@@ -60,6 +60,94 @@ export async function insertApiKey(
     .run()
 }
 
+export type CliApiKeyClaimResult = "inserted" | "already_claimed" | "access_revoked"
+
+/**
+ * Atomically redeem one sealed CLI authorization grant into an API-key row.
+ *
+ * The grant fixes `id` before exchange. Because `api_key.id` is the table's
+ * PRIMARY KEY, concurrent/replayed exchanges can race here but exactly one can
+ * report an insert; only that caller may receive its in-memory plaintext. The
+ * exact durable user identity and account_tenant link are account-lifecycle
+ * markers (not role authority), so deletion, recreation, and redemption
+ * serialize safely. In managed-membership mode, the active exact-access
+ * predicate is also part of the same statement.
+ */
+export async function claimCliApiKey(
+  db: D1Database,
+  args: {
+    id: string
+    keyHash: string
+    installationId: number
+    createdBy: string
+    accountUserId: string
+    nowIso: string
+    name: string
+    requireActiveAccess: boolean
+  },
+): Promise<CliApiKeyClaimResult> {
+  if (!validUuid(args.id)) throw new Error("invalid CLI API key id")
+  if (!validUuid(args.accountUserId)) throw new Error("invalid CLI account user id")
+  if (!/^[0-9a-f]{64}$/.test(args.keyHash)) throw new Error("invalid CLI API key hash")
+  if (!validInstallationId(args.installationId)) throw new Error("invalid CLI API key installation id")
+  if (!validGithubUserId(args.createdBy)) throw new Error("invalid CLI API key creator id")
+
+  const accessPredicate = args.requireActiveAccess
+    ? `AND EXISTS (
+         SELECT 1 FROM org_workspace_access
+          WHERE installation_id = ? AND github_user_id = ? AND revoked_at IS NULL
+       )`
+    : ""
+  const bindings: Array<string | number | null> = [
+    args.id,
+    args.keyHash,
+    args.installationId,
+    args.createdBy,
+    args.nowIso,
+    args.name,
+    args.accountUserId,
+    args.createdBy,
+    args.createdBy,
+    args.installationId,
+  ]
+  if (args.requireActiveAccess) bindings.push(args.installationId, args.createdBy)
+
+  const statement = db
+    .prepare(
+      `INSERT INTO api_key
+            (id, key_hash, installation_id, created_by, created_at, name)
+       SELECT ?, ?, ?, ?, ?, ?
+        WHERE EXISTS (
+          SELECT 1 FROM user_identity
+           WHERE user_id = ? AND github_user_id = ?
+        )
+        AND EXISTS (
+          SELECT 1 FROM account_tenant
+           WHERE github_user_id = ? AND installation_id = ?
+        )
+        ${accessPredicate}
+       ON CONFLICT(id) DO NOTHING`,
+    )
+    .bind(...bindings)
+
+  const result = await statement.run()
+  if ((result.meta.changes ?? 0) === 1) return "inserted"
+
+  // A zero-row conditional INSERT can mean either an already-claimed grant or
+  // access removed before redemption. Keep those contracts distinct without
+  // ever exposing key material to either path.
+  const existing = await db.prepare("SELECT 1 AS found FROM api_key WHERE id = ?").bind(args.id).first()
+  if (existing !== null) return "already_claimed"
+  return "access_revoked"
+}
+
+function validUuid(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  )
+}
+
 function validInstallationId(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0
 }

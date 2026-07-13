@@ -10,19 +10,18 @@
 //                                  GitHub redirects here after install/update
 //                                  with ?installation_id&setup_action&state.
 //                                  Requires a session, a session-bound state
-//                                  nonce, AND — critically — proof from GitHub
-//                                  that this session's user actually controls
-//                                  the claimed installation_id (see the
-//                                  ownership check below). On success: links
-//                                  account_tenant, mints an api_key, and
-//                                  renders the plaintext key ONCE.
+//                                  nonce, exact live GitHub visibility, and
+//                                  (when enabled) active Sigilix workspace
+//                                  access. On success: links compatibility
+//                                  metadata, mints an api_key, and renders the
+//                                  plaintext key ONCE.
 //
 // Mirrors the KV-backed, single-use, read-then-delete state-nonce CSRF
 // pattern in slack-install.ts, and the never-log-secrets discipline used
 // throughout the auth-* modules: the plaintext key is rendered into the
 // response HTML and is never passed to console.log/console.error/console.warn.
 //
-// AUTH-CRITICAL — the installation-ownership check. `installation_id` arrives
+// AUTH-CRITICAL — the exact-installation access check. `installation_id` arrives
 // as an attacker-controllable query parameter, and GitHub installation IDs are
 // low, enumerable integers that appear in webhook payloads (NOT secrets). The
 // state nonce alone does NOT bind to an installation (it is minted before any
@@ -30,31 +29,23 @@
 // WITHOUT a positive ownership check an attacker could call
 // `/setup?installation_id=<victim>&state=<own_nonce>` and link their account to
 // (and mint a live API key for) a victim's installation — a cross-tenant
-// takeover. The `account_tenant` link this route writes is the sole trust
-// anchor for the entire key system, so it must never be created without proof.
-// We verify by listing the installations the session user's own GitHub
-// user-to-server token can see (`GET /user/installations`) and confirming the
-// claimed id is among them. The check FAILS CLOSED: any error, or an
-// unconfirmable id, refuses the link.
+// takeover. `requireOrgAccess` proves the session user's fresh GitHub token can
+// see this exact installation and, when managed membership is enabled, also
+// requires an active exact workspace row. The legacy `account_tenant` row this
+// route writes remains compatibility metadata only; it never grants access.
 
 import { requireSession } from "@/src/lib/auth-middleware"
 import { sha256Hex } from "@/src/lib/auth-bearer"
-import { decryptAccessToken } from "@/src/lib/auth-session"
 import { insertApiKey, linkAccountTenant, mintApiKeyPlaintext } from "@/src/lib/api-key-store"
+import { requireOrgAccess } from "@/src/lib/org-access"
 import type { Env } from "@/src/shared/types/env"
 
 const SETUP_STATE_KV_PREFIX = "setup_state:"
 const SETUP_STATE_TTL_SECONDS = 600
 const GITHUB_APP_INSTALL_URL = "https://github.com/apps/sigilix/installations/new"
-// account_tenant.role is a placeholder for slice 2's authorization
-// refinement (e.g. distinguishing org admins from members). Slice 1 only
-// links a user the ownership check has confirmed controls the installation,
-// so every link minted here is "owner".
+// account_tenant.role is retained for legacy consumers only. Authorization is
+// owned by requireOrgAccess and org_workspace_access, never this placeholder.
 const DEFAULT_ROLE = "owner"
-// Pagination cap on GET /user/installations — defensive against a runaway loop
-// if GitHub's total_count and page contents ever disagree. 100/page × 20 pages
-// = 2000 installations, far beyond any real user.
-const MAX_INSTALLATION_PAGES = 20
 
 interface SetupStateRecord {
   githubUserId: number
@@ -138,40 +129,18 @@ export async function handleSetupRoute(request: Request, env: Env, ctx?: Executi
     return new Response("platform_db_not_configured\n", { status: 503 })
   }
   const db = env.SIGILIX_PLATFORM_DB
-  const githubUserId = String(authed.record.githubUserId)
-  const now = new Date().toISOString()
+  const access = await requireOrgAccess(request, env, ctx, installationId, { requiredRole: "member" })
+  if (!access.ok) return access.response
 
-  // AUTH-CRITICAL ownership check (see file header). Prove the session user
-  // actually controls `installationId` before establishing the trust link.
-  if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) {
-    console.error(JSON.stringify({ event: "setup-encryption-key-missing" }))
-    return new Response("auth misconfigured\n", { status: 503 })
+  // The request cookie cannot change during this handler, and session token
+  // refreshes preserve identity. Still fail closed if the central guard ever
+  // resolves a different immutable GitHub account than the nonce-bound read.
+  if (access.githubUserId !== String(authed.record.githubUserId)) {
+    console.error(JSON.stringify({ event: "setup-session-identity-drift", installationId }))
+    return new Response("forbidden\n", { status: 403 })
   }
-  let accessToken: string
-  try {
-    accessToken = await decryptAccessToken(
-      { encryptedAccessToken: authed.record.encryptedAccessToken, iv: authed.record.iv },
-      authed.sessionId,
-      env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-    )
-  } catch (error) {
-    console.error(
-      JSON.stringify({
-        event: "setup-decrypt-token-failed",
-        err: error instanceof Error ? error.message : String(error),
-      }),
-    )
-    return new Response("setup_failed\n", { status: 500 })
-  }
-  const ownership = await userControlsInstallation(accessToken, installationId)
-  if (!ownership.ok) {
-    if (ownership.reason === "not_owned") {
-      console.error(JSON.stringify({ event: "setup-installation-not-owned", installationId }))
-      return new Response("forbidden\n", { status: 403 })
-    }
-    console.error(JSON.stringify({ event: "setup-installation-lookup-failed", installationId }))
-    return new Response("installation_lookup_failed\n", { status: 502 })
-  }
+  const githubUserId = access.githubUserId
+  const now = new Date().toISOString()
 
   // Don't assume the `tenant` row exists yet — the PR webhook upserts it
   // asynchronously (see d1-tenant-store.ts). account_tenant has no FK to
@@ -223,61 +192,6 @@ export async function handleSetupRoute(request: Request, env: Env, ctx?: Executi
 
   // Plaintext rendered into the page exactly once; never passed to console.*.
   return renderSetupSuccessPage(plaintext)
-}
-
-interface UserInstallationsResponse {
-  total_count?: number
-  installations?: Array<{ id?: number }>
-}
-
-/**
- * Confirm the session user's own GitHub user-to-server token can see
- * `installationId` via `GET /user/installations` (the same App's user OAuth
- * token Sigilix already uses for `GET /user` in auth-oauth-github.ts). Returns
- * `{ ok: true }` only when the id is positively present.
- *
- * FAILS CLOSED — any network/HTTP/JSON error returns `{ ok:false,
- * reason:"lookup_failed" }` (never treated as owned), and exhausting the user's
- * installations without a match returns `{ ok:false, reason:"not_owned" }`.
- * Never logs the access token.
- */
-async function userControlsInstallation(
-  accessToken: string,
-  installationId: number,
-): Promise<{ ok: true } | { ok: false; reason: "not_owned" | "lookup_failed" }> {
-  let seen = 0
-  for (let page = 1; page <= MAX_INSTALLATION_PAGES; page++) {
-    let res: Response
-    try {
-      res = await fetch(`https://api.github.com/user/installations?per_page=100&page=${page}`, {
-        headers: {
-          accept: "application/vnd.github+json",
-          "x-github-api-version": "2022-11-28",
-          authorization: `Bearer ${accessToken}`,
-          "user-agent": "sigilix-worker",
-        },
-      })
-    } catch {
-      return { ok: false, reason: "lookup_failed" }
-    }
-    if (!res.ok) return { ok: false, reason: "lookup_failed" }
-    let body: UserInstallationsResponse
-    try {
-      body = (await res.json()) as UserInstallationsResponse
-    } catch {
-      return { ok: false, reason: "lookup_failed" }
-    }
-    const installs = Array.isArray(body.installations) ? body.installations : []
-    for (const inst of installs) {
-      if (inst.id === installationId) return { ok: true }
-    }
-    seen += installs.length
-    const total = typeof body.total_count === "number" ? body.total_count : seen
-    // Stop when this page was empty (no more rows) or we've covered the count.
-    if (installs.length === 0 || seen >= total) return { ok: false, reason: "not_owned" }
-  }
-  // Page cap hit without a match — treat as unconfirmable (fail closed).
-  return { ok: false, reason: "lookup_failed" }
 }
 
 function renderSetupSuccessPage(plaintextKey: string): Response {

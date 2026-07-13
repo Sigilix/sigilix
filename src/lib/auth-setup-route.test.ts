@@ -2,21 +2,22 @@
 // + /setup route tests. Mirrors the state-nonce CSRF pattern test style used
 // for slack-install.ts and auth-oauth-github.ts.
 //
-// The /setup success path now requires (a) a decryptable session access token
-// and (b) a GitHub `GET /user/installations` response that includes the claimed
-// installation — so sessions are seeded via the real `createSession` (which
-// encrypts a token) and `fetch` is stubbed to control the installations list.
+// The /setup success path resolves the central exact-installation access guard,
+// so sessions are seeded via the real `createSession` and GitHub visibility +
+// live-role responses are explicit in every path that reaches authorization.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { handleInstallRedirect, handleSetupRoute } from "@/src/lib/auth-setup-route"
 import { base64urlEncode, createSession } from "@/src/lib/auth-session"
+import worker from "@/src/index"
 import type { Env } from "@/src/shared/types/env"
 
 const SESSION_COOKIE = "__Host-sigilix_session"
 // 32-byte AES-256 key (base64url), matching the production secret shape.
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(7))
+const CTX = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
 
 function makeKV(): KVNamespace {
   const store = new Map<string, string>()
@@ -47,17 +48,43 @@ async function seedSession(kv: KVNamespace, sessionId: string, githubUserId: num
   })
 }
 
-/** Stub `GET /user/installations` to return exactly the given installation ids. */
-function stubUserInstallations(ids: number[]): void {
+/** Stub the exact-installation visibility + live-role reads used by org access. */
+function stubUserInstallations(ids: number[], options: { liveRole?: "admin" | "member"; status?: number } = {}): void {
+  const status = options.status ?? 200
   vi.stubGlobal(
     "fetch",
-    vi.fn(
-      async () =>
-        new Response(JSON.stringify({ total_count: ids.length, installations: ids.map((id) => ({ id })) }), {
-          status: 200,
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith("https://api.github.com/user/installations?")) {
+        return new Response(
+          status === 200
+            ? JSON.stringify({
+                total_count: ids.length,
+                installations: ids.map((id) => ({
+                  id,
+                  account: { type: "Organization", login: `org-${id}` },
+                })),
+              })
+            : "boom",
+          { status, headers: { "content-type": "application/json" } },
+        )
+      }
+      if (url.startsWith("https://api.github.com/user/memberships/orgs?")) {
+        const memberships =
+          status === 200
+            ? ids.map((id) => ({
+                role: options.liveRole ?? "member",
+                state: "active",
+                organization: { login: `org-${id}` },
+              }))
+            : []
+        return new Response(status === 200 ? JSON.stringify(memberships) : "boom", {
+          status,
           headers: { "content-type": "application/json" },
-        }),
-    ),
+        })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    }),
   )
 }
 
@@ -75,6 +102,10 @@ function extractState(location: string): string {
 
 const MIGRATION_SQL = readFileSync(
   new URL("../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
+  "utf8",
+)
+const ACCESS_MIGRATION_SQL = readFileSync(
+  new URL("../../migrations/0022_create_org_workspace_access.sql", import.meta.url),
   "utf8",
 )
 
@@ -125,6 +156,46 @@ describe("handleSetupRoute (GET /setup)", () => {
     return extractState(res.headers.get("location")!)
   }
 
+  async function enableManagedMembership(): Promise<void> {
+    await db.exec(ACCESS_MIGRATION_SQL)
+    env.OPENCLAW_ORG_MEMBERSHIP_MODE = "on"
+  }
+
+  async function seedStoredAccess(options: {
+    githubUserId?: string
+    role?: "admin" | "member"
+    revokedAt?: string | null
+  }): Promise<void> {
+    const githubUserId = options.githubUserId ?? "111"
+    const now = "2026-07-13T00:00:00.000Z"
+    await db
+      .prepare(
+        "INSERT INTO org_workspace_access" +
+          " (installation_id, github_user_id, role, created_at, updated_at, revoked_at," +
+          " updated_by, last_audit_id, last_action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .bind(
+        42,
+        githubUserId,
+        options.role ?? "member",
+        now,
+        now,
+        options.revokedAt ?? null,
+        "test-seed",
+        `seed-42-${githubUserId}`,
+        "member_added_or_regranted",
+      )
+      .run()
+  }
+
+  async function dispatchSetup(state: string, environment: Env = env): Promise<Response> {
+    return worker.fetch(
+      reqWithSession(`https://x/setup?installation_id=42&state=${state}&setup_action=install`, "sess-1"),
+      environment,
+      CTX,
+    )
+  }
+
   it("401 without a session", async () => {
     const res = await handleSetupRoute(
       reqWithSession("https://x/setup?installation_id=42&state=whatever&setup_action=install", null),
@@ -134,9 +205,14 @@ describe("handleSetupRoute (GET /setup)", () => {
   })
 
   it("400 when state is missing", async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
     await seedSession(kv, "sess-1", 111)
     const res = await handleSetupRoute(reqWithSession("https://x/setup?installation_id=42", "sess-1"), env)
     expect(res.status).toBe(400)
+    expect(fetchMock).not.toHaveBeenCalled()
+    await expect(db.prepare("SELECT COUNT(*) AS n FROM account_tenant").first()).resolves.toEqual({ n: 0 })
+    await expect(db.prepare("SELECT COUNT(*) AS n FROM api_key").first()).resolves.toEqual({ n: 0 })
   })
 
   it("400 when installation_id is missing or non-numeric", async () => {
@@ -207,32 +283,30 @@ describe("handleSetupRoute (GET /setup)", () => {
     expect(keys?.n).toBe(0)
   })
 
-  it("502 (fail closed) when the GitHub installations lookup errors", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("boom", { status: 500 })),
-    )
+  it("403 (fail closed) and consumes state when the GitHub installations lookup errors", async () => {
+    stubUserInstallations([42], { status: 500 })
     const state = await mintState(111)
-    const res = await handleSetupRoute(
-      reqWithSession(`https://x/setup?installation_id=42&state=${state}&setup_action=install`, "sess-1"),
-      env,
-    )
-    expect(res.status).toBe(502)
+    const res = await dispatchSetup(state)
+    expect(res.status).toBe(403)
     const link = await db
       .prepare("SELECT COUNT(*) AS n FROM account_tenant WHERE installation_id = ?")
       .bind(42)
       .first<{ n: number }>()
     expect(link?.n).toBe(0)
+    const keys = await db
+      .prepare("SELECT COUNT(*) AS n FROM api_key WHERE installation_id = ?")
+      .bind(42)
+      .first<{ n: number }>()
+    expect(keys?.n).toBe(0)
+    const replay = await dispatchSetup(state)
+    expect(replay.status).toBe(400)
   })
 
   it("on success: links account_tenant, mints an api_key, and shows the plaintext key once", async () => {
     stubUserInstallations([42])
     const state = await mintState(111)
 
-    const res = await handleSetupRoute(
-      reqWithSession(`https://x/setup?installation_id=42&state=${state}&setup_action=install`, "sess-1"),
-      env,
-    )
+    const res = await dispatchSetup(state)
     expect(res.status).toBe(200)
     const html = await res.text()
     expect(html).toContain("sigilix_live_")
@@ -249,6 +323,106 @@ describe("handleSetupRoute (GET /setup)", () => {
       .bind(42)
       .first<{ n: number }>()
     expect(keys?.n).toBe(1)
+  })
+
+  describe("managed organization access through Worker dispatch", () => {
+    it("allows an active stored member and mints for that immutable GitHub id", async () => {
+      await enableManagedMembership()
+      await seedStoredAccess({})
+      stubUserInstallations([42])
+      const state = await mintState(111)
+
+      const res = await dispatchSetup(state)
+
+      expect(res.status).toBe(200)
+      await expect(
+        db.prepare("SELECT installation_id, created_by FROM api_key WHERE revoked_at IS NULL").first(),
+      ).resolves.toEqual({ installation_id: 42, created_by: "111" })
+    })
+
+    it("denies when only a legacy link exists without a managed access row", async () => {
+      await enableManagedMembership()
+      await db
+        .prepare("INSERT INTO account_tenant (github_user_id, installation_id, role, created_at) VALUES (?, ?, ?, ?)")
+        .bind("111", 42, "owner", "2026-07-13T00:00:00.000Z")
+        .run()
+      stubUserInstallations([42])
+      const state = await mintState(111)
+
+      const res = await dispatchSetup(state)
+
+      expect(res.status).toBe(403)
+      await expect(db.prepare("SELECT COUNT(*) AS n FROM api_key").first()).resolves.toEqual({ n: 0 })
+      await expect(db.prepare("SELECT COUNT(*) AS n FROM org_workspace_access").first()).resolves.toEqual({ n: 0 })
+    })
+
+    it("does not bootstrap the first live GitHub member as an admin", async () => {
+      await enableManagedMembership()
+      stubUserInstallations([42], { liveRole: "member" })
+      const state = await mintState(111)
+
+      const res = await dispatchSetup(state)
+
+      expect(res.status).toBe(403)
+      await expect(db.prepare("SELECT COUNT(*) AS n FROM org_workspace_access").first()).resolves.toEqual({ n: 0 })
+      await expect(db.prepare("SELECT COUNT(*) AS n FROM api_key").first()).resolves.toEqual({ n: 0 })
+    })
+
+    it("denies a revoked row without resurrecting it or minting a key", async () => {
+      await enableManagedMembership()
+      const revokedAt = "2026-07-13T01:00:00.000Z"
+      await seedStoredAccess({ role: "admin", revokedAt })
+      stubUserInstallations([42], { liveRole: "admin" })
+      const state = await mintState(111)
+
+      const res = await dispatchSetup(state)
+
+      expect(res.status).toBe(403)
+      await expect(db.prepare("SELECT role, revoked_at FROM org_workspace_access").first()).resolves.toEqual({
+        role: "admin",
+        revoked_at: revokedAt,
+      })
+      await expect(db.prepare("SELECT COUNT(*) AS n FROM api_key").first()).resolves.toEqual({ n: 0 })
+    })
+
+    it("bootstraps the first exact live GitHub admin before linking and minting", async () => {
+      await enableManagedMembership()
+      stubUserInstallations([42], { liveRole: "admin" })
+      const state = await mintState(111)
+
+      const res = await dispatchSetup(state)
+
+      expect(res.status).toBe(200)
+      await expect(
+        db.prepare("SELECT github_user_id, role, revoked_at FROM org_workspace_access").first(),
+      ).resolves.toEqual({
+        github_user_id: "111",
+        role: "admin",
+        revoked_at: null,
+      })
+      await expect(
+        db.prepare("SELECT action, target_github_user_id FROM org_workspace_access_audit").first(),
+      ).resolves.toEqual({ action: "bootstrap_admin", target_github_user_id: "111" })
+      await expect(db.prepare("SELECT installation_id, created_by FROM api_key").first()).resolves.toEqual({
+        installation_id: 42,
+        created_by: "111",
+      })
+    })
+
+    it("denies a later live GitHub admin who is absent from the managed roster", async () => {
+      await enableManagedMembership()
+      await seedStoredAccess({ githubUserId: "222", role: "admin" })
+      stubUserInstallations([42], { liveRole: "admin" })
+      const state = await mintState(111)
+
+      const res = await dispatchSetup(state)
+
+      expect(res.status).toBe(403)
+      await expect(db.prepare("SELECT COUNT(*) AS n FROM api_key").first()).resolves.toEqual({ n: 0 })
+      await expect(
+        db.prepare("SELECT COUNT(*) AS n FROM org_workspace_access WHERE github_user_id = '111'").first(),
+      ).resolves.toEqual({ n: 0 })
+    })
   })
 
   // SIG-155 slice 3 — env-gated redirect polish (portal endpoints).

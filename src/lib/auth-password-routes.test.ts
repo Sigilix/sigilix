@@ -134,7 +134,8 @@ describe("email/password auth routes", () => {
     expect(login.headers.get("set-cookie")).toContain("__Host-sigilix_session=")
   })
 
-  it("remember me OFF → login sets a browser-session cookie (no Max-Age) with secure flags intact", async () => {
+  it("remember me OFF → login STILL sets a persistent 30-day cookie (always-persistent), secure flags intact", async () => {
+    // sig-always-persistent-session: remember=false no longer shortens the cookie.
     await signupAndVerify("rm@example.com", "a-strong-passphrase")
     const login = await handleLoginRoute(
       jsonReq("https://x/v1/auth/login", {
@@ -147,7 +148,7 @@ describe("email/password auth routes", () => {
     expect(login.status).toBe(200)
     const cookie = login.headers.get("set-cookie") ?? ""
     expect(cookie).toContain("__Host-sigilix_session=")
-    expect(cookie).not.toContain("Max-Age")
+    expect(cookie).toContain("Max-Age=2592000")
     expect(cookie).not.toContain("Expires")
     expect(cookie).toContain("HttpOnly")
     expect(cookie).toContain("Secure")

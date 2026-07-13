@@ -523,3 +523,25 @@ export type JobMessage =
       targetBranch: string
       deliveryId: string | null
     }
+  // sig-public-demo (async): the PUBLIC no-signup demo review runs OFF the request
+  // path. A ~2-min ensemble can never fit in a Cloudflare fetch handler (~100s cap),
+  // so POST /v1/demo/review runs the fast guards synchronously, then enqueues THIS
+  // job and returns 202 + jobId; GET /v1/demo/review?jobId= polls the KV-stored
+  // result. The queue consumer gets up to 15 min — far more than the review needs.
+  // The diff is fetched IN the consumer (a 400KB diff exceeds the 128KB queue-message
+  // cap); the PR@SHA meta the POST already validated is pinned here so the async run
+  // reviews exactly the head that passed the size cap + cache check. `reservedAtMs`
+  // is the POST's `Date.now()` so `settleDemoSpend` reconciles the reservation against
+  // the SAME UTC-day budget key the POST reserved on.
+  | {
+      type: "demo-review"
+      jobId: string
+      owner: string
+      repo: string
+      prNumber: number
+      headSha: string
+      baseSha: string
+      title: string
+      changedFiles: number
+      reservedAtMs: number
+    }

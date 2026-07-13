@@ -6,28 +6,18 @@
 // DUAL AUTH (mirrors workspace-prs-route.ts): a portal browser session cookie
 // (requireSession) is tried FIRST since these are portal-first pages; a request
 // with no session falls back to a bearer api key (requireApiTenant). Either
-// yields a caller SCOPE — the ordered set of KV key prefixes that confines every
-// list/delete to exactly the caller's own records.
+// yields a caller SCOPE — the ordered set of exact personal KV prefixes that
+// confines every list/delete to the authenticated human's own records.
 //
 // TENANT ISOLATION — the whole feature's load-bearing invariant. The KV keyspace
-// is `agent-memory:<userId>:<repoId>:<id>`, where `<userId>` is the SCOPED write
-// subject (agent-memory-route.ts's scopeMemoryUserId): a real per-tenant api key
-// writes under `inst:<installationId>:<bodyUserId>`. So a caller's scope is the set
-// of `agent-memory:inst:<installationId>:` prefixes for the installation(s) it owns:
-//   - api-key path (real key): the ONE installation the key resolved to —
-//     `agent-memory:inst:<installationId>:`, listing/deleting every seat under THAT
-//     installation and no other. The trailing `:` after the numeric id
-//     disambiguates `inst:42:` from `inst:421:`.
-//   - api-key path (LEGACY global key): broad by design (Sigilix-internal, never
-//     handed to a tenant — same exemption scopeMemoryUserId/workspace-prs make) —
-//     the single prefix `agent-memory:` owns every record.
+// is `agent-memory:<userId>:<repoId>:<id>`, where `<userId>` is derived from
+// authenticated identity as `inst:<installationId>:user:<stableUserId>`:
+//   - api-key path: `api_key.created_by` is resolved through user_identity and
+//     produces ONE exact personal prefix for the key's installation.
 //   - session path (portal browser): the SAME installation namespace the CLI wrote
 //     to — the session's GitHub user-to-server token is resolved to its
-//     installation id(s) via `GET /user/installations` (the workspace-prs-route.ts
-//     bridge), and the scope is the union of `agent-memory:inst:<id>:` over them.
-//     This is what lets the portal show a user the memories their own CLI saved. A
-//     session with NO linked installation (or any resolution failure) → an empty
-//     scope → an empty list / 404-on-delete, never an error.
+//     installation id(s), then paired with session.userId to produce one exact
+//     personal prefix per installation. Admin status never widens personal scope.
 // A list/delete NEVER lists outside the caller's own prefixes, and every candidate
 // is re-checked with `scope.owns(record)` before it is returned or deleted — a
 // defence-in-depth second gate behind the prefix.
@@ -38,10 +28,15 @@
 
 import type { Env } from "@/src/shared/types/env"
 import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
-import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
+import { requireApiTenant } from "@/src/lib/api-key-resolver"
 import { decryptAccessToken } from "@/src/lib/auth-session"
 import type { AgentMemoryRecord } from "./types"
-import { canonicalTenantId, json } from "./agent-memory-route"
+import { json } from "./agent-memory-route"
+import {
+  canonicalTenantId,
+  personalMemoryUserId,
+  resolveApiPersonalMemoryUserId,
+} from "./agent-memory-personal-subject"
 import { deleteRecordAndPointer, findRecordByIdUnderPrefix, listRecords } from "./storage"
 import { deleteMemoryVector } from "./retrieval"
 
@@ -59,10 +54,7 @@ function emitTelemetry(event: string, fields: Record<string, unknown>): void {
 // ─── Caller scope (dual-auth → ordered KV prefixes + ownership predicate) ──
 
 interface MemoryScope {
-  /** Ordered set of KV key prefixes that (together) confine every list/delete to
-   *  the caller's own records. One entry per owned installation, or the single
-   *  broad `agent-memory:` for the legacy global key, or [] for a session with no
-   *  linked installation. */
+  /** Ordered exact personal prefixes, one per linked installation. */
   prefixes: string[]
   /** Defence-in-depth: is `record` owned by this caller? (The prefixes already
    *  guarantee it; this is the second gate the delete/list re-checks.) */
@@ -71,17 +63,15 @@ interface MemoryScope {
 
 type MemoryScopeResult = { response: Response } | { scope: MemoryScope }
 
-/** The `agent-memory:inst:<id>:` prefix for one installation. */
-function installationPrefix(installationId: number): string {
-  return `agent-memory:inst:${installationId}:`
+/** The record prefix for one exact authenticated personal subject. */
+function personalPrefix(personalUserId: string): string {
+  return `agent-memory:${personalUserId}:`
 }
 
-/** Owns-predicate for a set of installation ids: a record is owned iff its scoped
- *  write-subject is (or is nested under) one of the caller's installation subjects
- *  — matching scopeMemoryUserId's `inst:<id>:<bodyUserId>` layout. */
-function ownsAnyInstallation(installationIds: number[]): (record: AgentMemoryRecord) => boolean {
-  const subjects = installationIds.map((id) => `inst:${id}`)
-  return (record) => subjects.some((s) => record.userId === s || record.userId.startsWith(`${s}:`))
+/** Defence-in-depth ownership check behind the already-exact KV prefix. */
+function ownsPersonalSubjects(personalUserIds: string[]): (record: AgentMemoryRecord) => boolean {
+  const subjects = new Set(personalUserIds)
+  return (record) => subjects.has(record.userId)
 }
 
 function githubHeaders(accessToken: string): HeadersInit {
@@ -167,6 +157,42 @@ async function resolveSessionInstallationIds(env: Env, session: AuthedSession): 
 }
 
 /**
+ * Resolve a GitHub session through the provider-independent identity table. This
+ * supports legacy sessions that predate SessionRecord.userId and also rejects a
+ * corrupted/stale session whose stored userId disagrees with its authenticated
+ * GitHub identity. Non-GitHub sessions have no githubUserId, so their server-side
+ * session userId remains the only stable identity available.
+ */
+async function resolveSessionStableUserId(env: Env, session: AuthedSession): Promise<string | null> {
+  const storedUserId = session.record.userId?.trim()
+  const githubUserId = session.record.githubUserId
+  if (githubUserId === undefined) return storedUserId || null
+  // Session records live server-side behind opaque cookies, so their stable
+  // userId remains authoritative when this deployment has no D1 binding. When
+  // D1 is bound, re-resolve and compare; a D1 error never takes this fallback.
+  if (!env.SIGILIX_PLATFORM_DB) return storedUserId || null
+
+  try {
+    const row = await env.SIGILIX_PLATFORM_DB.prepare("SELECT user_id FROM user_identity WHERE github_user_id = ?")
+      .bind(String(githubUserId))
+      .first<{ user_id: string }>()
+    const resolvedUserId = row?.user_id?.trim()
+    if (!resolvedUserId) return null
+    if (storedUserId && canonicalTenantId(storedUserId) !== canonicalTenantId(resolvedUserId)) {
+      emitTelemetry("agent-memory-session-identity-mismatch", { githubUserId })
+      return null
+    }
+    return resolvedUserId
+  } catch (err) {
+    emitTelemetry("agent-memory-session-identity-resolve-failed", {
+      githubUserId,
+      err: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
+}
+
+/**
  * Resolve the caller's tenant scope from EITHER a portal session cookie OR a
  * bearer api key (session first). Returns the 401 Response (from requireApiTenant)
  * when neither authenticates. See the file header for the prefix derivation.
@@ -174,11 +200,14 @@ async function resolveSessionInstallationIds(env: Env, session: AuthedSession): 
 async function resolveMemoryScope(request: Request, env: Env, ctx?: ExecutionContext): Promise<MemoryScopeResult> {
   const session = await requireSession(request, env, ctx)
   if (session) {
+    const stableUserId = await resolveSessionStableUserId(env, session)
+    if (!stableUserId) return { response: json({ error: "memory_identity_unavailable" }, 403) }
     const installationIds = await resolveSessionInstallationIds(env, session)
+    const personalUserIds = installationIds.map((installationId) => personalMemoryUserId(installationId, stableUserId))
     return {
       scope: {
-        prefixes: installationIds.map(installationPrefix),
-        owns: ownsAnyInstallation(installationIds),
+        prefixes: personalUserIds.map(personalPrefix),
+        owns: ownsPersonalSubjects(personalUserIds),
       },
     }
   }
@@ -186,15 +215,12 @@ async function resolveMemoryScope(request: Request, env: Env, ctx?: ExecutionCon
   const apiAuth = await requireApiTenant(request, env, ctx)
   if ("response" in apiAuth) return { response: apiAuth.response }
 
-  const installationId = apiAuth.caller.installationId
-  if (installationId === LEGACY_TENANT_INSTALLATION_ID) {
-    // Legacy global key — broad by design (Sigilix-internal); owns every record.
-    return { scope: { prefixes: ["agent-memory:"], owns: () => true } }
-  }
+  const personalUserId = await resolveApiPersonalMemoryUserId(env, apiAuth.caller)
+  if (personalUserId === null) return { response: json({ error: "memory_identity_unavailable" }, 403) }
   return {
     scope: {
-      prefixes: [installationPrefix(installationId)],
-      owns: ownsAnyInstallation([installationId]),
+      prefixes: [personalPrefix(personalUserId)],
+      owns: ownsPersonalSubjects([personalUserId]),
     },
   }
 }
@@ -251,8 +277,7 @@ function parseLimit(raw: string | null): number {
  * GET /v1/memory — list the caller's saved memories, paginated by an opaque
  * `cursor` that walks the caller's prefixes in order (one KV list page per call).
  * Optional `?repoId=` filters to one repo scope (canonicalized to match the
- * lowercased write keyspace; post-filtered since the `inst:<id>:` prefixes have a
- * per-seat bodyUserId between userId and repoId). `?limit=` (default 50, max 100)
+ * lowercased write keyspace). `?limit=` (default 50, max 100)
  * bounds the page; `?cursor=` continues a previous page.
  *
  * 503 until keyed; 401 without a session OR api key. FAIL-SOFT on the data path: a

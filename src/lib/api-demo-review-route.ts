@@ -10,6 +10,25 @@
 // server fetches the diff from the public GitHub API instead of the caller POSTing it,
 // and (b) it is wrapped in the abuse controls below instead of an API key.
 //
+// ┌─ ASYNC: START-THEN-POLL (why this is not one synchronous request) ────────────────┐
+// │ The full ensemble takes 70-120s+ (up to ~2 min on a big diff). Cloudflare kills a  │
+// │ Worker request near ~100s, so a review slower than that NEVER returns and NEVER    │
+// │ caches — the browser just sees "could not reach the review service." So the model  │
+// │ runs OFF the request path:                                                         │
+// │   POST /v1/demo/review {prUrl}                                                     │
+// │     • runs every fast guard synchronously (kill switch → body → URL → IP quota →   │
+// │       budget → public-repo → PR meta → size cap → PR@SHA cache), then              │
+// │     • CACHE HIT  → 200 {status:"done", ...review}                                  │
+// │     • CACHE MISS → consumeIpQuota + reserveDemoSpend, enqueue a `demo-review`      │
+// │                    queue job, 202 {status:"pending", jobId}                        │
+// │   GET  /v1/demo/review?jobId=<id>                                                  │
+// │     • 200 {status:"pending"}                 while the async run is in flight      │
+// │     • 200 {status:"done", ...review}         once the run wrote its result         │
+// │     • 200 {status:"error", error, message}   on a failed/degraded-to-error run     │
+// │ The queue consumer gets up to 15 min — far more than the review needs. The engine  │
+// │ run + spend reconciliation + cache/job writes live in demo-review-job.ts.          │
+// └─────────────────────────────────────────────────────────────────────────────────┘
+//
 // ┌─ WHY THE GUARDS ARE THE FEATURE ────────────────────────────────────────────────┐
 // │ This endpoint HAS NO AUTH AND SPENDS REAL MONEY (~$0.25/review measured, ~$0.83  │
 // │ on a big diff). An open loop against it drains a real card. Every layer below is │
@@ -21,35 +40,18 @@
 //   global budget SIGILIX_DEMO_DAILY_BUDGET_USD ($20)  → 503 at_capacity     (hard spend backstop)
 //   public only   GitHub says private/404              → 400 not_public      (never reviews private code)
 //   size cap      >1500 lines / >40 files / >400KB     → 400 too_large       (the expensive tail)
-//   cache (7d)    same owner/repo/pr/headSha           → 200 cached:true, $0, no quota consumed
+//   cache (7d)    same owner/repo/pr/headSha           → 200 done, $0, no quota consumed
 //
 // READ-ONLY, ALWAYS: the engine runs with `dryRun: true`, so the orchestrator returns
 // the built review BEFORE `publishReviewSubmission` — nothing is posted, no check run
 // is created, no comment is written. The injected GitHub client is `diffReviewClient`,
-// whose every write method THROWS (`submitReview` / `createIssueComment` / …), so a
-// write attempt is a loud failure, not a silent post to a stranger's PR.
-//
-// NO USAGE LEDGER: a demo run has no installation (installationId 0, exactly like Mode
-// A), so `finalize`'s `appendUsage` guard skips the `usage_ledger` row. Its cost is
-// still charged against the global daily budget here — the ledger is per-tenant billing,
-// the budget is the abuse backstop, and a demo run belongs in the second, not the first.
+// whose every write method THROWS — a write attempt is a loud failure, not a silent post.
 //
 // RECALL-SAFETY: a degraded or errored review must NEVER render as a clean pass. An
-// engine failure (`isDryRunEngineFailure`) → 500, never a 200 with an empty findings
-// array; a DEGRADED (specialist-unavailable) review returns 200 but carries
-// `incomplete.rolesMissing` and says so in the summary.
+// engine failure resolves the job to `error` (never a `done` with empty findings) and
+// is never cached; a DEGRADED (specialist-unavailable) review resolves `done` but
+// carries `incomplete.rolesMissing` and says so in the summary. See demo-review-job.ts.
 
-import type { Env } from "@/src/shared/types/env"
-import type { GitHubClient } from "@/src/shared/adapters/github"
-import type { PrReviewFinding, CodeContext } from "@/src/shared/domain/pr-review-finding"
-import { handlePrReviewEnsemble } from "@/src/lib/ensemble/app/orchestrator"
-import { isDryRunEngineFailure, type DryRunReview } from "@/src/lib/ensemble/app/session"
-import { computeReviewCost } from "@/src/lib/ensemble-slo-telemetry"
-import { severityLabelForScore } from "@/src/lib/ensemble/domain/verdict"
-import { trustWord } from "@/src/lib/trust-ledger-render"
-import { diffReviewClient } from "@/src/lib/api-review-diff-client"
-import { ungroundedEnv } from "@/src/lib/api-review-route"
-import { attachCodeContextToReview } from "@/src/shared/util/diff-code-context"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import {
@@ -57,44 +59,27 @@ import {
   isDemoBudgetExhausted,
   parseDemoPrUrl,
   readDemoCache,
+  readDemoJob,
   readIpQuota,
   reserveDemoSpend,
   resolveDemoLimits,
   resolveDemoMode,
   secondsUntilNextUtcDay,
   settleDemoSpend,
-  writeDemoCache,
+  writeDemoJob,
   DEMO_ASSUMED_COST_USD,
   type DemoEnv,
-  type DemoPrTarget,
 } from "@/src/lib/demo-review-guards"
-import { fetchPrDiff, fetchPrMeta, fetchPublicRepo, type DemoGithubFailure } from "@/src/lib/demo-review-github"
+import { fetchPrMeta, fetchPublicRepo, type DemoGithubFailure } from "@/src/lib/demo-review-github"
 
 /** The request body is a single URL — cap the read tiny so an unauthenticated caller
  *  can never make us buffer anything meaningful. */
 const MAX_BODY_BYTES = 4_096
-/** Cap the evidence snippet we echo back per finding (display only). */
-const MAX_EVIDENCE_LINES = 12
-const MAX_EVIDENCE_CHARS = 800
 
 // The marketing site only. NO localhost in the shipped default — a locally-served
 // attacker page must not get a readable (CORS-granted) response in prod. Dev sets
 // SIGILIX_DEMO_ORIGINS explicitly to add its localhost origin.
 const DEFAULT_DEMO_ORIGINS = "https://sigilix.ai,https://www.sigilix.ai"
-
-/**
- * The env the demo engine runs under. `ungroundedEnv` already stubs code-index + graph
- * retrieval inert (a stranger's repo is not indexed, and this also means no tenant's
- * indexed code can ever be reached). On TOP of that, review-memory and learnings are
- * forced OFF — exactly as `/v1/review`'s Mode B does (`groundedReviewEnv`) and for the
- * same reason: the demo passes no `repoId`, so leaving them on would read stale legacy
- * owner/repo records AND could fire the SIG-280 shadow KV write keyed on a STRANGER's
- * owner/repo. Off → the demo review is a pure read with no cross-tenant reach, robustly
- * (a structural guarantee) rather than incidentally.
- */
-function demoEngineEnv(env: DemoEnv): Env {
-  return ungroundedEnv({ ...env, OPENCLAW_REVIEW_MEMORY_ENABLED: "off", OPENCLAW_LEARNINGS_MODE: "off" })
-}
 
 // ─── the public contract (the marketing site is built against this) ─────
 
@@ -120,6 +105,17 @@ export interface DemoReviewResponse {
    *  PARTIAL input and must not be read as a clean pass even with zero findings. */
   incomplete?: { rolesMissing: string[] }
 }
+
+/**
+ * The poll-job record persisted by the async run and returned by GET. `done` carries
+ * the full review inline (`status` + every `DemoReviewResponse` field) so the frontend
+ * reads one flat object. `error` mirrors the sync path's `review_failed` — an explicit
+ * failure, never a clean pass. Written by demo-review-job.ts; read here.
+ */
+export type DemoJobRecord =
+  | { status: "pending" }
+  | ({ status: "done" } & DemoReviewResponse)
+  | { status: "error"; error: string; message: string }
 
 // ─── CORS (public, NO credentials) ──────────────────────────────────
 
@@ -153,7 +149,7 @@ export function handleDemoPreflight(request: Request, env: DemoEnv): Response {
     status: 204,
     headers: {
       "access-control-allow-origin": origin,
-      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-allow-methods": "GET, POST, OPTIONS",
       "access-control-allow-headers": "content-type",
       "access-control-max-age": "600",
       vary: "Origin",
@@ -170,8 +166,8 @@ function fail(error: string, message: string, status: number, extra: Record<stri
   })
 }
 
-function ok(body: DemoReviewResponse): Response {
-  return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 }
 
 /** GitHub read failures → the contract's error codes. `not_found` is reported as
@@ -194,40 +190,15 @@ function failureResponse(failure: DemoGithubFailure): Response {
   }
 }
 
-// ─── finding mapping ────────────────────────────────────────────────
-
-/** The cited lines from the diff slice the renderer already computes — display
- *  evidence, exactly what the PR review would show. Never gates anything. */
-function evidenceFrom(context: CodeContext | undefined): string | undefined {
-  if (!context || context.lines.length === 0) return undefined
-  const text = context.lines
-    .slice(0, MAX_EVIDENCE_LINES)
-    .map((l) => `${l.kind === "add" ? "+" : l.kind === "del" ? "-" : " "}${l.text}`)
-    .join("\n")
-  return text.length > MAX_EVIDENCE_CHARS ? `${text.slice(0, MAX_EVIDENCE_CHARS)}…` : text
-}
-
-function toDemoFinding(finding: PrReviewFinding): DemoFinding {
-  const evidence = evidenceFrom(finding.codeContext)
-  return {
-    severity: severityLabelForScore(finding.score),
-    title: finding.headline,
-    body: finding.body,
-    file: finding.path,
-    line: finding.line,
-    confidence: trustWord(finding.trust).toLowerCase() as DemoFinding["confidence"],
-    ...(evidence !== undefined ? { evidence } : {}),
-  }
-}
-
-// ─── the route ──────────────────────────────────────────────────────
+// ─── POST: start (guards synchronously, then enqueue the async run) ──
 
 /**
  * POST /v1/demo/review — public, no auth. See the file header for the guard matrix.
  * The check order is deliberate: every rejection that can be decided for free (kill
  * switch → body → URL → IP quota → global budget) happens BEFORE the first GitHub
  * call, and every GitHub-decidable rejection (public? too large?) happens before the
- * first token of model spend.
+ * first token of model spend. On a cache miss the review is ENQUEUED (not run inline —
+ * a ~2-min review can't fit in a Worker request) and a 202 + jobId is returned.
  */
 export async function handleDemoReviewRoute(request: Request, env: DemoEnv): Promise<Response> {
   // 1. KILL SWITCH — fail closed. Nothing below runs when the demo is off.
@@ -324,135 +295,85 @@ export async function handleDemoReviewRoute(request: Request, env: DemoEnv): Pro
   }
 
   // 7. CACHE — a repeat request for the same PR at the same SHA is free: no model
-  //    spend, no budget charge, no IP quota consumed. This is what survives HN.
+  //    spend, no budget charge, no IP quota consumed. This is what survives HN. A hit
+  //    is returned inline as a resolved `done` record.
   const cached = await readDemoCache<DemoReviewResponse>(env, target, meta.value.headSha)
-  if (cached) return ok({ ...cached, cached: true })
+  if (cached) return json({ status: "done", ...cached, cached: true })
 
-  const diff = await fetchPrDiff(env, target)
-  if (!diff.ok) return failureResponse(diff.failure)
-
-  // 8. CONSUME the IP quota and RESERVE the spend BEFORE running the engine — a review
-  //    that crashes mid-flight has still burned tokens, so it must still be paid for.
+  // 8. CONSUME the IP quota and RESERVE the spend BEFORE enqueueing — a review that
+  //    crashes mid-flight has still burned tokens, so it must still be paid for. The
+  //    async run reconciles the reservation to the real cost (or keeps it on failure).
   await consumeIpQuota(env, ip, now)
   await reserveDemoSpend(env, now)
 
-  const startedMs = Date.now()
-  let result
+  // 9. ENQUEUE the async run and return 202 + jobId. The diff is fetched IN the consumer
+  //    (a 400KB diff exceeds the 128KB queue-message cap); the PR@SHA meta validated
+  //    above is pinned so the async run reviews exactly this head. If the enqueue itself
+  //    fails, keep the reservation (cost-safe), resolve the job to error, and 500.
+  const jobId = crypto.randomUUID()
+  await writeDemoJob(env, jobId, { status: "pending" } satisfies DemoJobRecord)
   try {
-    result = await handlePrReviewEnsemble({
+    await env.OPENCLAW_JOBS.send({
+      type: "demo-review",
+      jobId,
       owner: target.owner,
       repo: target.repo,
       prNumber: target.prNumber,
       headSha: meta.value.headSha,
-      installationId: 0, // no installation → no usage_ledger row (see header)
-      env: demoEngineEnv(env), // no index/graph retrieval AND review-memory/learnings OFF (see below)
-      githubClient: diffReviewClient({
-        owner: target.owner,
-        repo: target.repo,
-        prNumber: target.prNumber,
-        headSha: meta.value.headSha,
-        baseSha: meta.value.baseSha,
-        diff: diff.value,
-      }) as unknown as GitHubClient,
-      dryRun: true, // READ-ONLY: nothing is posted to the PR
-      forceFullCoverage: true,
+      baseSha: meta.value.baseSha,
+      title: meta.value.title,
+      changedFiles: meta.value.changedFiles,
+      reservedAtMs: now.getTime(),
     })
   } catch (error) {
-    // The engine threw before reporting telemetry — it may still have spent. Charge the
-    // assumed cost (the reservation already stands) and surface the failure, never a pass.
     await settleDemoSpend(env, now, DEMO_ASSUMED_COST_USD)
     console.error(
       JSON.stringify({
-        event: "demo-review-failed",
+        event: "demo-review-enqueue-failed",
         repo: `${target.owner}/${target.repo}`,
         err: error instanceof Error ? error.message : String(error),
       }),
     )
-    return fail("review_failed", "The review could not be completed. Please try again.", 500)
+    await writeDemoJob(env, jobId, {
+      status: "error",
+      error: "review_failed",
+      message: "The review could not be started. Please try again.",
+    } satisfies DemoJobRecord)
+    return fail("review_failed", "The review could not be started. Please try again.", 500)
   }
-
-  // Charge the REAL cost the ensemble reports, reconciling the reservation. `?? {}` so
-  // a telemetry shape that ever omits the ledger can't throw past settleDemoSpend.
-  const costUsd = computeReviewCost(result.telemetry.tokenUsageByModel ?? {}).totalUsd
-  await settleDemoSpend(env, now, costUsd)
-
-  // RECALL-SAFETY: an engine failure is a 500, NEVER a 200 with an empty findings list.
-  if (isDryRunEngineFailure(result)) {
-    const telemetry = result.telemetry as { internalError?: string; fellBackReason?: string }
-    console.error(
-      JSON.stringify({
-        event: "demo-review-engine-failure",
-        repo: `${target.owner}/${target.repo}`,
-        reason: telemetry.internalError ?? telemetry.fellBackReason ?? "engine error",
-      }),
-    )
-    return fail("review_failed", "The review could not be completed. Please try again.", 500)
-  }
-
-  const body = buildResponse(target, meta.value, result.dryRunReview, diff.value, Date.now() - startedMs)
-  await writeDemoCache(env, target, meta.value.headSha, body)
   console.log(
     JSON.stringify({
-      event: "demo-review-completed",
+      event: "demo-review-enqueued",
       repo: `${target.owner}/${target.repo}`,
       prNumber: target.prNumber,
-      findings: body.stats.findingsCount,
-      costUsd: Number(costUsd.toFixed(4)),
-      durationMs: body.stats.durationMs,
+      jobId,
     }),
   )
-  return ok(body)
+  return json({ status: "pending", jobId }, 202)
 }
 
-/** Shape the engine's dry-run review into the public demo contract. Typed as the real
- *  `DryRunReview` (not a structural subset) so a change to that shape — e.g. dropping
- *  `incomplete` or `unanchoredFindings` — is a compile error here, not a silently
- *  dropped finding or a degraded-banner that stops firing. */
-function buildResponse(
-  target: DemoPrTarget,
-  meta: { title: string; changedFiles: number },
-  review: DryRunReview | undefined,
-  diff: string,
-  durationMs: number,
-): DemoReviewResponse {
-  const base = {
-    repo: `${target.owner}/${target.repo}`,
-    prNumber: target.prNumber,
-    title: meta.title,
-    cached: false,
+// ─── GET: poll ──────────────────────────────────────────────────────
+
+/**
+ * GET /v1/demo/review?jobId=<id> — poll a started review. Returns the KV job record:
+ * `{status:"pending"}` while the async run is in flight, `{status:"done", ...review}`
+ * once it wrote its result, `{status:"error", error, message}` on a failed run. An
+ * unknown/expired jobId → 404 (the 1h job TTL has passed, or the id was never issued).
+ * NO content-type requirement (a GET carries no body) and NO IP/budget accounting (the
+ * poll is a free read; the started review already consumed its quota + reservation).
+ */
+export async function handleDemoReviewPoll(request: Request, env: DemoEnv): Promise<Response> {
+  if (!env.OPENCLAW_STATE) {
+    console.error(JSON.stringify({ event: "demo-review-kv-missing" }))
+    return fail("demo_disabled", "The live demo is currently unavailable.", 503)
   }
-  // A genuinely-empty review (nothing to review / no findings) is a legitimate clean
-  // pass — distinct from an engine failure, which returned 500 above.
-  if (!review) {
-    return {
-      ...base,
-      summary: "Sigilix found no reviewable changes in this pull request.",
-      stats: { filesReviewed: meta.changedFiles, findingsCount: 0, durationMs },
-      findings: [],
-    }
+  const jobId = new URL(request.url).searchParams.get("jobId")
+  if (!jobId) {
+    return fail("invalid_request", "Provide a jobId query parameter.", 400)
   }
-  // RECALL-SAFETY: include the BODY-ONLY (unanchored) findings, not just the inline
-  // ones. In a diff-only/ungrounded review the model often cites a line that isn't an
-  // added line, so its finding lands in `unanchoredFindings`; dropping those would make
-  // a review whose only issue is body-only render as "0 findings" — a real finding
-  // rendering as a clean pass. Every other renderer in the repo merges both lists.
-  const enriched = attachCodeContextToReview(
-    { verdict: review.verdict, unanchoredFindings: review.unanchoredFindings },
-    diff,
-  )
-  const findings = [...enriched.verdict.findings, ...enriched.unanchoredFindings].map(toDemoFinding)
-  const rolesMissing = review.incomplete?.rolesMissing ?? []
-  // RECALL-SAFETY: a degraded review says so in the human-facing summary too — a
-  // partial review must never read as a confident clean pass.
-  const summary =
-    rolesMissing.length > 0
-      ? `${review.verdict.summary}\n\n⚠️ Partial coverage: ${rolesMissing.join(", ")} did not complete, so this review ran on incomplete input.`
-      : review.verdict.summary
-  return {
-    ...base,
-    summary,
-    stats: { filesReviewed: meta.changedFiles, findingsCount: findings.length, durationMs },
-    findings,
-    ...(rolesMissing.length > 0 ? { incomplete: { rolesMissing: [...rolesMissing] } } : {}),
+  const record = await readDemoJob<DemoJobRecord>(env, jobId)
+  if (!record) {
+    return fail("not_found", "No demo review was found for that job. It may have expired — start a new one.", 404)
   }
+  return json(record)
 }

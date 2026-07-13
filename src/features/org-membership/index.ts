@@ -16,3 +16,4 @@ export type {
   RemoveOrgWorkspaceAccessResult,
   SetOrgWorkspaceRoleResult,
 } from "./domain/types"
+export { isOrgWorkspaceGithubUserId } from "./domain/types"

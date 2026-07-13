@@ -16,6 +16,7 @@ import { resolveExactUserInstallationScope, type UserRole } from "@/src/lib/reso
 import {
   bootstrapFirstOrgAdmin,
   hasActiveOrgAdmin,
+  isOrgWorkspaceGithubUserId,
   readOrgWorkspaceAccess,
   type OrgWorkspaceAccess,
 } from "@/src/features/org-membership"
@@ -34,6 +35,8 @@ export type OrgAccessResult =
       role: UserRole
     }
   | { ok: false; response: Response }
+
+export type OrgRolePolicyResult = { ok: true; role: UserRole } | { ok: false; response: Response }
 
 export type OrgMembershipMode = "off" | "on"
 export type OrgAccessEnv = Env
@@ -101,6 +104,118 @@ function success(args: {
     login: args.session.record.login,
     role: args.role,
   }
+}
+
+/**
+ * Apply the rollout's role policy after the caller has already proven fresh
+ * visibility of this exact GitHub installation. `liveRole` is authoritative
+ * while rollout mode is off. While it is on, only active stored access grants
+ * a role; the live role is consulted solely by the existing zero-admin atomic
+ * bootstrap path.
+ *
+ * This is deliberately not a second authentication entry point. Callers own
+ * session/token validation and the exact/default GitHub visibility lookup,
+ * then share this one post-visibility policy so overview and mutation routes
+ * cannot disagree about the effective role.
+ */
+export async function resolveOrgRolePolicyForVisibleInstallation(
+  env: OrgAccessEnv,
+  args: {
+    installationId: number
+    githubUserId: string | null
+    liveRole: UserRole
+    requiredRole: OrgAccessRequiredRole
+  },
+): Promise<OrgRolePolicyResult> {
+  if (!Number.isSafeInteger(args.installationId) || args.installationId <= 0) {
+    return jsonError("invalid_installation_id", 400)
+  }
+  if (args.liveRole !== "admin" && args.liveRole !== "member") {
+    return jsonError("forbidden", 403)
+  }
+  if (args.requiredRole !== "admin" && args.requiredRole !== "member") {
+    return jsonError("invalid_required_role", 400)
+  }
+
+  const membershipMode = resolveOrgMembershipMode(env)
+  if (membershipMode === "off") {
+    return roleSatisfies(args.liveRole, args.requiredRole)
+      ? { ok: true, role: args.liveRole }
+      : jsonError("forbidden", 403)
+  }
+
+  if (!isOrgWorkspaceGithubUserId(args.githubUserId)) return jsonError("github_account_required", 403)
+  const db = env.SIGILIX_PLATFORM_DB
+  if (!db) {
+    console.error(JSON.stringify({ event: "org-access-db-missing", installationId: args.installationId }))
+    return jsonError("misconfigured", 503)
+  }
+
+  let storedState: StoredAccessState
+  try {
+    storedState = classifyStoredAccess(
+      await readOrgWorkspaceAccess(db, args.installationId, args.githubUserId),
+      args.installationId,
+      args.githubUserId,
+    )
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "org-access-store-read-failed",
+        installationId: args.installationId,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return jsonError("org_access_unavailable", 503)
+  }
+
+  // A revoked or malformed row is an unconditional deny. In particular, it is
+  // never reclassified as "missing" and can never enter the bootstrap path.
+  if (storedState.kind === "denied") return jsonError("forbidden", 403)
+
+  // Bootstrap only matters when the caller is not already a stored admin and
+  // GitHub proves they are an admin of this exact installation. The helper owns
+  // the zero-admin check atomically; hasActiveOrgAdmin avoids unnecessary writes
+  // and its answer never grants access by itself.
+  if (storedState.kind !== "active" || storedState.access.role !== "admin") {
+    if (args.liveRole === "admin") {
+      try {
+        const activeAdminExists = await hasActiveOrgAdmin(db, args.installationId)
+        if (typeof activeAdminExists !== "boolean") {
+          throw new Error("invalid active-admin result")
+        }
+        if (activeAdminExists === false) {
+          await bootstrapFirstOrgAdmin(db, {
+            installationId: args.installationId,
+            githubUserId: args.githubUserId,
+            nowIso: new Date().toISOString(),
+            updatedBy: `github:${args.githubUserId}`,
+          })
+          // Always re-read THIS caller. A different caller winning the atomic
+          // race does not confer access; a same-caller race/retry sees its row.
+          storedState = classifyStoredAccess(
+            await readOrgWorkspaceAccess(db, args.installationId, args.githubUserId),
+            args.installationId,
+            args.githubUserId,
+          )
+        }
+      } catch (error) {
+        console.warn(
+          JSON.stringify({
+            event: "org-access-bootstrap-failed",
+            installationId: args.installationId,
+            err: error instanceof Error ? error.message : String(error),
+          }),
+        )
+        return jsonError("org_access_unavailable", 503)
+      }
+    }
+  }
+
+  if (storedState.kind !== "active") return jsonError("forbidden", 403)
+  const role = storedState.access.role
+  if (!roleSatisfies(role, args.requiredRole)) return jsonError("forbidden", 403)
+  return { ok: true, role }
 }
 
 /** Resolve and authorize one portal session against one exact installation. */
@@ -187,84 +302,12 @@ export async function requireOrgAccess(
     return jsonError("forbidden", 403)
   }
 
-  // Evaluate once per request. Unknown runtime values deliberately preserve
-  // rollout-off behavior; the normalized local value is the typed `off | on`
-  // pair consumed below.
-  const membershipMode = resolveOrgMembershipMode(env)
-  if (membershipMode === "off") {
-    if (!roleSatisfies(liveScope.role, requiredRole)) return jsonError("forbidden", 403)
-    return success({ session, accessToken, installationId, githubUserId, role: liveScope.role })
-  }
-
-  const db = env.SIGILIX_PLATFORM_DB
-  if (!db) {
-    console.error(JSON.stringify({ event: "org-access-db-missing", installationId }))
-    return jsonError("misconfigured", 503)
-  }
-
-  let storedState: StoredAccessState
-  try {
-    storedState = classifyStoredAccess(
-      await readOrgWorkspaceAccess(db, installationId, githubUserId),
-      installationId,
-      githubUserId,
-    )
-  } catch (error) {
-    console.warn(
-      JSON.stringify({
-        event: "org-access-store-read-failed",
-        installationId,
-        err: error instanceof Error ? error.message : String(error),
-      }),
-    )
-    return jsonError("org_access_unavailable", 503)
-  }
-
-  // A revoked or malformed row is an unconditional deny. In particular, it is
-  // never reclassified as "missing" and can never enter the bootstrap path.
-  if (storedState.kind === "denied") return jsonError("forbidden", 403)
-
-  // Bootstrap only matters when the caller is not already a stored admin and
-  // GitHub proves they are an admin of this exact installation. The helper owns
-  // the zero-admin check atomically; hasActiveOrgAdmin avoids unnecessary writes
-  // and its answer never grants access by itself.
-  if (storedState.kind !== "active" || storedState.access.role !== "admin") {
-    if (liveScope.role === "admin") {
-      try {
-        const activeAdminExists = await hasActiveOrgAdmin(db, installationId)
-        if (typeof activeAdminExists !== "boolean") {
-          throw new Error("invalid active-admin result")
-        }
-        if (activeAdminExists === false) {
-          await bootstrapFirstOrgAdmin(db, {
-            installationId,
-            githubUserId,
-            nowIso: new Date().toISOString(),
-            updatedBy: `github:${githubUserId}`,
-          })
-          // Always re-read THIS caller. A different caller winning the atomic
-          // race does not confer access; a same-caller race/retry sees its row.
-          storedState = classifyStoredAccess(
-            await readOrgWorkspaceAccess(db, installationId, githubUserId),
-            installationId,
-            githubUserId,
-          )
-        }
-      } catch (error) {
-        console.warn(
-          JSON.stringify({
-            event: "org-access-bootstrap-failed",
-            installationId,
-            err: error instanceof Error ? error.message : String(error),
-          }),
-        )
-        return jsonError("org_access_unavailable", 503)
-      }
-    }
-  }
-
-  if (storedState.kind !== "active") return jsonError("forbidden", 403)
-  const role = storedState.access.role
-  if (!roleSatisfies(role, requiredRole)) return jsonError("forbidden", 403)
-  return success({ session, accessToken, installationId, githubUserId, role })
+  const policy = await resolveOrgRolePolicyForVisibleInstallation(env, {
+    installationId,
+    githubUserId,
+    liveRole: liveScope.role,
+    requiredRole,
+  })
+  if (!policy.ok) return policy
+  return success({ session, accessToken, installationId, githubUserId, role: policy.role })
 }

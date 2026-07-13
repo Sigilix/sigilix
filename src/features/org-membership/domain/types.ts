@@ -33,3 +33,11 @@ export type RecoverOrgWorkspaceAdminResult = OrgWorkspaceAccess
 export function isOrgWorkspaceRole(value: unknown): value is OrgWorkspaceRole {
   return value === "admin" || value === "member"
 }
+
+/** Canonical positive-decimal GitHub account id safe to store in D1 TEXT. */
+export function isOrgWorkspaceGithubUserId(value: unknown): value is string {
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) return false
+  const numeric = Number(value)
+  // The round trip rejects values outside JavaScript's exact integer range.
+  return Number.isSafeInteger(numeric) && numeric > 0 && String(numeric) === value
+}

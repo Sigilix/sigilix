@@ -1,8 +1,9 @@
-import type {
-  OrgWorkspaceAccess,
-  OrgWorkspaceRole,
-  RemoveOrgWorkspaceAccessResult,
-  SetOrgWorkspaceRoleResult,
+import {
+  isOrgWorkspaceGithubUserId,
+  type OrgWorkspaceAccess,
+  type OrgWorkspaceRole,
+  type RemoveOrgWorkspaceAccessResult,
+  type SetOrgWorkspaceRoleResult,
 } from "@/src/features/org-membership/domain/types"
 
 interface AccessRow {
@@ -535,7 +536,7 @@ export async function recoverOrgWorkspaceAdmin(db: D1Database, args: MutationArg
 function decodeAccess(row: AccessRow): OrgWorkspaceAccess {
   if (
     !validInstallationId(row.installation_id) ||
-    !validGithubUserId(row.github_user_id) ||
+    !isOrgWorkspaceGithubUserId(row.github_user_id) ||
     !validRole(row.role) ||
     (row.revoked_at !== null && typeof row.revoked_at !== "string") ||
     typeof row.created_at !== "string" ||
@@ -598,17 +599,11 @@ function validateSeatBillingFence(fence: OrgWorkspaceSeatBillingFence): void {
 
 function validateIdentity(installationId: number, githubUserId: string): void {
   if (!validInstallationId(installationId)) throw new Error("invalid installation id")
-  if (!validGithubUserId(githubUserId)) throw new Error("invalid GitHub user id")
+  if (!isOrgWorkspaceGithubUserId(githubUserId)) throw new Error("invalid GitHub user id")
 }
 
 function validInstallationId(value: number): boolean {
   return Number.isSafeInteger(value) && value > 0
-}
-
-function validGithubUserId(value: string): boolean {
-  if (!/^[1-9]\d*$/.test(value)) return false
-  const numeric = Number(value)
-  return Number.isSafeInteger(numeric) && numeric > 0 && String(numeric) === value
 }
 
 function validRole(value: string): value is OrgWorkspaceRole {

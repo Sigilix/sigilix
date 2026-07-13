@@ -30,13 +30,17 @@
 //     installations. A real per-tenant key is scoped to exactly its own
 //     installation and can never see another tenant's seats.
 //
-// Role gating (resolve-user-role.ts):
+// Role gating (resolve-user-role.ts + org-access.ts):
+//   - Rollout off: the exact live GitHub installation role.
+//   - OPENCLAW_ORG_MEMBERSHIP_MODE=on: the exact active stored workspace role
+//     after fresh GitHub installation visibility. Missing/revoked/broken access
+//     fails closed before org data is read.
 //   - ADMIN: the full response — org headline + full paginated seat list +
 //     billing placeholder.
 //   - MEMBER: a limited response — the same org headline + billing placeholder
 //     + the real total seatCount, but `seats` contains ONLY the caller's own
-//     seat (never another member's login / activity / role). A member is NEVER
-//     403'd — always 200 with the role-appropriate shape.
+//     seat (never another member's login / activity / role). An authorized
+//     member gets 200; missing/revoked managed access is denied before this.
 //   The api-key path has no GitHub identity to run an installation role check against; a
 //   per-installation key is a tenant-scoped service credential with full access
 //   to its own installation's data (the same access workspace-prs grants it), so
@@ -47,21 +51,24 @@
 // concatenated values) — mirroring d1-workspace-prs-read.ts's WHERE-clause
 // pattern. Seats never leak across installations.
 //
-// Fail-soft: every D1 read and every GitHub call is wrapped; on any failure the
-// route degrades to a best-effort 200 with an empty seat list rather than
-// throwing (auth-layer failures ahead of that — requireSession/requireApiTenant
-// — are unaffected and can still surface their own status). Unlike
-// workspace-prs-route.ts (which 503s on a missing session-encryption key and
-// 500s on a decrypt failure), this route treats those as best-effort-empty at
-// 200 too — an authenticated user whose token we transiently can't use still
-// gets a rendered (empty) panel, the underlying fault is telemetered for
-// observability, and installationId is forced to 0 in that degraded scope so
-// no cross-tenant account/org data can be read via an unverified
-// ?installationId= query param (see resolveSessionScope).
+// Fail-soft enrichment: account, usage, seat-assignment, and roster reads
+// degrade to a best-effort response. Managed authorization and stored-role
+// reads deliberately fail closed with 403/5xx; they must never fabricate roles
+// that disagree with the mutation routes. While rollout mode is off, a missing
+// encryption key or decrypt failure retains the legacy empty-200 behavior:
+// installationId is forced to 0 so no account/org data can be read through an
+// unverified ?installationId= query (see resolveSessionScope). Managed mode
+// instead matches central org-access's 503/500 failure semantics.
 
 import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
 import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
+import {
+  isOrgWorkspaceGithubUserId,
+  listOrgWorkspaceAccess,
+  type OrgWorkspaceAccess,
+} from "@/src/features/org-membership"
+import { resolveOrgRolePolicyForVisibleInstallation } from "@/src/lib/org-access"
 import { fetchInstallationRoster } from "@/src/lib/org-members-roster"
 import {
   resolveDefaultUserInstallationScope,
@@ -84,10 +91,7 @@ const MAX_PAGE_LIMIT = 200
 // alias so the two can never drift as tiers are added.
 export type OrgPlan = PlanName
 
-export interface OrgSeat {
-  /** Immutable GitHub account identity. Present for seats proven by the
-   * installation roster; login remains display-only and may change. */
-  githubUserId?: string
+interface OrgSeatBase {
   login: string
   role: UserRole
   reviews: number
@@ -103,6 +107,24 @@ export interface OrgSeat {
    * falls back to `https://github.com/{login}.png`. */
   avatarUrl?: string
 }
+
+type OrgRosterSeat = OrgSeatBase & {
+  /** Immutable GitHub account identity from the exact installation roster;
+   * login remains display-only and may change. */
+  githubUserId: string
+  identityProvenance: "roster"
+  /** Stored Sigilix workspace access. Omitted when a partial roster proves the
+   * identity but cannot safely advertise an add/regrant action. */
+  accessState?: "active" | "available" | undefined
+}
+
+type OrgActivitySeat = OrgSeatBase & {
+  githubUserId?: undefined
+  identityProvenance?: undefined
+  accessState?: undefined
+}
+
+export type OrgSeat = OrgRosterSeat | OrgActivitySeat
 
 export interface OrgOverviewResponse {
   org: { account: string; installationId: number; plan: OrgPlan }
@@ -214,9 +236,20 @@ async function resolveSessionScope(
   selection: Exclude<InstallationSelection, { kind: "invalid" }>,
 ): Promise<OrgScopeResult> {
   const login = session.record.login
+  const numericGithubUserId = session.record.githubUserId
+  const githubUserId =
+    typeof numericGithubUserId === "number" && Number.isSafeInteger(numericGithubUserId) && numericGithubUserId > 0
+      ? String(numericGithubUserId)
+      : null
+  if (env.OPENCLAW_ORG_MEMBERSHIP_MODE === "on" && githubUserId === null) {
+    return { response: json({ error: "github_account_required" }, 403) }
+  }
 
   if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) {
     console.error(JSON.stringify({ event: "org-overview-encryption-key-missing" }))
+    if (env.OPENCLAW_ORG_MEMBERSHIP_MODE === "on") {
+      return { response: json({ error: "misconfigured" }, 503) }
+    }
     // installationId is forced to 0 (never the caller-supplied, unverified
     // explicit selection) so readAccountInfo's `installationId <= 0`
     // guard short-circuits — a genuinely empty panel, not a cross-tenant leak.
@@ -244,6 +277,9 @@ async function resolveSessionScope(
     )
     // Same rationale as the missing-key branch above: force installationId to
     // 0, never an unverified explicit selection.
+    if (env.OPENCLAW_ORG_MEMBERSHIP_MODE === "on") {
+      return { response: json({ error: "org_access_failed" }, 500) }
+    }
     return { scope: { installationId: 0, ledgerScope: [], role: "member", login } }
   }
 
@@ -258,11 +294,19 @@ async function resolveSessionScope(
     return { scope: { installationId: 0, ledgerScope: [], role: "member", login } }
   }
 
+  const policy = await resolveOrgRolePolicyForVisibleInstallation(env, {
+    installationId: resolved.installationId,
+    githubUserId,
+    liveRole: resolved.role,
+    requiredRole: "member",
+  })
+  if (!policy.ok) return { response: policy.response }
+
   return {
     scope: {
       installationId: resolved.installationId,
       ledgerScope: [resolved.installationId],
-      role: resolved.role,
+      role: policy.role,
       login,
     },
   }
@@ -450,14 +494,14 @@ async function mergeGitHubRoster(
   seats: OrgSeat[],
   installationId: number,
   account: { login: string; type: string },
-): Promise<void> {
+): Promise<boolean> {
   const roster = await fetchInstallationRoster(env, installationId, account.login, account.type)
   if (roster.reason) {
     console.warn(
       JSON.stringify({ event: "org-overview-roster", installationId, source: roster.source, reason: roster.reason }),
     )
   }
-  if (roster.members.length === 0) return
+  if (roster.members.length === 0) return roster.complete
 
   const byLogin = new Map<string, OrgSeat>()
   for (const seat of seats) byLogin.set(seat.login.toLowerCase(), seat)
@@ -468,15 +512,23 @@ async function mergeGitHubRoster(
     if (existing) {
       // The roster is the identity authority: enrich the activity-derived
       // display row with the immutable account id used by member mutations.
-      existing.githubUserId = member.githubUserId
-      // Prefer the GitHub avatar for a seat we can now match to the roster.
-      if (member.avatarUrl !== "") existing.avatarUrl = member.avatarUrl
+      const enriched: OrgRosterSeat = {
+        ...existing,
+        githubUserId: member.githubUserId,
+        identityProvenance: "roster",
+        // Prefer the GitHub avatar for a seat we can now match to the roster.
+        ...(member.avatarUrl !== "" ? { avatarUrl: member.avatarUrl } : {}),
+      }
+      const index = seats.indexOf(existing)
+      if (index !== -1) seats[index] = enriched
+      byLogin.set(key, enriched)
       continue
     }
     // Roster-only member: no activity yet, so default UNASSIGNED (an admin
     // grants the seat). An org_seat_assignment override is applied afterwards.
-    const seat: OrgSeat = {
+    const seat: OrgRosterSeat = {
       githubUserId: member.githubUserId,
+      identityProvenance: "roster",
       login: member.login,
       role: "member",
       reviews: 0,
@@ -487,6 +539,77 @@ async function mergeGitHubRoster(
     byLogin.set(key, seat)
     seats.push(seat)
   }
+  return roster.complete
+}
+
+function validManagedAccess(access: OrgWorkspaceAccess, installationId: number): boolean {
+  return (
+    access.installationId === installationId &&
+    isOrgWorkspaceGithubUserId(access.githubUserId) &&
+    (access.role === "admin" || access.role === "member") &&
+    (access.revokedAt === null || typeof access.revokedAt === "string")
+  )
+}
+
+/**
+ * Overlay exact-installation stored roles onto roster-proven identities. The
+ * store is read once, never once per member. Missing/revoked access becomes an
+ * actionable `available` state only when the roster is complete; partial roster
+ * identities remain display-only and omit accessState. Mutates the request-local
+ * seats array in place, matching roster and assignment enrichment above.
+ */
+async function applyManagedAccess(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  seats: OrgSeat[],
+  installationId: number,
+  rosterComplete: boolean,
+): Promise<Response | null> {
+  if (!env.SIGILIX_PLATFORM_DB) return json({ error: "misconfigured" }, 503)
+
+  let accessRows: OrgWorkspaceAccess[]
+  try {
+    accessRows = await listOrgWorkspaceAccess(env.SIGILIX_PLATFORM_DB, installationId)
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "org-overview-access-list-failed",
+        installationId,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return json({ error: "org_access_unavailable" }, 503)
+  }
+
+  const byGithubUserId = new Map<string, OrgWorkspaceAccess>()
+  for (const access of accessRows) {
+    if (!validManagedAccess(access, installationId)) {
+      console.warn(
+        JSON.stringify({
+          event: "org-overview-access-row-invalid",
+          installationId,
+          rowInstallationId: access.installationId,
+          githubUserId: access.githubUserId,
+        }),
+      )
+      return json({ error: "org_access_unavailable" }, 503)
+    }
+    byGithubUserId.set(access.githubUserId, access)
+  }
+
+  for (let index = 0; index < seats.length; index++) {
+    const seat = seats[index]!
+    if (seat.identityProvenance !== "roster") continue
+    const access = byGithubUserId.get(seat.githubUserId)
+    if (access?.revokedAt === null) {
+      seats[index] = { ...seat, role: access.role, accessState: "active" }
+    } else if (rosterComplete) {
+      seats[index] = { ...seat, role: "member", accessState: "available" }
+    } else {
+      const { accessState: _accessState, ...readOnlySeat } = seat
+      seats[index] = readOnlySeat
+    }
+  }
+  return null
 }
 
 // ─── Handler ──────────────────────────────────────────────────
@@ -539,8 +662,9 @@ export async function handleOrgOverviewRoute(request: Request, env: Env, ctx?: E
   // Members tab lists everyone, not only people who've already used Sigilix. A
   // MEMBER only ever sees their own seat (below), so the roster fetch is skipped
   // for them (bounded cost + no cross-member disclosure). Fully fail-soft.
+  let rosterComplete = false
   if (scope.role === "admin") {
-    await mergeGitHubRoster(env, seats, scope.installationId, accountInfo)
+    rosterComplete = await mergeGitHubRoster(env, seats, scope.installationId, accountInfo)
     // Re-sort the merged list: recently-active seats first (real lastActiveAt,
     // newest wins), then the never-active roster members by login — a stable,
     // cursor-friendly order matching readInstallationSeats' own ordering.
@@ -548,6 +672,17 @@ export async function handleOrgOverviewRoute(request: Request, env: Env, ctx?: E
       if (a.lastActiveAt !== b.lastActiveAt) return a.lastActiveAt < b.lastActiveAt ? 1 : -1
       return a.login.toLowerCase() < b.login.toLowerCase() ? -1 : a.login.toLowerCase() > b.login.toLowerCase() ? 1 : 0
     })
+  }
+
+  // Stored access is authorization state, not a fail-soft enrichment. In
+  // managed mode an admin/API-key response must either show the exact stored
+  // roles and mutation states or fail closed; fabricating every row as member
+  // would make the Portal disagree with the mutation endpoints.
+  if (env.OPENCLAW_ORG_MEMBERSHIP_MODE === "on" && scope.role === "admin" && scope.installationId > 0) {
+    // Members never receive the roster and therefore have no peer mutation
+    // targets to enrich; their existing own-seat privacy branch stays below.
+    const accessFailure = await applyManagedAccess(env, seats, scope.installationId, rosterComplete)
+    if (accessFailure) return accessFailure
   }
 
   const org = { account: accountInfo.login, installationId: scope.installationId, plan }

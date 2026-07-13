@@ -200,6 +200,9 @@ export interface EnsembleConfigEnv {
   OPENCLAW_COST_GOVERNOR_CEILING_USD?: string | undefined
   OPENCLAW_COST_GOVERNOR_MIN_REVIEWED_FILES?: string | undefined
   OPENCLAW_COST_GOVERNOR_PER_CALL_OVERHEAD_TOKENS_EST?: string | undefined
+  // Giant-PR total-context ceiling (estimated input tokens across the whole review;
+  // bounds the SIG-418 multi-batch spillover expansion). New var → SIGILIX_-named.
+  SIGILIX_MAX_REVIEW_CONTEXT_TOKENS?: string | undefined
 }
 
 // The exact normalization the inline scan call sites used: default "off", trim,
@@ -235,6 +238,11 @@ const DEFAULT_RESWEEP_MAX_REGIONS = 6
 // budget) added to the diff tokens for the projection.
 const DEFAULT_COST_GOVERNOR_MIN_REVIEWED_FILES = 1
 const DEFAULT_COST_GOVERNOR_PER_CALL_OVERHEAD_TOKENS_EST = 4_000
+// Giant-PR total-context ceiling: over ~300k estimated input tokens a review is
+// diminishing returns (a model can't reason well over one PR that large), so the
+// SIG-418 spillover loop stops launching further batches past this. batch[0] (the
+// recall floor) is always reviewed, so a normal PR never reaches it → unchanged.
+const DEFAULT_MAX_REVIEW_CONTEXT_TOKENS = 300_000
 
 export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
   // SIG-417: parse the cost-governor ceiling once (a bad value → undefined, never
@@ -361,6 +369,9 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
           DEFAULT_COST_GOVERNOR_PER_CALL_OVERHEAD_TOKENS_EST,
         ),
       },
+      // Giant-PR total-context ceiling. Bounds the SIG-418 multi-batch spillover
+      // expansion at a recall-safe total (batch[0] always reviewed). Default 300k.
+      maxReviewContextTokens: parseIntEnv(env.SIGILIX_MAX_REVIEW_CONTEXT_TOKENS, DEFAULT_MAX_REVIEW_CONTEXT_TOKENS),
     },
   }
 }

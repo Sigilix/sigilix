@@ -259,6 +259,17 @@ export interface EnsembleTunables {
   resweepMaxRegions: number
   /** SIG-417: the dark projected-cost governor (default-off; see the type). */
   costGovernor: CostGovernorConfig
+  /** Giant-PR total-context ceiling in estimated INPUT tokens across the whole
+   *  review (`SIGILIX_MAX_REVIEW_CONTEXT_TOKENS`, parseIntEnv, default 300_000).
+   *  A recall-safe upper bound on the SIG-418 multi-batch spillover expansion: the
+   *  posted batch[0] (risk-ordered, full context) is ALWAYS reviewed, and spillover
+   *  batches keep launching until the cumulative estimated input would cross this
+   *  ceiling — at which point the loop halts (`context-token-cap`). Reviews over
+   *  ~300k tokens are diminishing returns (one PR a model can't reason over anyway),
+   *  so this only trims the deep tail of the rare giant multi-batch PR; normal PRs
+   *  never reach it and stay byte-identical. An explicit 0 is honored (disables
+   *  spillover entirely — only batch[0] reviewed). */
+  maxReviewContextTokens: number
 }
 
 /** The parse-once, typed view of the ensemble's env-derived settings. Grows by

@@ -546,6 +546,16 @@ SIGILIX_TENANT_CONCURRENCY_CAP = "2"
 # Free budget to a paying customer and block a review it had every right to run.
 SIGILIX_RATE_LIMIT_MODE = "enforce"
 
+# Public no-signup "try it on any PR" demo (#891 / POST /v1/demo/review). KILL
+# SWITCH, fail-closed: "on" enables the endpoint; unset/anything-else → 503
+# demo_disabled (the site shows "The live demo is currently unavailable"). Turn
+# ON for the marketing /review demo. Cost is bounded by demo-review-guards.ts:
+# per-IP 3/UTC-day (SIGILIX_DEMO_IP_LIMIT), a $20/UTC-day global spend ceiling
+# (SIGILIX_DEMO_DAILY_BUDGET_USD, pre-reserved so a burst can't overspend), and
+# 1500-line / 40-file / 400KB diff caps; same PR@SHA is cache-served for free.
+# Rollback: remove this line (or set to anything but "on") — fails closed.
+SIGILIX_DEMO_MODE = "on"
+
 # SIGILIX_USAGE_METER_MODE (usage-pool caps for chat/CLI/Slack) is deliberately LEFT
 # UNSET → code default "shadow". Do NOT flip it to "enforce" alongside the gate above
 # without first fixing the org pool, because the two are in direct tension:

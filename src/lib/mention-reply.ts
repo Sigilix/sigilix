@@ -13,7 +13,7 @@ import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { markBotAuthoredComment, isBotAuthoredComment } from "./bot-authored-comments"
 import { bodyMentionsBot, getMentionTriggers, isLikelyBotAuthor, stripMentionFromBody } from "./mention"
-import { retrieveChunks, formatChunksForPrompt, type RetrievedChunk } from "./retrieval"
+import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { indexNamespace, readRepoIndexManifest } from "./repo-index-manifest"
 import { MENTION_REPLY_SCHEMA } from "@/src/shared/domain/schemas"
 import type { Env } from "@/src/shared/types/env"
@@ -32,7 +32,6 @@ import { createAgentTools } from "./agent-tools"
 import { makeKvTelemetrySink } from "./agent-telemetry-kv"
 import { AGENT_SYSTEM_PROMPT } from "@/src/prompts/agent-system"
 import { parseBranchNamespace } from "./index-branch"
-import { extractCodeCitations, verifyAndSanitizeCitations } from "./citation-verifier"
 import { captureInstructiveLearning } from "@/src/features/learnings"
 import {
   codebaseContextEnabled,
@@ -45,6 +44,11 @@ import {
 } from "@/src/features/linear-integration"
 import { resolveBindingRepoScope } from "@/src/lib/cross-repo-context"
 import { resolveTenantLinearRepoScope, type LinearAgentRepoScope } from "@/src/lib/mention-reply-repo-scope"
+import {
+  addLinearCitationMetadata,
+  MAX_LINEAR_MENTION_CITATIONS,
+  prependLinearCitationVerification,
+} from "@/src/lib/linear-mention-citations"
 
 export type { LinearAgentRepoScope } from "@/src/lib/mention-reply-repo-scope"
 
@@ -159,6 +163,7 @@ interface MentionVerdict {
   answer: string
   confidence: number
   abstain: boolean
+  citations: unknown[]
 }
 
 export interface HandleMentionOpts {
@@ -290,6 +295,7 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
   let tenantRepo: { owner: string; repo: string } | null = null
   // Cross-repo context: capped sibling namespaces beyond the primary (multi-repo / use-all).
   let tenantSiblingNamespaces: string[] = []
+  let tenantCitationNamespaces: string[] = []
   if (tenant) {
     const [config, binding] = await Promise.all([
       getLinearConfig(env, tenant.installationId),
@@ -321,6 +327,7 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
     }
     tenantRepo = scope!.primary
     tenantSiblingNamespaces = scope!.siblingNamespaces
+    tenantCitationNamespaces = scope!.allNamespaces
     if (scope!.truncated > 0) {
       log("cross-repo-siblings-capped", { truncated: scope!.truncated })
     }
@@ -417,7 +424,12 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
     recentComments: data.issue.comments.nodes,
     sourceCommentId: data.id,
     codebaseStatus: renderCodebaseRetrievalStatus(repoScope, chunks.length),
-    codebaseChunks: formatChunksForPrompt(chunks),
+    codebaseChunks: formatChunksForPrompt(
+      addLinearCitationMetadata(
+        chunks,
+        repoScope.repo ?? (teamRepo ? indexNamespace(teamRepo.owner, teamRepo.repo) : ""),
+      ),
+    ),
     linkedPrs,
     linkedPrFailures,
   })
@@ -478,7 +490,7 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
       telemetryContext: {
         singleShotPrompt: prompt,
         singleShotSchema: MENTION_REPLY_SCHEMA as unknown as Record<string, unknown>,
-        promptBuilderVersion: "linear-mention-reply-v7",
+        promptBuilderVersion: "linear-mention-reply-v8",
         promptBuilderSource: MENTION_REPLY_PROMPT,
         linearMentionRetrieval: {
           availableRepos: repoScope.availableRepos,
@@ -531,14 +543,18 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
     ? await verifyLinearMentionCitations({
         env,
         teamRepo,
-        retrievedChunks: chunks,
+        citations: verdict.citations,
+        allowedRepos:
+          tenantCitationNamespaces.length > 0
+            ? tenantCitationNamespaces
+            : teamRepo
+              ? [indexNamespace(teamRepo.owner, teamRepo.repo)]
+              : [],
         answer: verdict.answer,
         log,
         ...(tenant ? { installationId: tenant.installationId } : {}),
       })
-    : extractCodeCitations(verdict.answer).length > 0
-      ? appendCitationVerificationUnavailable(verdict.answer, "codebase context is disabled")
-      : verdict.answer
+    : verdict.answer
   const body = formatReply({ verdict: { ...verdict, answer: verifiedAnswer }, askerHandle })
   const replyParentId = resolveReplyParentId(data)
   const newCommentId = await linear.createComment(data.issue.id, body, replyParentId)
@@ -815,6 +831,8 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
     "[QUESTION]",
     ctx.question,
     "",
+    "[CITATION CONTRACT] Copy exact `citation` objects returned by retrieve_codebase into the top-level `citations` array. Use an empty array when none apply. Do not write path:line citations in prose and never invent or alter citation metadata.",
+    "",
     repoLine,
   ]
   return lines.join("\n")
@@ -864,79 +882,46 @@ async function fetchLinkedPrs(refs: PrRef[], env: Env): Promise<LinkedPrFetchRes
 async function verifyLinearMentionCitations(args: {
   env: Env
   teamRepo: { owner: string; repo: string } | null
-  retrievedChunks: RetrievedChunk[]
+  citations: unknown[]
+  allowedRepos: string[]
   answer: string
   log: (label: string, extra?: Record<string, unknown>) => void
   installationId?: number
 }): Promise<string> {
-  if (extractCodeCitations(args.answer).length === 0) return args.answer
-  if (!args.teamRepo) {
-    return appendCitationVerificationUnavailable(args.answer, "no mapped GitHub repo")
-  }
-  if (!args.env.GITHUB_APP_ID || !args.env.GITHUB_PRIVATE_KEY) {
-    return appendCitationVerificationUnavailable(args.answer, "GitHub app credentials are unavailable")
-  }
-  if (!args.env.OPENCLAW_STATE) {
-    return appendCitationVerificationUnavailable(args.answer, "state storage is unavailable")
-  }
-  const { owner, repo } = args.teamRepo
-  const installation = args.installationId
-    ? { ok: true as const, installationId: args.installationId }
-    : resolveInstallation(owner, repo, args.env.OPENCLAW_GITHUB_INSTALLATION_MAP)
-  if (!installation.ok) {
-    return appendCitationVerificationUnavailable(args.answer, `no GitHub installation for ${owner}/${repo}`)
-  }
-
-  try {
-    const token = await getInstallationToken({
-      kv: args.env.OPENCLAW_STATE,
-      appId: args.env.GITHUB_APP_ID,
-      privateKey: args.env.GITHUB_PRIVATE_KEY,
-      installationId: installation.installationId,
-    })
-    const client = new GitHubClient({ token })
-    const repoMeta = await client.getRepository(owner, repo)
-    const defaultBranch = repoMeta?.default_branch
-    if (!defaultBranch) {
-      return appendCitationVerificationUnavailable(args.answer, `default branch unavailable for ${owner}/${repo}`)
-    }
-    const branch = await client.getBranch(owner, repo, defaultBranch).catch(() => null)
-    const ref = branch?.headSha ?? defaultBranch
-    const refHints = citationRefHintsByPath(args.retrievedChunks)
-    const checked = await verifyAndSanitizeCitations({
-      answer: args.answer,
-      ref,
-      fetchFileContent: (path, liveRef) => client.getFileContent(owner, repo, path, refHints.get(path) ?? liveRef),
-    })
-    if (checked.invalid.length > 0) {
-      args.log("citation-verification-corrected", {
-        owner,
-        repo,
-        invalid: checked.invalid.length,
-        ref: ref.slice(0, 12),
+  if (args.citations.length === 0) return args.answer
+  let clientPromise: Promise<GitHubClient> | null = null
+  const getClient = (): Promise<GitHubClient> => {
+    if (clientPromise) return clientPromise
+    clientPromise = (async () => {
+      if (!args.env.GITHUB_APP_ID || !args.env.GITHUB_PRIVATE_KEY || !args.env.OPENCLAW_STATE) {
+        throw new Error("GitHub verification credentials unavailable")
+      }
+      if (!args.teamRepo) throw new Error("no mapped GitHub repo")
+      const installation = args.installationId
+        ? { ok: true as const, installationId: args.installationId }
+        : resolveInstallation(args.teamRepo.owner, args.teamRepo.repo, args.env.OPENCLAW_GITHUB_INSTALLATION_MAP)
+      if (!installation.ok) throw new Error("no GitHub installation")
+      const token = await getInstallationToken({
+        kv: args.env.OPENCLAW_STATE,
+        appId: args.env.GITHUB_APP_ID,
+        privateKey: args.env.GITHUB_PRIVATE_KEY,
+        installationId: installation.installationId,
       })
-    }
-    return checked.answer
-  } catch (err) {
-    args.log("citation-verification-unavailable", {
-      owner,
-      repo,
-      err: err instanceof Error ? err.message : String(err),
-    })
-    return appendCitationVerificationUnavailable(args.answer, `GitHub verification failed for ${owner}/${repo}`)
+      return new GitHubClient({ token })
+    })()
+    return clientPromise
   }
-}
-
-function appendCitationVerificationUnavailable(answer: string, reason: string): string {
-  return `> Citation check: Unable to verify cited file/line ranges against live GitHub right now (${reason}); leaving citations unchanged.\n\n${answer}`
-}
-
-function citationRefHintsByPath(chunks: RetrievedChunk[]): Map<string, string> {
-  const refs = new Map<string, string>()
-  for (const chunk of chunks) {
-    if (chunk.indexedHeadSha && !refs.has(chunk.path)) refs.set(chunk.path, chunk.indexedHeadSha)
-  }
-  return refs
+  const answer = await prependLinearCitationVerification({
+    answer: args.answer,
+    citations: args.citations,
+    allowedRepos: args.allowedRepos,
+    fetchFileContent: async (owner, repo, path, ref) => {
+      const client = await getClient()
+      return client.getFileContent(owner, repo, path, ref)
+    },
+  })
+  args.log("citation-verification-complete", { citations: Math.min(args.citations.length, 24) })
+  return answer
 }
 
 function truncate(value: string, max: number, marker = "\n[…truncated…]"): string {
@@ -962,10 +947,12 @@ function parseVerdict(text: string): MentionVerdict | null {
   if (!answer) return null
   const confidence = Number(obj.confidence)
   const abstain = Boolean(obj.abstain)
+  const citations = Array.isArray(obj.citations) ? obj.citations.slice(0, MAX_LINEAR_MENTION_CITATIONS) : []
   return {
     answer,
     confidence: Number.isFinite(confidence) && confidence >= 1 && confidence <= 5 ? Math.round(confidence) : 3,
     abstain,
+    citations,
   }
 }
 

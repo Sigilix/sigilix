@@ -381,6 +381,21 @@ export const MENTION_REPLY_SCHEMA = {
     answer: { type: "string" },
     confidence: { type: "integer", minimum: 1, maximum: 5 },
     abstain: { type: "boolean" },
+    citations: {
+      type: "array",
+      maxItems: 24,
+      items: {
+        type: "object",
+        properties: {
+          repo: { type: "string", pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+          path: { type: "string", minLength: 1, maxLength: 512 },
+          lineStart: { type: "integer", minimum: 1, maximum: 1000000 },
+          lineEnd: { type: "integer", minimum: 1, maximum: 1000000 },
+          ref: { type: "string", pattern: "^[0-9a-fA-F]{40}$" },
+        },
+        required: ["repo", "path", "lineStart", "lineEnd", "ref"],
+      },
+    },
   },
   required: ["answer", "confidence", "abstain"],
 } as const
@@ -389,8 +404,9 @@ export const MENTION_REPLY_SCHEMA = {
  * GitHub @-mention reply verdict (greptile-style verification).
  * Mirrors GithubMentionVerdict in src/lib/github-mention.ts.
  *
- * Same shape as MENTION_REPLY_SCHEMA — the surface is different
- * (PR thread vs Linear comment), but the JSON contract is the same:
+ * Same core envelope as MENTION_REPLY_SCHEMA — the surface is different
+ * (PR thread vs Linear comment), and Linear additionally has a structured
+ * citation sidecar. The shared fields remain:
  * a single Markdown body + confidence + abstain. The body itself is
  * freeform Markdown — the prompt only constrains voice and the JSON
  * envelope, not the prose shape.

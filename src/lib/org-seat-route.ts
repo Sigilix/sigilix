@@ -90,8 +90,8 @@ async function resolveInstallationMember(
   try {
     const activity = await db
       .prepare(
-      "SELECT 1 AS present FROM usage_ledger" +
-        " WHERE installation_id = ? AND author_login IS NOT NULL AND LOWER(author_login) = ? LIMIT 1",
+        "SELECT 1 AS present FROM usage_ledger" +
+          " WHERE installation_id = ? AND author_login IS NOT NULL AND LOWER(author_login) = ? LIMIT 1",
       )
       .bind(installationId, loginKey)
       .first<{ present: unknown }>()
@@ -307,7 +307,7 @@ export async function handleOrgSeatRoute(
   // presence is positive proof; only a roster miss needs complete pagination.
   const member = await resolveInstallationMember(env, installationId, targetKey)
   if (member === "unavailable") {
-    return json({ error: "seat membership unavailable" }, 503)
+    return json({ error: "seat_unavailable" }, 503)
   }
   if (member === "not_member") {
     return json({ error: "not a member of this installation" }, 404)

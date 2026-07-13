@@ -316,7 +316,7 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     expect(await readSeatRow(db, 2, "secret-agent")).toBeNull()
   })
 
-  it("target membership cannot be verified without App-roster credentials → 503", async () => {
+  it("target membership cannot be verified without tenant roster metadata → 503", async () => {
     const db = await makeDb()
     const kv = makeKV()
     await seedSession(kv, "sess-1", "octocat", 111)
@@ -324,7 +324,7 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     stubGitHub({ installations: [{ id: 1, account: { type: "User", login: "octocat" } }] })
 
     await insertRepo(db, 100, 1, "octocat/api")
-    // No activity for "ghost", and no App credentials to complete the roster.
+    // No activity for "ghost", and this legacy tenant has no roster metadata.
 
     const res = await handleOrgSeatRoute(seatReq("sess-1", 1, "ghost", { assigned: true }), env, undefined, 1, "ghost")
     expect(res.status).toBe(503)
@@ -410,7 +410,13 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
       orgMemberPages: { 1: firstPage, 2: { status: 503 } },
     })
 
-    const res = await handleOrgSeatRoute(seatReq("sess-1", 1, "newbie", { assigned: true }), env, undefined, 1, "newbie")
+    const res = await handleOrgSeatRoute(
+      seatReq("sess-1", 1, "newbie", { assigned: true }),
+      env,
+      undefined,
+      1,
+      "newbie",
+    )
 
     expect(res.status).toBe(503)
     expect(await readSeatRow(db, 1, "newbie")).toBeNull()
@@ -434,7 +440,13 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
       orgMemberPages: { 1: firstPage, 2: { status: 503 } },
     })
 
-    const res = await handleOrgSeatRoute(seatReq("sess-1", 1, "newbie", { assigned: true }), env, undefined, 1, "newbie")
+    const res = await handleOrgSeatRoute(
+      seatReq("sess-1", 1, "newbie", { assigned: true }),
+      env,
+      undefined,
+      1,
+      "newbie",
+    )
 
     expect(res.status).toBe(200)
     expect((await readSeatRow(db, 1, "newbie"))?.assigned).toBe(1)

@@ -5,11 +5,11 @@
 // WHY: the founder pays review model spend personally (~$0.25/review measured
 // via `usage_ledger.cost_usd`) and holds ~$1,000 of AWS credits — moving the
 // ensemble's Bedrock-servable roles onto Bedrock spends credits instead of
-// cash. FOUR roles migrate (security, tests, performance, synth); LOGIC ships on
-// Ollama Turbo (`deepseek-v4-pro:cloud`, 2026-07-12) — off both Bedrock and
-// OpenRouter — so the Bedrock logic entry stays a SELECTABLE bake-off candidate
-// only (Claude Sonnet 5 + Mistral Large 3 wired below, nothing more; Anthropic
-// Bedrock access is still AccessDenied as of 2026-07-12).
+// cash. FOUR roles migrate (security, tests, performance, synth); LOGIC STAYS
+// on OpenRouter/Kimi — its SIG-450 K=12 recall screening is provider-specific
+// and a swap needs its own bake-off first (Claude Sonnet 5 + Mistral Large 3
+// are wired below as SELECTABLE candidates for that bake-off, nothing more;
+// Anthropic Bedrock access is still AccessDenied as of 2026-07-12).
 //
 // DEFAULT-OFF: with `SIGILIX_ENSEMBLE_PROVIDER` unset (or ANY unrecognized
 // value) every resolver here returns `undefined` and the shipped OpenRouter
@@ -17,22 +17,21 @@
 // Same when AWS credentials are incomplete — flipping the flag without creds
 // degrades to OpenRouter instead of failing roles closed.
 //
-// DECORRELATION (SIG-406): the migrated-family split survives the migration —
-// security+tests=DeepSeek, performance=GLM (Z.ai), synth=Nvidia (logic ships on
-// Ollama Turbo v4-pro, outside this lineup). The synth stays a generalist
-// adjudicator decorrelated from every specialist family, so it remains an
-// unbiased judge with no self-preference. Do not collapse families when editing
-// this lineup.
+// DECORRELATION (SIG-406): the four-family split survives the migration —
+// logic=Moonshot (unchanged), security+tests=DeepSeek, performance=GLM (Z.ai),
+// synth=Nvidia. The synth stays a generalist adjudicator decorrelated from
+// every specialist family, so it remains an unbiased judge with no
+// self-preference. Do not collapse families when editing this lineup.
 //
 // ATTEMPT-COUNT PARITY: each Bedrock config's `maxAttempts` EQUALS its
 // OpenRouter counterpart's (retries traded for the cross-provider OpenRouter
 // fallback leg), so `MAX_CALLS_PER_ENSEMBLE_RUN` — derived from the OpenRouter
 // configs at admission time — remains a true worst-case bound either way.
 //
-// FALLBACK = TODAY'S SHIPPED MODEL per role: a Bedrock outage degrades to exactly
-// the lineup that runs today (keys resolved per leg by `resolveConfigKeys` — the
-// Bedrock envelope for the primary, and the OpenRouter key for the OpenRouter
-// fallbacks / the Ollama key for logic's `deepseek-v4-pro:cloud` fallback).
+// FALLBACK = TODAY'S OPENROUTER MODEL per role: a Bedrock outage degrades to
+// exactly the lineup that runs today (keys resolved per leg by
+// `resolveConfigKeys` — the Bedrock envelope for the primary, the OpenRouter
+// key for the fallback).
 
 import type { ModelConfig } from "@/src/lib/ensemble/domain/model-policy"
 import { SPECIALIST_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
@@ -75,10 +74,8 @@ export const BEDROCK_SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   // default logic path: it activates only via SIGILIX_ENSEMBLE_PROVIDER_LOGIC.
   logic: {
     primary: "us.anthropic.claude-sonnet-5",
-    // retries:2 (2026-07-13): matches prod logic's maxAttempts (1+2 retries+fallback = 4)
-    // after logic gained its cross-provider fallback, preserving attempt-count parity.
-    retries: 2,
-    fallback: "deepseek-v4-pro:cloud", // today's logic (Ollama Turbo) — degrade to the shipped model
+    retries: 1,
+    fallback: "moonshotai/kimi-k2.7-code", // today's logic — degrade to the shipped model
     perAttemptTimeoutMs: SPECIALIST_TIMEOUT_MS,
   },
   security: {

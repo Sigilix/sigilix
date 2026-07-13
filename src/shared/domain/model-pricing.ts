@@ -29,19 +29,12 @@ export interface ModelPricing {
  *  Any model NOT listed here — including a local-eval `:cloud` override run
  *  against Ollama Turbo — falls back to `DEFAULT_PRICING`. (SIG-417 removed
  *  the legacy non-OpenRouter `:cloud` / Ollama estimate rows: prod no longer
- *  runs them, and their estimate-only cost is now covered by the default.)
- *  EXCEPTION (2026-07-12): `deepseek-v4-pro:cloud` — the `logic` primary now runs
- *  on Ollama Turbo, so it IS a prod model and gets an explicit row (kept in sync
- *  with SPECIALIST_CONFIGS). Ollama reports no per-call cost, so this row is the
- *  estimate the cost roll-up bills; the rate mirrors the OpenRouter v4-pro list
- *  rate (same base model). Ollama Turbo is a flat subscription, so real marginal
- *  OpenRouter spend on logic is zero — this is a conservative accounting estimate. */
+ *  runs them, and their estimate-only cost is now covered by the default.) */
 export const MODEL_PRICING: Readonly<Record<string, ModelPricing>> = {
   "openai/o3": { inputPerMTokUsd: 2.0, outputPerMTokUsd: 8.0 }, // legacy logic (removed Aug 26 2026)
-  "moonshotai/kimi-k2.7-code": { inputPerMTokUsd: 0.74, outputPerMTokUsd: 3.5 }, // prior logic (SIG-450); still a Bedrock/command fallback
+  "moonshotai/kimi-k2.7-code": { inputPerMTokUsd: 0.74, outputPerMTokUsd: 3.5 }, // logic (SIG-450)
   "deepseek/deepseek-v4-flash": { inputPerMTokUsd: 0.09, outputPerMTokUsd: 0.18 },
   "deepseek/deepseek-v4-pro": { inputPerMTokUsd: 0.435, outputPerMTokUsd: 0.87 },
-  "deepseek-v4-pro:cloud": { inputPerMTokUsd: 0.435, outputPerMTokUsd: 0.87 }, // logic primary on Ollama Turbo (2026-07-12); mirrors the OpenRouter v4-pro rate
   "z-ai/glm-5.1": { inputPerMTokUsd: 0.98, outputPerMTokUsd: 3.08 },
   "nvidia/nemotron-3-ultra-550b-a55b": { inputPerMTokUsd: 0.5, outputPerMTokUsd: 2.5 },
   // ── AWS Bedrock (us-east-1 on-demand list rates, aws.amazon.com/bedrock/pricing,
@@ -54,8 +47,7 @@ export const MODEL_PRICING: Readonly<Record<string, ModelPricing>> = {
   "deepseek.v3.2": { inputPerMTokUsd: 0.62, outputPerMTokUsd: 1.85 }, // security + tests
   "zai.glm-5": { inputPerMTokUsd: 1.0, outputPerMTokUsd: 3.2 }, // performance
   "nvidia.nemotron-super-3-120b": { inputPerMTokUsd: 0.15, outputPerMTokUsd: 0.65 }, // synth
-  // Bedrock logic CANDIDATES only (Bedrock swap still gated on Anthropic access; the
-  // shipped default logic model is `deepseek-v4-pro:cloud` on Ollama Turbo, priced above).
+  // Logic CANDIDATES only (K≥12 bake-off pending; default logic stays OpenRouter/Kimi).
   // Claude Sonnet 5 rate is the PROMOTIONAL launch price (through Aug 31 2026) — revisit.
   "us.anthropic.claude-sonnet-5": { inputPerMTokUsd: 2.0, outputPerMTokUsd: 10.0 },
   "mistral.mistral-large-3-675b-instruct": { inputPerMTokUsd: 0.5, outputPerMTokUsd: 1.5 },

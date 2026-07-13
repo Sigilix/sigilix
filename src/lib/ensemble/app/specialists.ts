@@ -340,7 +340,7 @@ export async function runSpecialistsAndSynthesize<R>(a: SpecialistsArgs<R>): Pro
       (signal) =>
         runSpecialist({
           role,
-          // SIG-406: runSpecialist keys by model-id shape (OR id → OR key; logic's cloud id → Ollama key).
+          // SIG-406: runSpecialist selects the key by model-id shape (OR id → OR key).
           apiKeys: modelApiKeys(env),
           systemPrompt,
           // SIG-113: tests get the testing-evidence block; others the classification block.

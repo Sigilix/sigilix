@@ -43,12 +43,10 @@ export function hasAnyEvalApiKey(): boolean {
   return Boolean(k.ollama || k.openrouter)
 }
 
-/** Pick the API key matching a config's PRIMARY model by id-shape. The eval harness
- *  runs the primary with a single key (no per-leg fallback wiring), so we key off a
- *  fallback-stripped view — the prod logic config is now cross-provider (Ollama primary
- *  + OpenRouter fallback, 2026-07-13) and `selectConfigApiKey` throws on that mix. */
+/** Pick the API key matching a config's model by id-shape, via the prod selector
+ *  (so the cross-provider-fallback guard applies here too). */
 export function evalApiKeyFor(config: ModelConfig): string | undefined {
-  return selectConfigApiKey({ ...config, fallback: null }, evalApiKeys())
+  return selectConfigApiKey(config, evalApiKeys())
 }
 
 /** Build the minimal-context specialist message for a fixture diff slice. */

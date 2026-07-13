@@ -70,7 +70,7 @@ describe("runSpecialist → logic-input-composition capture", () => {
 
     const result = await runSpecialist({
       role: "logic",
-      apiKeys: { openrouter: undefined, ollama: "test-key" },
+      apiKeys: { openrouter: "test-key", ollama: undefined },
       systemPrompt: "logic system",
       initialMessage: "[DIFF]\n@@ +1 @@\n+ const x = 1",
       chatEnabled: "on",
@@ -97,7 +97,7 @@ describe("runSpecialist → logic-input-composition capture", () => {
     expect(composition.toolLoop).toEqual({ toolsAvailable: false, toolCallsMade: 0, toolResultTokens: 0 })
     // The reconciliation invariant the spec requires: summedInputTokens ===
     // tokenUsageByModel[logic model].inputTokens (same per-call usage feeds both).
-    expect(composition.summedInputTokens).toBe(sink["deepseek-v4-pro:cloud"]?.inputTokens)
+    expect(composition.summedInputTokens).toBe(sink["moonshotai/kimi-k2.7-code"]?.inputTokens)
   })
 
   it("tool conversation: two per-call entries (tool-turn + final) so the doubling is visible", async () => {
@@ -125,7 +125,7 @@ describe("runSpecialist → logic-input-composition capture", () => {
 
     const result = await runSpecialist({
       role: "logic",
-      apiKeys: { openrouter: undefined, ollama: "test-key" },
+      apiKeys: { openrouter: "test-key", ollama: undefined },
       systemPrompt: "logic system",
       initialMessage: "src/auth.ts:1 export function f() {}",
       chatEnabled: "on",
@@ -144,7 +144,7 @@ describe("runSpecialist → logic-input-composition capture", () => {
     expect(recorder.toolResultTokens).toBeGreaterThan(0)
     // Reconciliation: the per-call sum equals what tokenUsageByModel accumulated
     // (attemptChat folds both tool calls into one onAttempt usage = 34_000).
-    expect(recorder.summedInputTokens).toBe(sink["deepseek-v4-pro:cloud"]?.inputTokens)
+    expect(recorder.summedInputTokens).toBe(sink["moonshotai/kimi-k2.7-code"]?.inputTokens)
   })
 
   it("retry ladder: a transient failure (thrown, no call completed) then a recorded success", async () => {
@@ -162,7 +162,7 @@ describe("runSpecialist → logic-input-composition capture", () => {
 
     const result = await runSpecialist({
       role: "logic",
-      apiKeys: { openrouter: undefined, ollama: "test-key" },
+      apiKeys: { openrouter: "test-key", ollama: undefined },
       systemPrompt: "logic system",
       initialMessage: "[DIFF]\n+ x",
       chatEnabled: "on",
@@ -182,7 +182,7 @@ describe("runSpecialist → logic-input-composition capture", () => {
     expect(recorder.summedInputTokens).toBe(99_000)
     expect(recorder.callsMissingInputUsage).toBe(0)
     // Still reconciles with tokenUsageByModel (failed attempt added no tokens).
-    expect(recorder.summedInputTokens).toBe(sink["deepseek-v4-pro:cloud"]?.inputTokens)
+    expect(recorder.summedInputTokens).toBe(sink["moonshotai/kimi-k2.7-code"]?.inputTokens)
   })
 
   it("a completed call that reports NO usage is counted as missing, not zero-filled", async () => {
@@ -198,7 +198,7 @@ describe("runSpecialist → logic-input-composition capture", () => {
 
     const result = await runSpecialist({
       role: "logic",
-      apiKeys: { openrouter: undefined, ollama: "test-key" },
+      apiKeys: { openrouter: "test-key", ollama: undefined },
       systemPrompt: "logic system",
       initialMessage: "[DIFF]\n+ x",
       chatEnabled: "on",
@@ -224,7 +224,7 @@ describe("runSpecialist → logic-input-composition capture", () => {
 
     const result = await runSpecialist({
       role: "logic",
-      apiKeys: { openrouter: undefined, ollama: "test-key" },
+      apiKeys: { openrouter: "test-key", ollama: undefined },
       systemPrompt: "logic system",
       initialMessage: "[DIFF]\n+ x",
       chatEnabled: "on",

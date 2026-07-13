@@ -846,6 +846,11 @@ export interface Env extends AwsBedrockEnv {
   OPENCLAW_RESWEEP_MODE?: string
   /** SIG-393: max regions per re-sweep (default 6). */
   OPENCLAW_RESWEEP_MAX_REGIONS?: string
+  /** Giant-PR total-context ceiling in estimated INPUT tokens across the whole
+   *  review (default 300_000). Bounds the SIG-418 multi-batch spillover expansion:
+   *  batch[0] is always reviewed; spillover halts once the cumulative estimated
+   *  input would cross this. New var → SIGILIX_-named (normalizeEnv mirrors it). */
+  SIGILIX_MAX_REVIEW_CONTEXT_TOKENS?: string
   /** SIG-369(b): route the SECOND-PASS recall phases' LOGIC re-runs
    *  (SIG-395 invariant-lens, SIG-393 resweep) to a cheaper strong reasoner
    *  (`deepseek/deepseek-v4-pro`) instead of the primary logic model — "off"

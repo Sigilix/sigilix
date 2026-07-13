@@ -1175,6 +1175,18 @@ SIGILIX_DYNAMIC_DISPATCHER_MODE = "shadow"
 # (telemetry only, output unchanged) or "off" (inert).
 SIGILIX_REVIEW_MULTIBATCH_MODE = "on"
 
+# Giant-PR total-context ceiling (estimated INPUT tokens across the whole review).
+# Recall-safe cost cap on the SIG-418 multi-batch spillover above: the posted
+# batch[0] (risk-ordered, full context) is ALWAYS reviewed, and spillover batches
+# keep launching until the cumulative estimated input would cross this ceiling — then
+# the loop halts (`context-token-cap`, surfaced in the multibatch-enforce-summary +
+# the synth coverage-scope block). Reviews over ~300k tokens are diminishing returns
+# (one PR a model can't reason over anyway), so this only trims the deep tail of the
+# rare giant multi-batch PR — normal PRs never reach it and stay byte-identical.
+# parseIntEnv (SIGILIX_-first, OPENCLAW_ fallback via normalizeEnv); explicit 0 =
+# spillover disabled (only batch[0] reviewed). Code default is 300000.
+SIGILIX_MAX_REVIEW_CONTEXT_TOKENS = "300000"
+
 # SIG-437: `@sigilix summary` webhook feature. "on" => the trigger enqueues a job
 # that writes a structured PR summary into the PR description. A webhook/product
 # flag (NOT the review pipeline), parsed by parsePrSummaryMode. Default-off => the

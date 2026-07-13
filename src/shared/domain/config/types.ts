@@ -654,7 +654,7 @@ export const KNOWN_MODELS: ReadonlySet<string> = new Set([
   "kimi-k2.5:cloud", // logic + performance fallback
   "qwen3-coder:480b-cloud", // reserved for per-repo overrides
   "qwen3-coder-next:cloud", // logic fallback (was security primary; swapped to a reasoner after pr/07)
-  "deepseek-v4-pro:cloud", // logic primary on Ollama Turbo (2026-07-12)
+  "deepseek-v4-pro:cloud", // logic cross-provider fallback on Ollama Turbo (2026-07-13)
   "deepseek-v4-flash:cloud", // security + tests primary (reasoner), synth fallback
   "minimax-m3:cloud", // tests fallback (SIG-349; upgraded from m2.5, 2026-06-05)
   "gpt-oss:120b-cloud", // former synth primary (kept valid for user configs)

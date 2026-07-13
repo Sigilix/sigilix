@@ -113,8 +113,8 @@ export function emitAndAttachLogicInputComposition(args: {
     })
     args.telemetry.logicInputComposition = composition
     // Reconcile against the logic attempt's model keys. Logic normally answers on its
-    // PRIMARY (`deepseek-v4-pro:cloud`, Ollama Turbo), but on a Turbo outage it can answer on
-    // its cross-provider fallback (`deepseek/deepseek-v4-pro`, OpenRouter — 2026-07-13), so sum
+    // PRIMARY (`deepseek/deepseek-v4-pro`, OpenRouter — 2026-07-13), but on an OpenRouter outage
+    // it can answer on its cross-provider fallback (`deepseek-v4-pro:cloud`, Ollama Turbo), so sum
     // inputTokens across BOTH possible logic model keys; otherwise the reconciliation reads a
     // spurious mismatch when the fallback fires. `undefined` when neither key is present (no
     // logic call), preserving the "no data" signal.

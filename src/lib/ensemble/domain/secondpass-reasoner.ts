@@ -5,16 +5,16 @@
 // to 6) and the re-sweep one per region; on a dense PR these second-pass re-runs
 // are the dominant logic input-token spend (PR #574, when logic was openai/o3:
 // ~30.8K primary vs ~172.8K billed — the ~142K gap is these passes), NOT the
-// primary specialist. (The primary logic model is now `deepseek-v4-pro:cloud` on
-// Ollama Turbo, 2026-07-12; the same multiplier applies to whatever the primary is.)
+// primary specialist. (The primary logic model is now `deepseek/deepseek-v4-pro` on
+// OpenRouter, 2026-07-13; the same multiplier applies to whatever the primary is.)
 //
 // This leaf decides, behind a default-off flag, whether to route those second-pass
 // calls to the OpenRouter `deepseek/deepseek-v4-pro` twin ($0.435/$0.87, already the
-// `tests` specialist model) INSTEAD of the primary logic model. NOTE (2026-07-12): the
-// original "cheaper reasoner" rationale is now INVERTED — the primary logic model is the
-// same v4-pro on Ollama Turbo (a flat subscription ≈ zero marginal cost), so flipping this
-// flag would move the heaviest second-pass work from free-Ollama onto PAID OpenRouter at
-// the same model. Re-evaluate that trade before ever enabling it. It is pure (no env /
+// `tests` specialist model) INSTEAD of the primary logic model. NOTE (2026-07-13): the
+// primary logic model is now that SAME v4-pro on OpenRouter, so with the flag on the
+// second-pass calls would run the identical model/provider as the primary — a no-op
+// model-wise (no cheaper-reasoner saving anymore). Re-evaluate that trade before ever
+// enabling it. It is pure (no env /
 // network / provider knowledge): the flag string is
 // parsed at the edge, the override is computed against a base `ModelConfig`
 // passed in, and the app-layer phases apply it. When off it returns

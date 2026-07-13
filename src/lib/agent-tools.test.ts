@@ -103,6 +103,7 @@ describe("createAgentTools — surface scoping", () => {
       github: makeGithubCtx(),
     })
     expect(tools.map((t) => t.name).sort()).toEqual(["fetch_pr", "read_file_lines", "retrieve_codebase"])
+    expect(tools.find((tool) => tool.name === "retrieve_codebase")?.description).not.toContain("citations array")
   })
 
   it("Linear with no github ctx never exposes fetch_pr / read_file_lines", () => {
@@ -113,6 +114,37 @@ describe("createAgentTools — surface scoping", () => {
 })
 
 describe("retrieve_codebase", () => {
+  it("returns exact structured citation metadata on the Linear surface", async () => {
+    const ref = "c".repeat(40)
+    mockRetrieveChunks.mockResolvedValue([
+      {
+        path: "src/foo.ts",
+        lineStart: 10,
+        lineEnd: 30,
+        score: 0.85,
+        content: "function foo() {}",
+        indexedHeadSha: ref,
+      },
+    ])
+    const [tool] = createAgentTools({
+      env: makeEnv(),
+      surface: "linear-mention",
+      allowedRepos: ["acme/api"],
+    })
+    const result = (await tool!.execute(
+      { query: "where is foo", repo: "acme/api" },
+      new AbortController().signal,
+      new Map(),
+    )) as { chunks: Array<{ citation?: unknown }> }
+    expect(result.chunks[0]?.citation).toEqual({
+      repo: "acme/api",
+      path: "src/foo.ts",
+      lineStart: 10,
+      lineEnd: 30,
+      ref,
+    })
+  })
+
   it("returns ok with chunks when retrieveChunks succeeds", async () => {
     mockRetrieveChunks.mockResolvedValue([
       {

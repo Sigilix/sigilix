@@ -5,12 +5,18 @@
 // never a body value; non-admins are 403'd; seat bounds + tier gate are enforced.
 
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { readFileSync } from "node:fs"
+import worker from "@/src/index"
 import { handleBillingCheckoutRoute, handleBillingPortalRoute } from "@/src/lib/billing-checkout-route"
 import { base64urlEncode, createSession } from "@/src/lib/auth-session"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import type { Env } from "@/src/shared/types/env"
 
 const SESSION_COOKIE = "__Host-sigilix_session"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(7))
+const PORTAL_ORIGIN = "https://app.sigilix.ai"
+const CTX = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
+const migration = (name: string) => readFileSync(new URL(`../../migrations/${name}`, import.meta.url), "utf8")
 const NO_SUBSCRIPTION_DB = {
   prepare: () => ({ bind: () => ({ first: async () => null }) }),
 } as unknown as Env["SIGILIX_PLATFORM_DB"]
@@ -78,32 +84,29 @@ interface StubOpts {
 function stubFetch(opts: StubOpts) {
   const cap = opts.captured ?? {}
   cap.customerCalls = 0
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === "string" ? input : input.toString()
-      if (url.startsWith("https://api.github.com/user/installations?")) {
-        return new Response(
-          JSON.stringify({ total_count: opts.installations.length, installations: opts.installations }),
-        )
-      }
-      if (url.startsWith("https://api.github.com/user/memberships/orgs?")) {
-        return new Response(JSON.stringify(opts.memberships ?? []))
-      }
-      if (url === "https://api.stripe.com/v1/customers") {
-        cap.customerCalls = (cap.customerCalls ?? 0) + 1
-        return new Response(JSON.stringify({ id: "cus_new" }))
-      }
-      if (url === "https://api.stripe.com/v1/checkout/sessions") {
-        cap.checkoutBody = typeof init?.body === "string" ? init.body : ""
-        return new Response(JSON.stringify({ url: "https://checkout.stripe.com/pay/cs_test" }))
-      }
-      if (url === "https://api.stripe.com/v1/billing_portal/sessions") {
-        return new Response(JSON.stringify({ url: "https://billing.stripe.com/session/bp_test" }))
-      }
-      throw new Error(`unexpected fetch: ${url}`)
-    }),
-  )
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString()
+    if (url.startsWith("https://api.github.com/user/installations?")) {
+      return new Response(JSON.stringify({ total_count: opts.installations.length, installations: opts.installations }))
+    }
+    if (url.startsWith("https://api.github.com/user/memberships/orgs?")) {
+      return new Response(JSON.stringify(opts.memberships ?? []))
+    }
+    if (url === "https://api.stripe.com/v1/customers") {
+      cap.customerCalls = (cap.customerCalls ?? 0) + 1
+      return new Response(JSON.stringify({ id: "cus_new" }))
+    }
+    if (url === "https://api.stripe.com/v1/checkout/sessions") {
+      cap.checkoutBody = typeof init?.body === "string" ? init.body : ""
+      return new Response(JSON.stringify({ url: "https://checkout.stripe.com/pay/cs_test" }))
+    }
+    if (url === "https://api.stripe.com/v1/billing_portal/sessions") {
+      return new Response(JSON.stringify({ url: "https://billing.stripe.com/session/bp_test" }))
+    }
+    throw new Error(`unexpected fetch: ${url}`)
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  return fetchMock
 }
 
 /** An admin: owns a personal install (id 555, login matches the session). */
@@ -137,7 +140,7 @@ describe("POST /v1/billing/checkout", () => {
   it("401 without a session", async () => {
     const { kv } = makeKV()
     stubFetch({ installations: ADMIN_INSTALLS })
-    const res = await handleBillingCheckoutRoute(post({ tier: "pro" }, null), baseEnv(kv))
+    const res = await handleBillingCheckoutRoute(post({ tier: "pro", installationId: 555 }, null), baseEnv(kv))
     expect(res.status).toBe(401)
   })
 
@@ -355,16 +358,14 @@ describe("POST /v1/billing/checkout", () => {
     }
   })
 
-  it("defaults to the sole installation when none is selected, min seats for the tier", async () => {
+  it("requires an explicit installation even when GitHub would expose only one", async () => {
     const { kv } = makeKV()
     await seedSession(kv, "s1", "octocat")
-    const captured: { checkoutBody?: string } = {}
-    stubFetch({ installations: ADMIN_INSTALLS, captured })
+    const fetchMock = stubFetch({ installations: ADMIN_INSTALLS })
     const res = await handleBillingCheckoutRoute(post({ tier: "pro" }, "s1"), baseEnv(kv))
-    expect(res.status).toBe(200)
-    const form = new URLSearchParams(captured.checkoutBody)
-    expect(form.get("line_items[0][quantity]")).toBe("1") // pro min
-    expect(form.get("client_reference_id")).toBe("555")
+    expect(res.status).toBe(400)
+    await expect(res.json()).resolves.toEqual({ error: "installation_required" })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it("403 for a non-admin of the org (member of an org install)", async () => {
@@ -382,11 +383,12 @@ describe("POST /v1/billing/checkout", () => {
   it("400 for free / enterprise / unknown tiers", async () => {
     const { kv } = makeKV()
     await seedSession(kv, "s1", "octocat")
-    stubFetch({ installations: ADMIN_INSTALLS })
+    const fetchMock = stubFetch({ installations: ADMIN_INSTALLS })
     for (const tier of ["free", "enterprise", "gold"]) {
       const res = await handleBillingCheckoutRoute(post({ tier, installationId: 555 }, "s1"), baseEnv(kv))
       expect(res.status).toBe(400)
     }
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it("400 for out-of-range Teams seats (below 10)", async () => {
@@ -471,6 +473,19 @@ describe("POST /v1/billing/portal", () => {
     expect(body.url).toBe("https://billing.stripe.com/session/bp_test")
   })
 
+  it("requires an explicit installation instead of inferring the sole visible org", async () => {
+    const { kv, store } = makeKV()
+    await seedSession(kv, "s1", "octocat")
+    store.set("stripe-installation:555", "cus_existing")
+    const fetchMock = stubFetch({ installations: ADMIN_INSTALLS })
+
+    const res = await handleBillingPortalRoute(portalReq({}, "s1"), baseEnv(kv))
+
+    expect(res.status).toBe(400)
+    await expect(res.json()).resolves.toEqual({ error: "installation_required" })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it("404 when the org has no Stripe customer yet", async () => {
     const { kv } = makeKV()
     await seedSession(kv, "s1", "octocat")
@@ -489,5 +504,115 @@ describe("POST /v1/billing/portal", () => {
     })
     const res = await handleBillingPortalRoute(portalReq({ installationId: 777 }, "s1"), baseEnv(kv))
     expect(res.status).toBe(403)
+  })
+})
+
+async function makeManagedEnv(options: {
+  callerRole: "admin" | "member"
+  includeOtherAdmin?: boolean
+}): Promise<{ env: Env; db: D1Database; kv: KVNamespace; store: Map<string, string> }> {
+  const db = makeD1()
+  await db.exec(migration("0001_create_tenant_repo_usage.sql"))
+  await db.exec(migration("0011_add_tenant_subscription_status.sql"))
+  await db.exec(migration("0012_add_tenant_billing_source.sql"))
+  await db.exec(migration("0022_create_org_workspace_access.sql"))
+  await db
+    .prepare(
+      "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
+        " VALUES (555, 'acme', 'Organization', '2026-07-13T00:00:00.000Z', '2026-07-13T00:00:00.000Z')",
+    )
+    .run()
+
+  const seedAccess = async (githubUserId: string, role: "admin" | "member") => {
+    await db
+      .prepare(
+        "INSERT INTO org_workspace_access" +
+          " (installation_id, github_user_id, role, created_at, updated_at, revoked_at," +
+          " updated_by, last_audit_id, last_action) VALUES (555, ?, ?, ?, ?, NULL, ?, ?, ?)",
+      )
+      .bind(
+        githubUserId,
+        role,
+        "2026-07-13T00:00:00.000Z",
+        "2026-07-13T00:00:00.000Z",
+        "test-seed",
+        `billing-access-${githubUserId}`,
+        role === "admin" ? "bootstrap_admin" : "member_added_or_regranted",
+      )
+      .run()
+  }
+  await seedAccess("42", options.callerRole)
+  if (options.includeOtherAdmin) await seedAccess("99", "admin")
+
+  const { kv, store } = makeKV()
+  await seedSession(kv, "managed-session", "octocat")
+  store.set("stripe-installation:555", "cus_existing")
+  return {
+    db,
+    kv,
+    store,
+    env: baseEnv(kv, {
+      SIGILIX_PLATFORM_DB: db,
+      OPENCLAW_ORG_MEMBERSHIP_MODE: "on",
+      SIGILIX_PORTAL_ORIGIN: PORTAL_ORIGIN,
+    }),
+  }
+}
+
+function workerPost(path: "/v1/billing/checkout" | "/v1/billing/portal", body: unknown): Request {
+  return new Request(`https://api.sigilix.ai${path}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      cookie: `${SESSION_COOKIE}=managed-session`,
+      origin: PORTAL_ORIGIN,
+    },
+    body: JSON.stringify(body),
+  })
+}
+
+describe("managed billing authorization through worker.fetch", () => {
+  it("denies a stored member who remains a live GitHub admin before either Stripe operation", async () => {
+    const { env } = await makeManagedEnv({ callerRole: "member", includeOtherAdmin: true })
+    const fetchMock = stubFetch({
+      installations: [{ id: 555, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
+    })
+
+    const checkout = await worker.fetch(
+      workerPost("/v1/billing/checkout", { tier: "pro", seats: 1, installationId: 555 }),
+      env,
+      CTX,
+    )
+    const portal = await worker.fetch(workerPost("/v1/billing/portal", { installationId: 555 }), env, CTX)
+
+    expect(checkout.status).toBe(403)
+    expect(portal.status).toBe(403)
+    expect(checkout.headers.get("access-control-allow-origin")).toBe(PORTAL_ORIGIN)
+    expect(portal.headers.get("access-control-allow-origin")).toBe(PORTAL_ORIGIN)
+    expect(
+      fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes("api.stripe.com")),
+    ).toEqual([])
+  })
+
+  it("lets a stored Sigilix admin use both Stripe routes when the live GitHub role is member", async () => {
+    const { env } = await makeManagedEnv({ callerRole: "admin" })
+    const captured: { checkoutBody?: string } = {}
+    stubFetch({
+      installations: [{ id: 555, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "member", state: "active", organization: { login: "acme" } }],
+      captured,
+    })
+
+    const checkout = await worker.fetch(
+      workerPost("/v1/billing/checkout", { tier: "pro", seats: 1, installationId: 555 }),
+      env,
+      CTX,
+    )
+    const portal = await worker.fetch(workerPost("/v1/billing/portal", { installationId: 555 }), env, CTX)
+
+    expect(checkout.status).toBe(200)
+    expect(portal.status).toBe(200)
+    expect(new URLSearchParams(captured.checkoutBody).get("client_reference_id")).toBe("555")
   })
 })

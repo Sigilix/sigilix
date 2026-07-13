@@ -16,6 +16,7 @@ import type { RosterResult } from "@/src/lib/org-members-roster"
 // activity-only assertions below are unaffected.
 const rosterMock = vi.fn<(...a: unknown[]) => Promise<RosterResult>>(async () => ({
   members: [],
+  complete: true,
   source: "none",
 }))
 vi.mock("@/src/lib/org-members-roster", () => ({
@@ -177,7 +178,7 @@ function stubGitHub(opts: {
 afterEach(() => {
   vi.unstubAllGlobals()
   rosterMock.mockReset()
-  rosterMock.mockResolvedValue({ members: [], source: "none" })
+  rosterMock.mockResolvedValue({ members: [], complete: true, source: "none" })
 })
 
 describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
@@ -296,6 +297,7 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
         { login: "Octocat", avatarUrl: "https://avatars/octocat" },
         { login: "newbie", avatarUrl: "https://avatars/newbie" },
       ],
+      complete: true,
       source: "org",
     })
 
@@ -338,7 +340,11 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
           " VALUES (1, 'newbie', 1, 0, '2026-06-01T00:00:00.000Z')",
       )
       .run()
-    rosterMock.mockResolvedValue({ members: [{ login: "newbie", avatarUrl: "" }], source: "org" })
+    rosterMock.mockResolvedValue({
+      members: [{ login: "newbie", avatarUrl: "" }],
+      complete: true,
+      source: "org",
+    })
 
     const res = await handleOrgOverviewRoute(reqWithSession("sess-1"), env)
     const body = (await res.json()) as OrgOverviewResponse
@@ -368,7 +374,12 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
       authorLogin: "octocat",
       createdAt: "2026-06-05T00:00:00.000Z",
     })
-    rosterMock.mockResolvedValue({ members: [], source: "org", reason: "org_members_unavailable" })
+    rosterMock.mockResolvedValue({
+      members: [],
+      complete: false,
+      source: "org",
+      reason: "org_members_unavailable",
+    })
 
     const res = await handleOrgOverviewRoute(reqWithSession("sess-1"), env)
     expect(res.status).toBe(200)

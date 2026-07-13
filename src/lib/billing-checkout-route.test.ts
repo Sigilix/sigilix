@@ -11,6 +11,9 @@ import type { Env } from "@/src/shared/types/env"
 
 const SESSION_COOKIE = "__Host-sigilix_session"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(7))
+const NO_SUBSCRIPTION_DB = {
+  prepare: () => ({ bind: () => ({ first: async () => null }) }),
+} as unknown as Env["SIGILIX_PLATFORM_DB"]
 
 function makeKV(): { kv: KVNamespace; store: Map<string, string> } {
   const store = new Map<string, string>()
@@ -49,6 +52,7 @@ function baseEnv(kv: KVNamespace, extra: Record<string, unknown> = {}): Env {
     SIGILIX_STRIPE_PRICE_TEAMS: "price_teams",
     SIGILIX_STRIPE_PRICE_MAX: "price_max",
     SIGILIX_STRIPE_PRICE_ULTRA: "price_ultra",
+    SIGILIX_PLATFORM_DB: NO_SUBSCRIPTION_DB,
     ...extra,
   } as unknown as Env
 }
@@ -109,6 +113,21 @@ describe("POST /v1/billing/checkout", () => {
     const env = baseEnv(kv, { SIGILIX_STRIPE_SECRET_KEY: undefined })
     const res = await handleBillingCheckoutRoute(post({ tier: "pro" }, null), env)
     expect(res.status).toBe(503)
+  })
+
+  it("503 when SIGILIX_PLATFORM_DB is unset — never reaches Stripe", async () => {
+    const { kv } = makeKV()
+    await seedSession(kv, "s1", "octocat")
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+
+    const res = await handleBillingCheckoutRoute(
+      post({ tier: "pro", installationId: 555 }, "s1"),
+      baseEnv(kv, { SIGILIX_PLATFORM_DB: undefined }),
+    )
+
+    expect(res.status).toBe(503)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it("401 without a session", async () => {

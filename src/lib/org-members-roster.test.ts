@@ -30,7 +30,7 @@ describe("fetchInstallationRoster", () => {
       complete: true,
     })
     const res = await fetchInstallationRoster(appEnv, 7, "acme", "Organization")
-    expect(res).toEqual({ members: [{ login: "alice", avatarUrl: "a" }], source: "org" })
+    expect(res).toEqual({ members: [{ login: "alice", avatarUrl: "a" }], complete: true, source: "org" })
     expect(listOrgMembers).toHaveBeenCalledWith(KV, "123", "pem", 7, "acme")
     expect(listInstallationCollaborators).not.toHaveBeenCalled()
   })
@@ -41,7 +41,7 @@ describe("fetchInstallationRoster", () => {
       complete: true,
     })
     const res = await fetchInstallationRoster(appEnv, 7, "octocat", "User")
-    expect(res).toEqual({ members: [{ login: "dana", avatarUrl: "d" }], source: "collaborators" })
+    expect(res).toEqual({ members: [{ login: "dana", avatarUrl: "d" }], complete: true, source: "collaborators" })
     expect(listInstallationCollaborators).toHaveBeenCalledWith(KV, "123", "pem", 7)
     expect(listOrgMembers).not.toHaveBeenCalled()
   })
@@ -56,20 +56,20 @@ describe("fetchInstallationRoster", () => {
   it("org members empty/partial → source org with a reason (fail-soft)", async () => {
     listOrgMembers.mockResolvedValue({ items: [], complete: false })
     const res = await fetchInstallationRoster(appEnv, 7, "acme", "Organization")
-    expect(res).toEqual({ members: [], source: "org", reason: "org_members_unavailable" })
+    expect(res).toEqual({ members: [], complete: false, source: "org", reason: "org_members_unavailable" })
   })
 
   it("missing App credentials → skipped, source none + reason (never calls GitHub)", async () => {
     const bare = { OPENCLAW_STATE: KV } as unknown as Env
     const res = await fetchInstallationRoster(bare, 7, "acme", "Organization")
-    expect(res).toEqual({ members: [], source: "none", reason: "app_unconfigured" })
+    expect(res).toEqual({ members: [], complete: false, source: "none", reason: "app_unconfigured" })
     expect(listOrgMembers).not.toHaveBeenCalled()
     expect(listInstallationCollaborators).not.toHaveBeenCalled()
   })
 
   it("non-positive installation id → skipped, source none + reason", async () => {
     const res = await fetchInstallationRoster(appEnv, 0, "acme", "Organization")
-    expect(res).toEqual({ members: [], source: "none", reason: "no_installation" })
+    expect(res).toEqual({ members: [], complete: false, source: "none", reason: "no_installation" })
     expect(listOrgMembers).not.toHaveBeenCalled()
   })
 })

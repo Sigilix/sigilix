@@ -117,22 +117,15 @@ async function parseJsonObject(request: Request): Promise<Record<string, unknown
  * from the shared reader would conflate a fault with "no row" and let a duplicate
  * subscription through during an outage — see the checkout guard).
  *
- *   • "none"  — no billing DB configured, or no tenant row, or a non-live status.
+ *   • "none"  — no tenant row, or a non-live status.
  *               A first-time checkout MUST proceed here (there is nothing to duplicate).
  *   • "live"  — active/trialing subscription on file → block a second checkout (409).
  *   • "error" — the read threw (D1 outage) → the caller returns 503, never Stripe.
  */
-async function readSubscriptionLiveness(
-  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
-  installationId: number,
-): Promise<"none" | "live" | "error"> {
-  // No billing DB configured is a static deploy state (not a transient fault): there
-  // are no subscriptions to duplicate, so allow checkout rather than hard-blocking it.
-  if (!env.SIGILIX_PLATFORM_DB) return "none"
+async function readSubscriptionLiveness(db: D1Database, installationId: number): Promise<"none" | "live" | "error"> {
   try {
-    const row = await env.SIGILIX_PLATFORM_DB.prepare(
-      "SELECT subscription_status FROM tenant WHERE installation_id = ?",
-    )
+    const row = await db
+      .prepare("SELECT subscription_status FROM tenant WHERE installation_id = ?")
       .bind(installationId)
       .first<{ subscription_status: unknown }>()
     if (row == null) return "none"
@@ -267,6 +260,10 @@ export async function handleBillingCheckoutRoute(
 ): Promise<Response> {
   const secret = env.SIGILIX_STRIPE_SECRET_KEY
   if (!secret) return json({ error: "stripe_not_configured" }, 503)
+  if (!env.SIGILIX_PLATFORM_DB) {
+    console.error(JSON.stringify({ event: "billing-platform-db-missing" }))
+    return json({ error: "billing_unavailable" }, 503)
+  }
 
   // CSRF guard: these routes authenticate by a SameSite=None session cookie, so a
   // cross-site form/fetch with a CORS-simple content-type could otherwise drive a
@@ -285,7 +282,7 @@ export async function handleBillingCheckoutRoute(
   // single cancellation (webhook downgrades by customer) drop the tenant to free while
   // the other sub is live. Send them to the Billing Portal (Manage billing) instead.
   // FAIL CLOSED on a read fault: proceeding on an unknown status could duplicate a sub.
-  const liveness = await readSubscriptionLiveness(env, admin.installationId)
+  const liveness = await readSubscriptionLiveness(env.SIGILIX_PLATFORM_DB, admin.installationId)
   if (liveness === "error") return json({ error: "billing_unavailable" }, 503)
   if (liveness === "live") return json({ error: "already_subscribed" }, 409)
 

@@ -318,6 +318,22 @@ export interface SecretHit {
   fingerprint: string
 }
 
+/**
+ * Detect provider-specific credential material in user-authored plain text.
+ * The generic high-entropy rule is deliberately excluded: it is warning-only
+ * for source diffs and would reject harmless hashes or prose in a memory form.
+ */
+export function hasHighConfidenceSecretText(text: string): boolean {
+  if (!text) return false
+  return text.split(/\r?\n/).some((line) =>
+    RULES.some((rule) => {
+      if (rule.severity === "warn") return false
+      rule.pattern.lastIndex = 0
+      return rule.pattern.test(line)
+    }),
+  )
+}
+
 const REDACTED_KEEP = 4
 
 /**

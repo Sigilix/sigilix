@@ -40,6 +40,14 @@ import {
 const DEFAULT_PORTAL_URL = "https://app.sigilix.ai"
 const MAX_INSTALLATION_PAGES = 20
 
+/**
+ * The sole active/trialing tenant marker allowed to start self-serve Stripe Checkout.
+ * It identifies a historical entitlement that is not backed by a billing provider.
+ * Every other active source — including null or an unknown future value — blocks
+ * fail-closed. This must never be inferred from a missing KV customer link.
+ */
+const LEGACY_ENTITLEMENT_BILLING_SOURCE = "legacy_entitlement"
+
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 }
@@ -112,25 +120,31 @@ async function parseJsonObject(request: Request): Promise<Record<string, unknown
 }
 
 /**
- * Whether the org already has a LIVE (active/trialing) Stripe subscription — the
- * anti-duplicate signal. DISCRIMINATED so a genuine D1 fault can FAIL CLOSED (a null
+ * Whether the org is eligible to start Stripe Checkout — the anti-duplicate signal.
+ * DISCRIMINATED so a genuine D1 fault can FAIL CLOSED (a null
  * from the shared reader would conflate a fault with "no row" and let a duplicate
  * subscription through during an outage — see the checkout guard).
  *
- *   • "none"  — no tenant row, or a non-live status.
- *               A first-time checkout MUST proceed here (there is nothing to duplicate).
- *   • "live"  — active/trialing subscription on file → block a second checkout (409).
+ *   • "none"   — no tenant row, or a non-live status → proceed.
+ *   • "legacy" — active/trialing, but explicitly marked as a non-provider legacy
+ *                  entitlement → proceed into the first real Stripe checkout.
+ *   • "live"   — active/trialing under every other source, including null/unknown
+ *                  → block a second checkout (409).
  *   • "error" — the read threw (D1 outage) → the caller returns 503, never Stripe.
  */
-async function readSubscriptionLiveness(db: D1Database, installationId: number): Promise<"none" | "live" | "error"> {
+async function readSubscriptionLiveness(
+  db: D1Database,
+  installationId: number,
+): Promise<"none" | "legacy" | "live" | "error"> {
   try {
     const row = await db
-      .prepare("SELECT subscription_status FROM tenant WHERE installation_id = ?")
+      .prepare("SELECT subscription_status, billing_source FROM tenant WHERE installation_id = ?")
       .bind(installationId)
-      .first<{ subscription_status: unknown }>()
+      .first<{ subscription_status: unknown; billing_source: unknown }>()
     if (row == null) return "none"
-    const status = typeof row.subscription_status === "string" ? row.subscription_status.toLowerCase() : null
-    return status === "active" || status === "trialing" ? "live" : "none"
+    const status = typeof row.subscription_status === "string" ? row.subscription_status.trim().toLowerCase() : null
+    if (status !== "active" && status !== "trialing") return "none"
+    return row.billing_source === LEGACY_ENTITLEMENT_BILLING_SOURCE ? "legacy" : "live"
   } catch (error) {
     console.error(
       JSON.stringify({
@@ -277,6 +291,27 @@ export async function handleBillingCheckoutRoute(
   const admin = await resolveAdminContext(request, env, ctx, body.installationId)
   if (!admin.ok) return admin.response
 
+  const validation = validateCheckoutRequest({
+    tier: body.tier,
+    seats: body.seats,
+    billingPeriod: body.billingPeriod,
+  })
+  if (!validation.ok) return json({ error: validation.error }, validation.status)
+
+  // Worker-first rollout compatibility: old Portal clients omit the new field. Emit
+  // at validation time (including later 409/503 paths), separately from success, so
+  // operators can measure when it is safe to require an explicit cadence.
+  if (validation.billingPeriodDefaulted) {
+    console.warn(
+      JSON.stringify({
+        event: "billing-checkout-period-defaulted",
+        installationId: admin.installationId,
+        tier: validation.tier,
+        billingPeriod: validation.billingPeriod,
+      }),
+    )
+  }
+
   // Anti-duplicate-subscription: an org that already has a live (active/trialing)
   // subscription must NOT start a second one — a duplicate would double-bill and let a
   // single cancellation (webhook downgrades by customer) drop the tenant to free while
@@ -286,12 +321,15 @@ export async function handleBillingCheckoutRoute(
   if (liveness === "error") return json({ error: "billing_unavailable" }, 503)
   if (liveness === "live") return json({ error: "already_subscribed" }, 409)
 
-  const validation = validateCheckoutRequest({ tier: body.tier, seats: body.seats })
-  if (!validation.ok) return json({ error: validation.error }, validation.status)
-
-  const priceId = resolvePriceForTier(validation.tier, resolvePriceTierConfig(env))
+  const priceId = resolvePriceForTier(validation.tier, validation.billingPeriod, resolvePriceTierConfig(env))
   if (!priceId) {
-    console.error(JSON.stringify({ event: "billing-price-not-configured", tier: validation.tier }))
+    console.error(
+      JSON.stringify({
+        event: "billing-price-not-configured",
+        tier: validation.tier,
+        billingPeriod: validation.billingPeriod,
+      }),
+    )
     return json({ error: "tier_not_available" }, 503)
   }
 
@@ -304,6 +342,7 @@ export async function handleBillingCheckoutRoute(
     seats: validation.seats,
     bounds: validation.bounds,
     tier: validation.tier,
+    billingPeriod: validation.billingPeriod,
     installationId: admin.installationId,
     customerId: customer.customerId,
     successUrl: `${base}/org?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
@@ -318,6 +357,7 @@ export async function handleBillingCheckoutRoute(
       event: "billing-checkout-created",
       installationId: admin.installationId,
       tier: validation.tier,
+      billingPeriod: validation.billingPeriod,
       seats: validation.seats,
     }),
   )

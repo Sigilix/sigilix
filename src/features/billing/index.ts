@@ -14,6 +14,7 @@ export {
   resolvePriceForTier,
   buildCheckoutForm,
   type PaidTier,
+  type BillingPeriod,
 } from "./domain/checkout-session"
 export { createStripeCustomer, createCheckoutSession, createBillingPortalSession } from "./adapters/stripe-api"
 export { linkCustomerToInstallation, resolveCustomerForInstallation } from "./adapters/stripe-link-store"

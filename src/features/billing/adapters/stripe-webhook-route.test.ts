@@ -41,6 +41,10 @@ async function makeEnv(extra: Partial<Env> = {}) {
     SIGILIX_STRIPE_PRICE_TEAMS: "price_teams",
     SIGILIX_STRIPE_PRICE_MAX: "price_max",
     SIGILIX_STRIPE_PRICE_ULTRA: "price_ultra",
+    SIGILIX_STRIPE_PRICE_PRO_ANNUAL: "price_pro_annual",
+    SIGILIX_STRIPE_PRICE_TEAMS_ANNUAL: "price_teams_annual",
+    SIGILIX_STRIPE_PRICE_MAX_ANNUAL: "price_max_annual",
+    SIGILIX_STRIPE_PRICE_ULTRA_ANNUAL: "price_ultra_annual",
     SIGILIX_PLATFORM_DB: db,
     OPENCLAW_STATE: kv,
     ...extra,
@@ -126,6 +130,23 @@ describe("handleStripeWebhookRoute", () => {
     expect(res.status).toBe(200)
     expect(await readTier(db, 42)).toBe("max")
     expect(store.get("stripe-customer:cus_A")).toBe("42")
+  })
+
+  it("annual price: checkout.session.completed maps the exact annual id to its tier", async () => {
+    const req = await signedReq({
+      id: "e_checkout_annual",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          customer: "cus_ANNUAL",
+          client_reference_id: "43",
+          subscription: { status: "active", items: { data: [{ price: { id: "price_max_annual" } }] } },
+        },
+      },
+    })
+    const res = await handleStripeWebhookRoute(req, env)
+    expect(res.status).toBe(200)
+    expect(await readTier(db, 43)).toBe("max")
   })
 
   it("sig-trial-cap: trialing subscription persists tier + subscription_status='trialing'; converting to active restores 'active'", async () => {

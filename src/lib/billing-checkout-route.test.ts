@@ -52,6 +52,10 @@ function baseEnv(kv: KVNamespace, extra: Record<string, unknown> = {}): Env {
     SIGILIX_STRIPE_PRICE_TEAMS: "price_teams",
     SIGILIX_STRIPE_PRICE_MAX: "price_max",
     SIGILIX_STRIPE_PRICE_ULTRA: "price_ultra",
+    SIGILIX_STRIPE_PRICE_PRO_ANNUAL: "price_pro_annual",
+    SIGILIX_STRIPE_PRICE_TEAMS_ANNUAL: "price_teams_annual",
+    SIGILIX_STRIPE_PRICE_MAX_ANNUAL: "price_max_annual",
+    SIGILIX_STRIPE_PRICE_ULTRA_ANNUAL: "price_ultra_annual",
     SIGILIX_PLATFORM_DB: NO_SUBSCRIPTION_DB,
     ...extra,
   } as unknown as Env
@@ -164,22 +168,52 @@ describe("POST /v1/billing/checkout", () => {
     expect(res.status).toBe(400)
   })
 
-  it("409 when the org already has a live (active/trialing) subscription", async () => {
+  it("409 for active/trialing Stripe, Marketplace, null, and unknown billing sources", async () => {
+    for (const [subscriptionStatus, billingSource] of [
+      ["active", "stripe"],
+      ["trialing", "github_marketplace"],
+      ["active", null],
+      ["active", "future_provider"],
+      ["active", " legacy_entitlement "],
+    ] as const) {
+      const { kv } = makeKV()
+      await seedSession(kv, "s1", "octocat")
+      const captured: { checkoutBody?: string } = {}
+      stubFetch({ installations: ADMIN_INSTALLS, captured })
+      const db = {
+        prepare: () => ({
+          bind: () => ({
+            first: async () => ({ subscription_status: subscriptionStatus, billing_source: billingSource }),
+          }),
+        }),
+      } as unknown as Env["SIGILIX_PLATFORM_DB"]
+      const res = await handleBillingCheckoutRoute(
+        post({ tier: "max", billingPeriod: "annual", installationId: 555 }, "s1"),
+        baseEnv(kv, { SIGILIX_PLATFORM_DB: db }),
+      )
+      expect(res.status).toBe(409)
+      expect(captured.checkoutBody).toBeUndefined()
+    }
+  })
+
+  it("allows an active legacy entitlement to enter Stripe checkout only with the explicit legacy marker", async () => {
     const { kv } = makeKV()
     await seedSession(kv, "s1", "octocat")
     const captured: { checkoutBody?: string } = {}
     stubFetch({ installations: ADMIN_INSTALLS, captured })
-    // A tenant row whose Stripe subscription is already active → a second checkout
-    // would double-subscribe. Send them to the portal (409), never to Stripe.
     const db = {
-      prepare: () => ({ bind: () => ({ first: async () => ({ subscription_status: "active" }) }) }),
+      prepare: () => ({
+        bind: () => ({
+          first: async () => ({ subscription_status: "active", billing_source: "legacy_entitlement" }),
+        }),
+      }),
     } as unknown as Env["SIGILIX_PLATFORM_DB"]
     const res = await handleBillingCheckoutRoute(
-      post({ tier: "max", installationId: 555 }, "s1"),
+      post({ tier: "max", billingPeriod: "annual", installationId: 555 }, "s1"),
       baseEnv(kv, { SIGILIX_PLATFORM_DB: db }),
     )
-    expect(res.status).toBe(409)
-    expect(captured.checkoutBody).toBeUndefined() // never reached Stripe
+    expect(res.status).toBe(200)
+    expect(new URLSearchParams(captured.checkoutBody).get("line_items[0][price]")).toBe("price_max_annual")
   })
 
   it("503 (fail closed) when the subscription-status read throws — never risks a duplicate", async () => {
@@ -250,6 +284,54 @@ describe("POST /v1/billing/checkout", () => {
     expect(res.status).toBe(200)
     const form = new URLSearchParams(captured.checkoutBody)
     expect(form.get("subscription_data[trial_period_days]")).toBe("14")
+  })
+
+  it("routes an annual selection to the exact annual Stripe price", async () => {
+    const { kv } = makeKV()
+    await seedSession(kv, "s1", "octocat")
+    const captured: { checkoutBody?: string } = {}
+    stubFetch({ installations: ADMIN_INSTALLS, captured })
+
+    const res = await handleBillingCheckoutRoute(
+      post({ tier: "teams", seats: 10, billingPeriod: "annual", installationId: 555 }, "s1"),
+      baseEnv(kv),
+    )
+    expect(res.status).toBe(200)
+    const form = new URLSearchParams(captured.checkoutBody)
+    expect(form.get("line_items[0][price]")).toBe("price_teams_annual")
+    expect(form.get("subscription_data[metadata][billing_period]")).toBe("annual")
+  })
+
+  it("defaults an omitted billingPeriod to monthly and emits a structured migration log", async () => {
+    const { kv } = makeKV()
+    await seedSession(kv, "s1", "octocat")
+    const captured: { checkoutBody?: string } = {}
+    stubFetch({ installations: ADMIN_INSTALLS, captured })
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    const res = await handleBillingCheckoutRoute(post({ tier: "pro", installationId: 555 }, "s1"), baseEnv(kv))
+    expect(res.status).toBe(200)
+    expect(new URLSearchParams(captured.checkoutBody).get("line_items[0][price]")).toBe("price_pro")
+    expect(
+      warn.mock.calls
+        .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+        .find((entry) => entry.event === "billing-checkout-period-defaulted"),
+    ).toMatchObject({ installationId: 555, tier: "pro", billingPeriod: "monthly" })
+    warn.mockRestore()
+  })
+
+  it("400 for an invalid provided billingPeriod and never reaches Stripe", async () => {
+    const { kv } = makeKV()
+    await seedSession(kv, "s1", "octocat")
+    const captured: { checkoutBody?: string } = {}
+    stubFetch({ installations: ADMIN_INSTALLS, captured })
+    const res = await handleBillingCheckoutRoute(
+      post({ tier: "pro", billingPeriod: "yearly", installationId: 555 }, "s1"),
+      baseEnv(kv),
+    )
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ error: "invalid_billing_period" })
+    expect(captured.checkoutBody).toBeUndefined()
   })
 
   it("grants NO trial for teams / max / ultra — even when the body spoofs a trial intent", async () => {
@@ -325,6 +407,20 @@ describe("POST /v1/billing/checkout", () => {
     const env = baseEnv(kv, { SIGILIX_STRIPE_PRICE_MAX: undefined })
     const res = await handleBillingCheckoutRoute(post({ tier: "max", installationId: 555 }, "s1"), env)
     expect(res.status).toBe(503)
+  })
+
+  it("503 when the selected annual price id is not configured", async () => {
+    const { kv } = makeKV()
+    await seedSession(kv, "s1", "octocat")
+    const captured: { checkoutBody?: string } = {}
+    stubFetch({ installations: ADMIN_INSTALLS, captured })
+    const env = baseEnv(kv, { SIGILIX_STRIPE_PRICE_MAX_ANNUAL: undefined })
+    const res = await handleBillingCheckoutRoute(
+      post({ tier: "max", billingPeriod: "annual", installationId: 555 }, "s1"),
+      env,
+    )
+    expect(res.status).toBe(503)
+    expect(captured.checkoutBody).toBeUndefined()
   })
 
   it("reuses the existing Stripe customer via the KV link (no duplicate customer)", async () => {

@@ -1346,8 +1346,10 @@ export interface Env extends AwsBedrockEnv {
   //                                   you save the webhook destination. HMAC-verifies
   //                                   every delivery; unset → the route 503s. Set via
   //                                   `wrangler secret put SIGILIX_STRIPE_WEBHOOK_SECRET`.
-  //   SIGILIX_STRIPE_PRICE_PRO / _TEAMS / _MAX / _ULTRA — the Stripe price ids (`price_…`)
-  //                                   that map a subscription to the Sigilix
+  //   SIGILIX_STRIPE_PRICE_PRO / _TEAMS / _MAX / _ULTRA — the monthly Stripe price ids (`price_…`).
+  //   SIGILIX_STRIPE_PRICE_PRO_ANNUAL / _TEAMS_ANNUAL /
+  //   _MAX_ANNUAL / _ULTRA_ANNUAL — the optional annual Stripe price ids. Together
+  //                                   these map a subscription to the Sigilix
   //                                   pro/teams/max/ultra tier. A price with no id match
   //                                   falls back to a `lookup_key`/`nickname` containing
   //                                   pro|teams|max|ultra.
@@ -1357,6 +1359,10 @@ export interface Env extends AwsBedrockEnv {
   SIGILIX_STRIPE_PRICE_TEAMS?: string
   SIGILIX_STRIPE_PRICE_MAX?: string
   SIGILIX_STRIPE_PRICE_ULTRA?: string
+  SIGILIX_STRIPE_PRICE_PRO_ANNUAL?: string
+  SIGILIX_STRIPE_PRICE_TEAMS_ANNUAL?: string
+  SIGILIX_STRIPE_PRICE_MAX_ANNUAL?: string
+  SIGILIX_STRIPE_PRICE_ULTRA_ANNUAL?: string
 
   // sig-github-marketplace-billing: GitHub Marketplace subscriptions arrive at the SAME
   // POST /github/webhook endpoint (X-GitHub-Event: marketplace_purchase), verified by

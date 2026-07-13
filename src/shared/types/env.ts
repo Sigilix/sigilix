@@ -1386,6 +1386,7 @@ export interface Env extends AwsBedrockEnv {
   OPENCLAW_PLAN?: string
   OPENCLAW_PER_SEAT_PRICE?: string
 
+  OPENCLAW_ORG_MEMBERSHIP_MODE?: string
   // SIG-545 A: GitHub-PR "@sigilix make a linear triage" command.
   //   OPENCLAW_GITHUB_LINEAR_TRIAGE_MODE  "off" (default/unknown) | "shadow" | "on".
   //   OPENCLAW_GITHUB_REPO_LINEAR_TEAM_MAP  JSON {"owner/repo":"<linearTeamId>","owner":"<linearTeamId>"}

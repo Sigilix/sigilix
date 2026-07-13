@@ -24,6 +24,8 @@ describe("handleOrgRoutes dispatcher", () => {
       ["GET", "https://x/v1/org/1/members/dev/seat"], // seat path but wrong method
       ["POST", "https://x/v1/org/overview"], // overview path but wrong method
       ["DELETE", "https://x/v1/org/1/members/dev/seat"],
+      ["PUT", "https://x/v1/org/1/members"],
+      ["POST", "https://x/v1/org/1/members/222"],
       ["GET", "https://x/v1/org/unknown"],
       ["GET", "https://x/v1/other"],
     ]
@@ -55,6 +57,36 @@ describe("handleOrgRoutes dispatcher", () => {
     expect(res).not.toBeNull()
     expect(res!.status).toBe(204)
     expect(res!.headers.get("access-control-allow-methods")).toContain("POST")
+  })
+
+  it("answers CORS preflight for member collection and immutable-id item paths", async () => {
+    for (const path of ["/v1/org/1/members", "/v1/org/1/members/222"]) {
+      const req = new Request(`https://x${path}`, {
+        method: "OPTIONS",
+        headers: { origin: PORTAL_ORIGIN },
+      })
+      const res = await handleOrgRoutes(req, env, ctx)
+      expect(res, path).not.toBeNull()
+      expect(res!.status, path).toBe(204)
+      expect(res!.headers.get("access-control-allow-methods")).toContain("PATCH")
+      expect(res!.headers.get("access-control-allow-methods")).toContain("DELETE")
+    }
+  })
+
+  it("rejects malformed member-route identifiers before authentication", async () => {
+    const cases: Array<[string, string]> = [
+      ["POST", "https://x/v1/org/not-a-number/members"],
+      ["PATCH", "https://x/v1/org/1/members/not-an-id"],
+    ]
+    for (const [method, url] of cases) {
+      const res = await handleOrgRoutes(
+        new Request(url, { method, headers: { "content-type": "application/json" }, body: "{}" }),
+        env,
+        ctx,
+      )
+      expect(res, `${method} ${url}`).not.toBeNull()
+      expect(res!.status, `${method} ${url}`).toBe(400)
+    }
   })
 
   it("refuses the preflight for an org path from a non-allowlisted origin (403)", async () => {

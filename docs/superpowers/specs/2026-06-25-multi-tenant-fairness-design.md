@@ -227,6 +227,7 @@ that depends on them. This section is the **living ledger** — every migration 
 | 5 | sig-trial-cap | D1 | `migrations/0011_add_tenant_subscription_status.sql` | Adds `tenant.subscription_status` (trialing vs active) driving the half-volume trial cap; backfills existing paid tenants to `active` | `wrangler d1 migrations apply` (pre-deploy) |
 | 6 | Stripe seat reconciliation | D1 | `migrations/0020_create_stripe_seat_reconciliation.sql` | Stripe seat snapshot, durable operation intent, and conditional reconciliation lease | `wrangler d1 migrations apply` (pre-deploy) |
 | 7 | app-memory | D1 | `migrations/0021_create_app_memory.sql` | Adds installation-scoped personal and organization app-memory rows after Stripe reconciliation migration `0020` | `wrangler d1 migrations apply` (pre-deploy) |
+| 8 | org workspace roles | D1 | `migrations/0022_create_org_workspace_access.sql` | Adds dark, exact-installation Sigilix membership roles, revocation tombstones, and durable mutation audit; no legacy rows are copied before rollout | `wrangler d1 migrations apply` (pre-deploy) |
 
 > Rule: a PR that adds a DO bumps the `[[migrations]]` list (never reorders existing tags); a PR that
 > touches D1 schema adds the next-numbered SQL file (never edits a prior one) and updates this ledger.

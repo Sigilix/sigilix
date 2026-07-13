@@ -294,8 +294,8 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
     // Roster: the active author (with an avatar) + a never-active org member.
     rosterMock.mockResolvedValue({
       members: [
-        { login: "Octocat", avatarUrl: "https://avatars/octocat" },
-        { login: "newbie", avatarUrl: "https://avatars/newbie" },
+        { githubUserId: "111", login: "Octocat", avatarUrl: "https://avatars/octocat" },
+        { githubUserId: "222", login: "newbie", avatarUrl: "https://avatars/newbie" },
       ],
       complete: true,
       source: "org",
@@ -308,9 +308,15 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
     expect(rosterMock).toHaveBeenCalledWith(env, 1, "octocat", expect.any(String))
     const byLogin = Object.fromEntries(body.seats.map((s) => [s.login.toLowerCase(), s]))
     // Active seat: assigned (derived), avatar picked up from the roster.
-    expect(byLogin["octocat"]).toMatchObject({ assigned: true, reviews: 1, avatarUrl: "https://avatars/octocat" })
+    expect(byLogin["octocat"]).toMatchObject({
+      githubUserId: "111",
+      assigned: true,
+      reviews: 1,
+      avatarUrl: "https://avatars/octocat",
+    })
     // Roster-only member: appended, no activity, default UNASSIGNED.
     expect(byLogin["newbie"]).toMatchObject({
+      githubUserId: "222",
       assigned: false,
       reviews: 0,
       lastActiveAt: "",
@@ -341,7 +347,7 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
       )
       .run()
     rosterMock.mockResolvedValue({
-      members: [{ login: "newbie", avatarUrl: "" }],
+      members: [{ githubUserId: "222", login: "newbie", avatarUrl: "" }],
       complete: true,
       source: "org",
     })

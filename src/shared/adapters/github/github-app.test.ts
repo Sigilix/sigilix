@@ -373,7 +373,7 @@ const okToken = () =>
 describe("listOrgMembers", () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it("returns {login, avatarUrl} for the org (token auth, /orgs/{org}/members)", async () => {
+  it("returns stable IDs and dedupes org members by immutable GitHub user ID", async () => {
     const authSchemes: string[] = []
     vi.stubGlobal(
       "fetch",
@@ -385,8 +385,10 @@ describe("listOrgMembers", () => {
           return p === "1"
             ? new Response(
                 JSON.stringify([
-                  { login: "alice", avatar_url: "https://avatars/alice" },
-                  { login: "bob", avatar_url: "https://avatars/bob" },
+                  { id: 101, login: "alice", avatar_url: "https://avatars/alice" },
+                  { id: 101, login: "alice-renamed", avatar_url: "https://avatars/alice-renamed" },
+                  { id: 102, login: "bob", avatar_url: "https://avatars/bob" },
+                  { id: 103, login: "alice", avatar_url: "https://avatars/another-alice" },
                 ]),
                 { status: 200 },
               )
@@ -398,12 +400,44 @@ describe("listOrgMembers", () => {
     const r = await listOrgMembers(rosterKv, "123", PKCS8_PEM, 999, "acme")
     expect(r).toEqual({
       items: [
-        { login: "alice", avatarUrl: "https://avatars/alice" },
-        { login: "bob", avatarUrl: "https://avatars/bob" },
+        { githubUserId: "101", login: "alice", avatarUrl: "https://avatars/alice" },
+        { githubUserId: "102", login: "bob", avatarUrl: "https://avatars/bob" },
+        { githubUserId: "103", login: "alice", avatarUrl: "https://avatars/another-alice" },
       ],
       complete: true,
     })
     expect(authSchemes[0]).toBe("token tkn") // installation token → `token`, not `Bearer`
+  })
+
+  it("excludes rows whose immutable ID is missing or not a positive safe integer", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        if (url.includes("/orgs/acme/members")) {
+          return new Response(
+            JSON.stringify([
+              { id: 201, login: "valid", avatar_url: "https://avatars/valid" },
+              { login: "missing" },
+              { id: "202", login: "string-id" },
+              { id: 0, login: "zero" },
+              { id: -1, login: "negative" },
+              { id: 1.5, login: "fractional" },
+              { id: Number.MAX_SAFE_INTEGER + 1, login: "unsafe" },
+              { id: 202, login: "" },
+            ]),
+            { status: 200 },
+          )
+        }
+        return new Response("{}", { status: 404 })
+      }),
+    )
+
+    const r = await listOrgMembers(rosterKv, "123", PKCS8_PEM, 999, "acme")
+    expect(r).toEqual({
+      items: [{ githubUserId: "201", login: "valid", avatarUrl: "https://avatars/valid" }],
+      complete: true,
+    })
   })
 
   it("403 (App lacks Members permission) → empty + complete:false (fail-soft, never throws)", async () => {
@@ -422,7 +456,7 @@ describe("listOrgMembers", () => {
 describe("listInstallationCollaborators", () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it("dedupes collaborators across the installation's repos (case-insensitive)", async () => {
+  it("dedupes renamed collaborators by immutable ID and keeps distinct IDs with the same login", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
@@ -438,17 +472,22 @@ describe("listInstallationCollaborators", () => {
         if (url.includes("/repos/o/a/collaborators")) {
           const p = new URL(url).searchParams.get("page")
           return p === "1"
-            ? new Response(JSON.stringify([{ login: "Dana", avatar_url: "https://avatars/dana" }]), { status: 200 })
+            ? new Response(JSON.stringify([{ id: 301, login: "Dana", avatar_url: "https://avatars/dana" }]), {
+                status: 200,
+              })
             : new Response(JSON.stringify([]), { status: 200 })
         }
         if (url.includes("/repos/o/b/collaborators")) {
           const p = new URL(url).searchParams.get("page")
-          // "dana" again (dupe, lowercased) + a new "erin".
+          // Same immutable account after a rename + a distinct account that
+          // currently has the same display login. Invalid IDs are excluded.
           return p === "1"
             ? new Response(
                 JSON.stringify([
-                  { login: "dana", avatar_url: "https://avatars/dana2" },
-                  { login: "erin", avatar_url: "https://avatars/erin" },
+                  { id: 301, login: "dana-renamed", avatar_url: "https://avatars/dana2" },
+                  { id: 302, login: "Dana", avatar_url: "https://avatars/other-dana" },
+                  { login: "missing-id" },
+                  { id: "303", login: "string-id" },
                 ]),
                 { status: 200 },
               )
@@ -459,10 +498,10 @@ describe("listInstallationCollaborators", () => {
     )
     const r = await listInstallationCollaborators(rosterKv, "123", PKCS8_PEM, 999)
     expect(r.complete).toBe(true)
-    // First-seen avatar wins for the dupe; deduped to 2 distinct logins.
+    // First-seen display fields win for a stable identity.
     expect(r.items).toEqual([
-      { login: "Dana", avatarUrl: "https://avatars/dana" },
-      { login: "erin", avatarUrl: "https://avatars/erin" },
+      { githubUserId: "301", login: "Dana", avatarUrl: "https://avatars/dana" },
+      { githubUserId: "302", login: "Dana", avatarUrl: "https://avatars/other-dana" },
     ])
   })
 
@@ -474,14 +513,21 @@ describe("listInstallationCollaborators", () => {
         if (url.includes("/installation/repositories")) {
           const p = new URL(url).searchParams.get("page")
           return p === "1"
-            ? new Response(JSON.stringify({ repositories: [{ full_name: "o/a" }] }), { status: 200 })
+            ? new Response(JSON.stringify({ repositories: [{ full_name: "o/a" }, { full_name: "o/b" }] }), {
+                status: 200,
+              })
             : new Response(JSON.stringify({ repositories: [] }), { status: 200 })
         }
-        return new Response("forbidden", { status: 403 }) // collaborators page fails
+        if (url.includes("/repos/o/a/collaborators")) {
+          return new Response(JSON.stringify([{ id: 401, login: "kept", avatar_url: "https://avatars/kept" }]), {
+            status: 200,
+          })
+        }
+        return new Response("forbidden", { status: 403 }) // the later repo fails
       }),
     )
     const r = await listInstallationCollaborators(rosterKv, "123", PKCS8_PEM, 999)
     expect(r.complete).toBe(false)
-    expect(r.items).toEqual([])
+    expect(r.items).toEqual([{ githubUserId: "401", login: "kept", avatarUrl: "https://avatars/kept" }])
   })
 })

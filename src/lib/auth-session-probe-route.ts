@@ -11,7 +11,13 @@ import { requireSession } from "@/src/lib/auth-middleware"
 import type { Env } from "@/src/shared/types/env"
 
 function json(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      "cache-control": "private, no-store",
+    },
+  })
 }
 
 export async function handleAuthSessionProbeRoute(

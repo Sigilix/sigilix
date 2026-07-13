@@ -10,10 +10,16 @@
 
 import {
   addOrgWorkspaceMember,
-  removeOrgWorkspaceAccess,
+  removeOrgWorkspaceAccessWithSeatBillingFence,
   setOrgWorkspaceRole,
   type OrgWorkspaceRole,
 } from "@/src/features/org-membership"
+import {
+  acquireOrgSeatBillingLease,
+  prepareCancelActiveOrgSeatBillingOperation,
+  readActiveOrgSeatBillingOperation,
+  releaseOrgSeatBillingLease,
+} from "@/src/features/billing"
 import { requireOrgAccess } from "@/src/lib/org-access"
 import { fetchInstallationRoster } from "@/src/lib/org-members-roster"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
@@ -21,6 +27,7 @@ import type { Env } from "@/src/shared/types/env"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 
 const MAX_BODY_BYTES = 4 * 1024
+const MEMBER_REMOVAL_LEASE_TTL_MS = 60_000
 
 type AdminAccess = Extract<Awaited<ReturnType<typeof requireOrgAccess>>, { ok: true }>
 
@@ -150,15 +157,72 @@ export async function handleDeleteOrgMember(
   // exact-installation roster proof.
   const target = await resolveRosterTarget(env, context.value.db, installationId, githubUserId)
 
-  const nowIso = new Date().toISOString()
+  const nowMs = Date.now()
+  const nowIso = new Date(nowMs).toISOString()
+  const leaseToken = crypto.randomUUID()
+  const lease = await acquireOrgSeatBillingLease(env, {
+    installationId,
+    token: leaseToken,
+    nowMs,
+    ttlMs: MEMBER_REMOVAL_LEASE_TTL_MS,
+  })
+  if (lease.kind !== "acquired") {
+    return json({ error: "org_membership_unavailable" }, 503)
+  }
   try {
-    const result = await removeOrgWorkspaceAccess(context.value.db, {
-      installationId,
-      githubUserId,
-      ...(target.ok ? { login: target.value.login } : {}),
-      nowIso,
-      updatedBy: `github:${context.value.access.githubUserId}`,
-    })
+    const active = await readActiveOrgSeatBillingOperation(env, installationId)
+    if (active.kind === "error") {
+      return json({ error: "org_membership_unavailable" }, 503)
+    }
+    if (active.kind === "ok" && (!target.ok || active.operation.login !== target.value.login.trim().toLowerCase())) {
+      // An installation has at most one expansion in flight. Settling another
+      // member's operation here would unassign that member; wait for recovery
+      // to finish instead. A departed target has no trustworthy login to join
+      // against, so it takes the same fail-closed retry path.
+      return json({ error: "org_membership_busy" }, 503)
+    }
+    const preparedSettlement =
+      active.kind === "ok"
+        ? prepareCancelActiveOrgSeatBillingOperation(context.value.db, {
+            installationId,
+            operationId: active.operation.operationId,
+            revision: active.operation.revision,
+            expectedState: active.operation.state === "stripe_applied" ? "stripe_applied" : "pending",
+            errorCode: "member_removed",
+            actorLogin: context.value.access.login,
+            nowIso,
+            leaseToken,
+            leaseAcquiredAtMs: nowMs,
+            nowMs,
+          })
+        : null
+    if (preparedSettlement?.kind === "error") {
+      return json({ error: "org_membership_unavailable" }, 503)
+    }
+    const result = await removeOrgWorkspaceAccessWithSeatBillingFence(
+      context.value.db,
+      {
+        installationId,
+        githubUserId,
+        ...(target.ok ? { login: target.value.login } : {}),
+        nowIso,
+        updatedBy: `github:${context.value.access.githubUserId}`,
+      },
+      {
+        leaseToken,
+        leaseAcquiredAtMs: nowMs,
+        nowMs,
+        expectedActiveOperation:
+          active.kind === "ok" && preparedSettlement?.kind === "prepared"
+            ? {
+                operationId: active.operation.operationId,
+                revision: active.operation.revision,
+                state: active.operation.state === "stripe_applied" ? "stripe_applied" : "pending",
+                settlementStatements: preparedSettlement.statements,
+              }
+            : null,
+      },
+    )
     if (result.status === "last_admin") {
       return json({ error: "last_admin" }, 409)
     }
@@ -175,6 +239,15 @@ export async function handleDeleteOrgMember(
   } catch (error) {
     emitFailure("org-member-remove-failed", error, installationId, githubUserId)
     return json({ error: "org_membership_unavailable" }, 503)
+  } finally {
+    const released = await releaseOrgSeatBillingLease(env, {
+      installationId,
+      token: leaseToken,
+      acquiredAtMs: nowMs,
+    })
+    if (released.kind === "error") {
+      emitFailure("org-member-remove-lease-release-failed", released.reason, installationId, githubUserId)
+    }
   }
 }
 

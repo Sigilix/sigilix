@@ -32,6 +32,23 @@ interface RemoveArgs extends MutationArgs {
   login?: string
 }
 
+interface ExistingRemovalTombstone {
+  revokedAt: string
+  auditId: string
+}
+
+export interface OrgWorkspaceSeatBillingFence {
+  leaseToken: string
+  leaseAcquiredAtMs: number
+  nowMs: number
+  expectedActiveOperation: {
+    operationId: string
+    revision: number
+    state: "pending" | "stripe_applied"
+    settlementStatements: readonly D1PreparedStatement[]
+  } | null
+}
+
 const ACCESS_COLUMNS = "installation_id, github_user_id, role, revoked_at, created_at, updated_at, updated_by"
 
 export async function readOrgWorkspaceAccess(
@@ -189,6 +206,70 @@ export async function removeOrgWorkspaceAccess(
   const loginKey = args.login === undefined ? null : normalizeLogin(args.login)
   if (args.login !== undefined && loginKey === null) throw new Error("invalid member login")
   const auditId = auditKey()
+  const statements = removalMutationStatements(db, args, loginKey, auditId, null)
+  const results = await db.batch(statements)
+  if (changes(results[0]) === 1) return { status: "removed" }
+  return classifyRemovalMiss(db, args)
+}
+
+/**
+ * Remove access under the exact seat-billing lease. When an expansion is
+ * active, its caller-composed settlement statements and the access tombstone
+ * commit in the same D1 transaction. The leading eligibility guard preserves
+ * last-admin/not-found semantics without allowing a rejected removal to
+ * settle billing work; the trailing audit guard rolls back the entire batch
+ * unless either this invocation's tombstone or the exact pinned prior
+ * tombstone remains durable after settlement.
+ */
+export async function removeOrgWorkspaceAccessWithSeatBillingFence(
+  db: D1Database,
+  args: RemoveArgs,
+  fence: OrgWorkspaceSeatBillingFence,
+): Promise<RemoveOrgWorkspaceAccessResult> {
+  validateMutation(args)
+  validateSeatBillingFence(fence)
+  const loginKey = args.login === undefined ? null : normalizeLogin(args.login)
+  if (args.login !== undefined && loginKey === null) throw new Error("invalid member login")
+  const auditId = auditKey()
+  const existingTombstone = await readExistingRemovalTombstone(db, args)
+  const mutations = removalMutationStatements(db, args, loginKey, auditId, fence)
+  const settlementStatements = fence.expectedActiveOperation?.settlementStatements ?? []
+  const accessResultIndex = 1 + settlementStatements.length
+  try {
+    const results = await db.batch([
+      removalEligibilityGuard(db, args, fence, existingTombstone),
+      ...settlementStatements,
+      ...mutations,
+      removalAuditGuard(db, args, fence, auditId, existingTombstone),
+    ])
+    return changes(results[accessResultIndex]) === 1 ? { status: "removed" } : classifyRemovalMiss(db, args)
+  } catch {
+    return classifyFencedRemovalFailure(db, args)
+  }
+}
+
+function removalMutationStatements(
+  db: D1Database,
+  args: RemoveArgs,
+  loginKey: string | null,
+  auditId: string,
+  fence: OrgWorkspaceSeatBillingFence | null,
+): D1PreparedStatement[] {
+  const fenceSql =
+    fence === null
+      ? ""
+      : ` AND EXISTS (
+              SELECT 1 FROM org_seat_billing_lease
+               WHERE installation_id = ? AND lease_token = ? AND acquired_at_ms = ? AND expires_at_ms > ?
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM org_seat_billing_operation
+               WHERE installation_id = ? AND state IN ('pending', 'stripe_applied')
+            )`
+  const fenceBindings =
+    fence === null
+      ? []
+      : [args.installationId, fence.leaseToken, fence.leaseAcquiredAtMs, fence.nowMs, args.installationId]
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
@@ -203,9 +284,17 @@ export async function removeOrgWorkspaceAccess(
                    AND other.github_user_id <> org_workspace_access.github_user_id
                    AND other.role = 'admin' AND other.revoked_at IS NULL
               )
-            )`,
+            )${fenceSql}`,
       )
-      .bind(args.nowIso, args.nowIso, args.updatedBy, auditId, args.installationId, args.githubUserId),
+      .bind(
+        args.nowIso,
+        args.nowIso,
+        args.updatedBy,
+        auditId,
+        args.installationId,
+        args.githubUserId,
+        ...fenceBindings,
+      ),
     db
       .prepare(
         `UPDATE api_key SET revoked_at = ?
@@ -243,10 +332,185 @@ export async function removeOrgWorkspaceAccess(
         ),
     )
   }
-  const results = await db.batch(statements)
-  if (changes(results[0]) === 1) return { status: "removed" }
+  return statements
+}
+
+function removalEligibilityGuard(
+  db: D1Database,
+  args: RemoveArgs,
+  fence: OrgWorkspaceSeatBillingFence,
+  existingTombstone: ExistingRemovalTombstone | null,
+): D1PreparedStatement {
+  const operationSql =
+    fence.expectedActiveOperation === null
+      ? `NOT EXISTS (
+          SELECT 1 FROM org_seat_billing_operation
+           WHERE installation_id = ? AND state IN ('pending', 'stripe_applied')
+        )`
+      : `EXISTS (
+          SELECT 1 FROM org_seat_billing_operation
+           WHERE installation_id = ? AND operation_id = ? AND revision = ? AND state = ?
+        )`
+  const operationBindings =
+    fence.expectedActiveOperation === null
+      ? [args.installationId]
+      : [
+          args.installationId,
+          fence.expectedActiveOperation.operationId,
+          fence.expectedActiveOperation.revision,
+          fence.expectedActiveOperation.state,
+        ]
+  const targetSql =
+    existingTombstone === null
+      ? `target.revoked_at IS NULL AND (
+          target.role <> 'admin' OR EXISTS (
+            SELECT 1 FROM org_workspace_access AS other
+             WHERE other.installation_id = target.installation_id
+               AND other.github_user_id <> target.github_user_id
+               AND other.role = 'admin' AND other.revoked_at IS NULL
+          )
+        )`
+      : "target.revoked_at = ? AND target.last_audit_id = ?"
+  const targetBindings = existingTombstone === null ? [] : [existingTombstone.revokedAt, existingTombstone.auditId]
+  // The leased installation already occupies its primary key, so the true
+  // branch no-ops. The false branch selects installation 0, which cannot
+  // conflict because the schema CHECK (> 0) makes such a row impossible; its
+  // constraint error aborts and rolls back the caller-composed D1 batch.
+  return db
+    .prepare(
+      `INSERT INTO org_seat_billing_lease
+         (installation_id, lease_token, acquired_at_ms, expires_at_ms)
+       SELECT CASE WHEN EXISTS (
+         SELECT 1 FROM org_seat_billing_lease
+          WHERE installation_id = ? AND lease_token = ? AND acquired_at_ms = ? AND expires_at_ms > ?
+       ) AND EXISTS (
+         SELECT 1 FROM org_workspace_access AS target
+          WHERE target.installation_id = ? AND target.github_user_id = ?
+            AND (${targetSql})
+       ) AND (${operationSql}) THEN ? ELSE 0 END,
+       '__org_member_removal_guard__', 0, 1
+       WHERE true
+       ON CONFLICT(installation_id) DO NOTHING`,
+    )
+    .bind(
+      args.installationId,
+      fence.leaseToken,
+      fence.leaseAcquiredAtMs,
+      fence.nowMs,
+      args.installationId,
+      args.githubUserId,
+      ...targetBindings,
+      ...operationBindings,
+      args.installationId,
+    )
+}
+
+function removalAuditGuard(
+  db: D1Database,
+  args: RemoveArgs,
+  fence: OrgWorkspaceSeatBillingFence,
+  auditId: string,
+  existingTombstone: ExistingRemovalTombstone | null,
+): D1PreparedStatement {
+  const tombstoneBindings =
+    existingTombstone === null ? [args.nowIso, auditId] : [existingTombstone.revokedAt, existingTombstone.auditId]
+  return db
+    .prepare(
+      `INSERT INTO org_seat_billing_lease
+         (installation_id, lease_token, acquired_at_ms, expires_at_ms)
+       SELECT CASE WHEN EXISTS (
+         SELECT 1 FROM org_seat_billing_lease
+          WHERE installation_id = ? AND lease_token = ? AND acquired_at_ms = ? AND expires_at_ms > ?
+       ) AND EXISTS (
+         SELECT 1 FROM org_workspace_access
+          WHERE installation_id = ? AND github_user_id = ? AND revoked_at IS NOT NULL
+            AND revoked_at = ? AND last_audit_id = ?
+       ) AND NOT EXISTS (
+         SELECT 1 FROM org_seat_billing_operation
+          WHERE installation_id = ? AND state IN ('pending', 'stripe_applied')
+       ) THEN ? ELSE 0 END,
+       '__org_member_removal_audit_guard__', 0, 1
+       WHERE true
+       ON CONFLICT(installation_id) DO NOTHING`,
+    )
+    .bind(
+      args.installationId,
+      fence.leaseToken,
+      fence.leaseAcquiredAtMs,
+      fence.nowMs,
+      args.installationId,
+      args.githubUserId,
+      ...tombstoneBindings,
+      args.installationId,
+      args.installationId,
+    )
+}
+
+async function readExistingRemovalTombstone(
+  db: D1Database,
+  args: Pick<RemoveArgs, "installationId" | "githubUserId">,
+): Promise<ExistingRemovalTombstone | null> {
+  const row = await db
+    .prepare(
+      `SELECT revoked_at, last_audit_id FROM org_workspace_access
+        WHERE installation_id = ? AND github_user_id = ?`,
+    )
+    .bind(args.installationId, args.githubUserId)
+    .first<{ revoked_at: unknown; last_audit_id: unknown }>()
+  if (row === null || row.revoked_at === null) return null
+  if (
+    typeof row.revoked_at !== "string" ||
+    row.revoked_at.length === 0 ||
+    typeof row.last_audit_id !== "string" ||
+    row.last_audit_id.length === 0
+  ) {
+    throw new Error("invalid organization access tombstone")
+  }
+  return { revokedAt: row.revoked_at, auditId: row.last_audit_id }
+}
+
+async function classifyRemovalMiss(
+  db: D1Database,
+  args: Pick<RemoveArgs, "installationId" | "githubUserId">,
+): Promise<RemoveOrgWorkspaceAccessResult> {
   const current = await readOrgWorkspaceAccess(db, args.installationId, args.githubUserId)
-  return current?.revokedAt === null && current.role === "admin" ? { status: "last_admin" } : { status: "not_found" }
+  if (current === null || current.revokedAt !== null) return { status: "not_found" }
+  if (current.role === "admin" && (await isLastActiveAdmin(db, args))) return { status: "last_admin" }
+  throw new Error("organization access removal was fenced")
+}
+
+async function classifyFencedRemovalFailure(
+  db: D1Database,
+  args: Pick<RemoveArgs, "installationId" | "githubUserId">,
+): Promise<RemoveOrgWorkspaceAccessResult> {
+  const current = await readOrgWorkspaceAccess(db, args.installationId, args.githubUserId)
+  if (current?.revokedAt === null && current.role === "admin" && (await isLastActiveAdmin(db, args))) {
+    return { status: "last_admin" }
+  }
+  const activeOperation = await db
+    .prepare(
+      `SELECT 1 AS present FROM org_seat_billing_operation
+        WHERE installation_id = ? AND state IN ('pending', 'stripe_applied') LIMIT 1`,
+    )
+    .bind(args.installationId)
+    .first<{ present: number }>()
+  if (activeOperation !== null) throw new Error("organization access removal settlement did not persist")
+  if (current === null || current.revokedAt !== null) return { status: "not_found" }
+  throw new Error("organization access removal was fenced")
+}
+
+async function isLastActiveAdmin(
+  db: D1Database,
+  args: Pick<RemoveArgs, "installationId" | "githubUserId">,
+): Promise<boolean> {
+  const other = await db
+    .prepare(
+      `SELECT 1 AS present FROM org_workspace_access
+        WHERE installation_id = ? AND github_user_id <> ? AND role = 'admin' AND revoked_at IS NULL LIMIT 1`,
+    )
+    .bind(args.installationId, args.githubUserId)
+    .first<{ present: number }>()
+  return other === null
 }
 
 /** Operator-only resurrection seam. Route-level admin-token + roster proof happen outside the store. */
@@ -311,6 +575,25 @@ function validateMutation(args: MutationArgs): void {
   validateIdentity(args.installationId, args.githubUserId)
   if (typeof args.nowIso !== "string" || args.nowIso.length === 0) throw new Error("invalid mutation time")
   if (typeof args.updatedBy !== "string" || args.updatedBy.length === 0) throw new Error("invalid mutation actor")
+}
+
+function validateSeatBillingFence(fence: OrgWorkspaceSeatBillingFence): void {
+  const active = fence.expectedActiveOperation
+  if (
+    fence.leaseToken.trim().length === 0 ||
+    !Number.isSafeInteger(fence.leaseAcquiredAtMs) ||
+    fence.leaseAcquiredAtMs < 0 ||
+    !Number.isSafeInteger(fence.nowMs) ||
+    fence.nowMs < 0 ||
+    (active !== null &&
+      (active.operationId.trim().length === 0 ||
+        !Number.isSafeInteger(active.revision) ||
+        active.revision <= 0 ||
+        (active.state !== "pending" && active.state !== "stripe_applied") ||
+        active.settlementStatements.length === 0))
+  ) {
+    throw new Error("invalid seat billing fence")
+  }
 }
 
 function validateIdentity(installationId: number, githubUserId: string): void {

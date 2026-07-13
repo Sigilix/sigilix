@@ -114,7 +114,6 @@ import {
   JITTER_BASE_MS,
   JITTER_CAP_MS,
 } from "@/src/lib/ensemble/domain/backpressure"
-
 // SIG-318 / SIG-376 (Tier-1 8/8): entry-module decomposition. The webhook
 // handlers + the queue dispatcher + the shared mention/capture layer were
 // relocated VERBATIM into sibling leaves; this entry module keeps only the
@@ -125,7 +124,7 @@ import {
 // re-exported below so no importer or test path changes.
 import { handleGitHubWebhook } from "@/src/index-github-webhook"
 import { handleGitLabWebhook } from "@/src/index-gitlab-webhook"
-import { handleStripeWebhookRoute } from "@/src/features/billing"
+import { enqueueDueOrgSeatBillingOperations, handleStripeWebhookRoute } from "@/src/features/billing"
 import { tryHandleBillingRoute } from "@/src/lib/billing-checkout-route"
 import { handleLinearWebhook, handleManualTrigger } from "@/src/index-webhooks"
 import { dispatchJob } from "@/src/index-dispatch"
@@ -133,7 +132,6 @@ import { handleSlackRequest } from "@/src/index-slack-webhook"
 import { handleSlackInstall, handleSlackOAuthCallback, handleSlackInstalled } from "@/src/lib/slack/slack-install"
 import { handleLinearOAuthCallback } from "@/src/lib/linear-agent-oauth"
 import { tryHandleGitLabConnectRoute, isGitLabConnectCorsPath } from "@/src/lib/gitlab-connect"
-
 // Re-export the relocated public symbols so the entry module's export
 // surface is byte-for-byte unchanged for every importer + test pin.
 export { dispatchJob } from "@/src/index-dispatch"
@@ -842,6 +840,8 @@ export default {
         }
       })(),
     )
+    // Billing recovery is independent of the indexer gate below.
+    ctx.waitUntil(enqueueDueOrgSeatBillingOperations(env))
     // CodeRabbit C1: gate the auto-fire on OPENCLAW_INDEXER_ENABLED. The
     // manual routes (index-repo / index-backfill / index-reconcile) stay
     // ungated — those are operator-triggered and the operator already

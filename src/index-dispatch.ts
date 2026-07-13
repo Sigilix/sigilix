@@ -59,7 +59,7 @@ import { branchStateRepo } from "@/src/lib/index-branch"
 import { postReviewWorkBlocked } from "@/src/index-dispatch-post-review-work"
 import { runRateLimitGate } from "@/src/index-dispatch-rate-limit-gate"
 import { handleMcpMemoryExpireJob } from "@/src/do/mcp/mcp-memory-jobs"
-
+import { recoverOrgSeatBillingOperation } from "@/src/features/billing"
 /**
  * Post the slash-command ack comment for `cmd` on the given PR.
  * Used by pr-review-rerun and pr-improve queue handlers so the user
@@ -887,12 +887,11 @@ export async function dispatchJob(
       })
     case "mcp-memory-expire":
       return handleMcpMemoryExpireJob(job, env)
+    case "org-seat-billing-reconcile":
+      return recoverOrgSeatBillingOperation(env, job)
     case "index-repo":
-      // ARC-235: customer-ready indexing consumer. Bootstrap jobs walk
-      // the default-branch tree + filter to indexable files + process
-      // up to MAX_FILES_PER_JOB. Shard jobs continue the chain via
-      // continuation tokens. See src/lib/indexer.ts for the full
-      // state machine.
+      // ARC-235: bootstrap jobs walk/filter files; shards continue via tokens.
+      // See src/lib/indexer.ts for the complete state machine.
       return handleIndexRepoJob({ job, env })
     case "delete-repo-index": {
       const repoState = job.branch ? await branchStateRepo(job.repo, job.branch) : job.repo

@@ -94,6 +94,36 @@ describe("openrouter-chat", () => {
     expect(body.max_tokens).toBeGreaterThan(0)
   })
 
+  it("sanitizes the schema (strips integer min/max) ONLY for an Anthropic model id", async () => {
+    const schema = {
+      type: "object",
+      properties: { score: { type: "integer", minimum: 1, maximum: 5 } },
+      required: ["score"],
+    }
+    const f = mockFetch(['data: {"choices":[{"delta":{"content":"x"}}]}\n', "data: [DONE]\n"])
+    vi.stubGlobal("fetch", f)
+    await chat({ ...base, model: "anthropic/claude-sonnet-4.6", format: schema })
+    const body = JSON.parse((f.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.response_format.json_schema.schema).toEqual({
+      type: "object",
+      properties: { score: { type: "integer" } },
+      required: ["score"],
+    })
+  })
+
+  it("sends the ORIGINAL schema unchanged for a non-Anthropic model (byte-identical, not sanitized)", async () => {
+    const schema = {
+      type: "object",
+      properties: { score: { type: "integer", minimum: 1, maximum: 5 } },
+      required: ["score"],
+    }
+    const f = mockFetch(['data: {"choices":[{"delta":{"content":"x"}}]}\n', "data: [DONE]\n"])
+    vi.stubGlobal("fetch", f)
+    await chat({ ...base, model: "openai/o3", format: schema })
+    const body = JSON.parse((f.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.response_format.json_schema.schema).toEqual(schema)
+  })
+
   it("does NOT send reasoning or response_format on a format-less call (mirrors ollama think rule)", async () => {
     const f = mockFetch(['data: {"choices":[{"delta":{"content":"x"}}]}\n', "data: [DONE]\n"])
     vi.stubGlobal("fetch", f)

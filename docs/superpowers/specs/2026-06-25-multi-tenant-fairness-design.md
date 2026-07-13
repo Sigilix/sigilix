@@ -229,6 +229,7 @@ that depends on them. This section is the **living ledger** — every migration 
 | 7 | app-memory | D1 | `migrations/0021_create_app_memory.sql` | Adds installation-scoped personal and organization app-memory rows after Stripe reconciliation migration `0020` | `wrangler d1 migrations apply` (pre-deploy) |
 | 8 | org workspace roles | D1 | `migrations/0022_create_org_workspace_access.sql` | Adds dark, exact-installation Sigilix membership roles, revocation tombstones, and durable mutation audit; no legacy rows are copied before rollout | `wrangler d1 migrations apply` (pre-deploy) |
 | 9 | Stripe seat expansion | D1 | `migrations/0023_add_org_seat_billing_operation_context.sql` | Pins actor and target-role authorization context on every recoverable seat-billing operation while preserving nullable terminal history | `wrangler d1 migrations apply` (pre-deploy) |
+| 10 | repository context foundation | D1 | `migrations/0024_create_repository_context.sql` | Adds provider-aware canonical repository snapshots, same-scope relationships, optimistic revisions, tombstones, and content-free immutable audit metadata | `wrangler d1 migrations apply` (pre-deploy) |
 
 > Rule: a PR that adds a DO bumps the `[[migrations]]` list (never reorders existing tags); a PR that
 > touches D1 schema adds the next-numbered SQL file (never edits a prior one) and updates this ledger.

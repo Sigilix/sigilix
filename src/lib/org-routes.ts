@@ -9,6 +9,8 @@
 //   POST /v1/org/:installationId/members/:login/seat   → org-seat-route.ts
 //   GET  /v1/org/:installationId/data-consent          → data-consent-route.ts
 //   POST /v1/org/:installationId/data-consent          → data-consent-route.ts
+//   GET  /v1/org/:installationId/repository-context     → repository-context-route.ts
+//   PUT  /v1/org/:installationId/repository-context     → repository-context-route.ts
 //
 // Both are portal-facing (a DIFFERENT ORIGIN — app.sigilix.ai / localhost:3300
 // drives them over `fetch(…, { credentials: "include" })`), so this surface
@@ -23,6 +25,7 @@ import { handleCreateAppMemory, handleDeleteAppMemory, handleListAppMemories } f
 import { handleOrgOverviewRoute } from "@/src/lib/org-overview-route"
 import { handleAddOrgMember, handleDeleteOrgMember, handleUpdateOrgMemberRole } from "@/src/lib/org-members-route"
 import { handleOrgSeatRoute } from "@/src/lib/org-seat-route"
+import { handleGetRepositoryContext, handlePutRepositoryContext } from "@/src/lib/repository-context-route"
 import { handleGetReviewConfig, handleSetReviewConfig } from "@/src/lib/review-config-route"
 import { handleGetLinearConfig, handleSetLinearConfig } from "@/src/lib/linear-config-route"
 import { handleGetSlackConfig, handleSetSlackConfig } from "@/src/lib/slack-config-route"
@@ -41,6 +44,7 @@ const LINEAR_CONFIG_PATH_RE = /^\/v1\/org\/([^/]+)\/linear-config$/
 const LINEAR_INSTALL_PATH_RE = /^\/v1\/org\/([^/]+)\/linear\/install$/
 const SLACK_CONFIG_PATH_RE = /^\/v1\/org\/([^/]+)\/slack-config$/
 const APP_MEMORY_PATH_RE = /^\/v1\/org\/([^/]+)\/apps\/([^/]+)\/memories(?:\/([^/]+))?$/
+const REPOSITORY_CONTEXT_PATH_RE = /^\/v1\/org\/([^/]+)\/repository-context$/
 
 /** True for a path this surface serves — overview, seat, data-consent, or review-config. */
 function isOrgPath(pathname: string): boolean {
@@ -54,7 +58,8 @@ function isOrgPath(pathname: string): boolean {
     LINEAR_CONFIG_PATH_RE.test(pathname) ||
     LINEAR_INSTALL_PATH_RE.test(pathname) ||
     SLACK_CONFIG_PATH_RE.test(pathname) ||
-    APP_MEMORY_PATH_RE.test(pathname)
+    APP_MEMORY_PATH_RE.test(pathname) ||
+    REPOSITORY_CONTEXT_PATH_RE.test(pathname)
   )
 }
 
@@ -174,6 +179,16 @@ export async function handleOrgRoutes(request: Request, env: Env, ctx: Execution
         await handleDeleteAppMemory(request, env, ctx, installationId, appId, memoryId),
         env,
       )
+    }
+  }
+  const repositoryContextMatch = REPOSITORY_CONTEXT_PATH_RE.exec(url.pathname)
+  if (repositoryContextMatch) {
+    const installationId = decodeInstallationId(repositoryContextMatch[1]!)
+    if (request.method === "GET") {
+      return withPortalCors(request, await handleGetRepositoryContext(request, env, ctx, installationId), env)
+    }
+    if (request.method === "PUT") {
+      return withPortalCors(request, await handlePutRepositoryContext(request, env, ctx, installationId), env)
     }
   }
   return null

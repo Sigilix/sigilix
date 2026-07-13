@@ -6,6 +6,7 @@ import {
   canonicalTenantId,
   personalMemoryUserId,
   resolveApiPersonalMemoryUserId,
+  resolveApiStableUserId,
   scopeMemoryUserId,
 } from "./agent-memory-personal-subject"
 
@@ -62,6 +63,10 @@ describe("personal memory subjects", () => {
     await expect(resolveApiPersonalMemoryUserId({ SIGILIX_PLATFORM_DB: db }, caller())).resolves.toBe(
       "inst:42:user:internal-user",
     )
+    await expect(resolveApiStableUserId({ SIGILIX_PLATFORM_DB: db }, caller())).resolves.toEqual({
+      status: "ok",
+      userId: "internal-user",
+    })
   })
 
   it("fails closed when the creator has no identity row", async () => {
@@ -69,6 +74,10 @@ describe("personal memory subjects", () => {
     await db.exec(IDENTITY_MIGRATION)
 
     await expect(resolveApiPersonalMemoryUserId({ SIGILIX_PLATFORM_DB: db }, caller())).resolves.toBeNull()
+    await expect(resolveApiStableUserId({ SIGILIX_PLATFORM_DB: db }, caller())).resolves.toEqual({
+      status: "ok",
+      userId: null,
+    })
   })
 
   it("fails closed and emits telemetry when the identity lookup throws", async () => {
@@ -80,6 +89,10 @@ describe("personal memory subjects", () => {
     } as unknown as D1Database
 
     await expect(resolveApiPersonalMemoryUserId({ SIGILIX_PLATFORM_DB: db }, caller())).resolves.toBeNull()
+    await expect(resolveApiStableUserId({ SIGILIX_PLATFORM_DB: db }, caller())).resolves.toEqual({
+      status: "unavailable",
+    })
     expect(errorSpy.mock.calls.some((call) => String(call[0]).includes("personal-subject-resolve-failed"))).toBe(true)
+    expect(errorSpy.mock.calls.some((call) => String(call[0]).includes("D1 unavailable"))).toBe(false)
   })
 })

@@ -19,6 +19,35 @@ export function personalMemoryUserId(installationId: number, stableUserId: strin
   return `inst:${installationId}:user:${canonicalTenantId(stableUserId)}`
 }
 
+export type ApiStableUserIdResolution = { status: "ok"; userId: string | null } | { status: "unavailable" }
+
+/** Resolve an API-key creator to the bare provider-independent D1 user id. */
+export async function resolveApiStableUserId(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  caller: ResolvedApiKey,
+): Promise<ApiStableUserIdResolution> {
+  if (caller.installationId === LEGACY_TENANT_INSTALLATION_ID || !caller.createdBy?.trim()) {
+    return { status: "ok", userId: null }
+  }
+  if (!env.SIGILIX_PLATFORM_DB) return { status: "unavailable" }
+
+  try {
+    const row = await env.SIGILIX_PLATFORM_DB.prepare("SELECT user_id FROM user_identity WHERE github_user_id = ?")
+      .bind(caller.createdBy)
+      .first<{ user_id: string }>()
+    const stableUserId = row?.user_id?.trim()
+    return { status: "ok", userId: stableUserId || null }
+  } catch {
+    console.error(
+      JSON.stringify({
+        event: "agent-memory-personal-subject-resolve-failed",
+        installationId: caller.installationId,
+      }),
+    )
+    return { status: "unavailable" }
+  }
+}
+
 /**
  * Resolve a tenant API key to its provider-independent personal-memory subject.
  * The legacy global key and keys whose creator cannot be proven fail closed.
@@ -27,28 +56,7 @@ export async function resolveApiPersonalMemoryUserId(
   env: Pick<Env, "SIGILIX_PLATFORM_DB">,
   caller: ResolvedApiKey,
 ): Promise<string | null> {
-  if (
-    caller.installationId === LEGACY_TENANT_INSTALLATION_ID ||
-    !caller.createdBy?.trim() ||
-    !env.SIGILIX_PLATFORM_DB
-  ) {
-    return null
-  }
-
-  try {
-    const row = await env.SIGILIX_PLATFORM_DB.prepare("SELECT user_id FROM user_identity WHERE github_user_id = ?")
-      .bind(caller.createdBy)
-      .first<{ user_id: string }>()
-    const stableUserId = row?.user_id?.trim()
-    return stableUserId ? personalMemoryUserId(caller.installationId, stableUserId) : null
-  } catch (error) {
-    console.error(
-      JSON.stringify({
-        event: "agent-memory-personal-subject-resolve-failed",
-        installationId: caller.installationId,
-        err: error instanceof Error ? error.message : String(error),
-      }),
-    )
-    return null
-  }
+  const resolution = await resolveApiStableUserId(env, caller)
+  if (resolution.status === "unavailable" || resolution.userId === null) return null
+  return personalMemoryUserId(caller.installationId, resolution.userId)
 }

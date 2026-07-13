@@ -17,3 +17,16 @@ export {
   type AppMemoryDeleteResult,
   type AppMemoryListResult,
 } from "./adapters/d1-store"
+export {
+  MAX_APP_MEMORY_CONTEXT_CANDIDATES_PER_SCOPE,
+  MAX_APP_MEMORY_CONTEXT_CHARS_PER_SCOPE,
+  MAX_APP_MEMORY_CONTEXT_ENTRIES_PER_SCOPE,
+  resolveAppMemoryCliMode,
+  selectAppMemoryContext,
+  type AppMemoryCliMode,
+  type AppMemoryContextCandidate,
+  type AppMemoryContextScopeStats,
+  type AppMemoryContextSelection,
+  type ManagedAppContextMemory,
+} from "./domain/context"
+export { readCliAppMemoryContext, type AppMemoryContextReadResult } from "./adapters/context-read"

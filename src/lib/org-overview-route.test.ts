@@ -28,6 +28,7 @@ import worker from "@/src/index"
 import { base64urlEncode, createSession } from "@/src/lib/auth-session"
 import { insertApiKey } from "@/src/lib/api-key-store"
 import { sha256Hex } from "@/src/lib/auth-bearer"
+import { addOrgWorkspaceMember, bootstrapFirstOrgAdmin, setOrgWorkspaceRole } from "@/src/features/org-membership"
 import type { Env } from "@/src/shared/types/env"
 
 const SESSION_COOKIE = "__Host-sigilix_session"
@@ -44,6 +45,10 @@ const MIGRATION_API_KEY_SQL = readFileSync(
 )
 const MIGRATION_SEAT_SQL = readFileSync(
   new URL("../../migrations/0007_create_org_seat_assignment.sql", import.meta.url),
+  "utf8",
+)
+const MIGRATION_ORG_ACCESS_SQL = readFileSync(
+  new URL("../../migrations/0022_create_org_workspace_access.sql", import.meta.url),
   "utf8",
 )
 
@@ -64,12 +69,42 @@ function makeKV(): KVNamespace {
   } as unknown as KVNamespace
 }
 
-async function makeDb(): Promise<D1Database> {
+async function makeDb(options: { orgAccess?: boolean } = {}): Promise<D1Database> {
   const db = makeD1()
   await db.exec(MIGRATION_USAGE_SQL)
   await db.exec(MIGRATION_API_KEY_SQL)
   await db.exec(MIGRATION_SEAT_SQL)
+  if (options.orgAccess !== false) await db.exec(MIGRATION_ORG_ACCESS_SQL)
   return db
+}
+
+async function seedWorkspaceAccess(
+  db: D1Database,
+  installationId: number,
+  githubUserId: string,
+  role: "admin" | "member" = "member",
+): Promise<void> {
+  const nowIso = "2026-07-13T00:00:00.000Z"
+  if (role === "admin") {
+    const result = await bootstrapFirstOrgAdmin(db, {
+      installationId,
+      githubUserId,
+      nowIso,
+      updatedBy: "test",
+    })
+    if (result === "bootstrapped") return
+  }
+  await addOrgWorkspaceMember(db, { installationId, githubUserId, nowIso, updatedBy: "test" })
+  if (role === "admin") {
+    const result = await setOrgWorkspaceRole(db, {
+      installationId,
+      githubUserId,
+      role,
+      nowIso: "2026-07-13T00:00:01.000Z",
+      updatedBy: "test",
+    })
+    if (result.status !== "updated") throw new Error(`failed to seed admin: ${result.status}`)
+  }
 }
 
 async function seedSession(kv: KVNamespace, sessionId: string, login: string, githubUserId: number): Promise<void> {
@@ -706,6 +741,71 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
     expect(body.seats.map((s) => s.login)).toEqual(["octocat"])
     // No user identity on the api-key path → no seat is marked admin.
     expect(body.seats.every((s) => s.role === "member")).toBe(true)
+  })
+
+  it("worker.fetch denies a managed viewer missing stored access before any roster disclosure", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "live-admin", 111)
+    await seedWorkspaceAccess(db, 1, "999", "admin")
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      OPENCLAW_ORG_MEMBERSHIP_MODE: "on",
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+    stubGitHub({ installations: [{ id: 1, account: { type: "User", login: "live-admin" } }] })
+    const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
+
+    const res = await worker.fetch(reqWithSession("sess-1"), env, ctx)
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: "forbidden" })
+    expect(rosterMock).not.toHaveBeenCalled()
+  })
+
+  it("managed mode returns 503 when stored authorization is unavailable instead of an empty 200", async () => {
+    const db = await makeDb({ orgAccess: false })
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "live-admin", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      OPENCLAW_ORG_MEMBERSHIP_MODE: "on",
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+    stubGitHub({ installations: [{ id: 1, account: { type: "User", login: "live-admin" } }] })
+
+    const res = await handleOrgOverviewRoute(reqWithSession("sess-1"), env)
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({ error: "org_access_unavailable" })
+    expect(rosterMock).not.toHaveBeenCalled()
+  })
+
+  it("rollout off preserves live-role behavior without migration 0022 or managed access fields", async () => {
+    const db = await makeDb({ orgAccess: false })
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "live-admin", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+      GITHUB_APP_ID: "1",
+      GITHUB_PRIVATE_KEY: "pem",
+    } as unknown as Env
+    stubGitHub({ installations: [{ id: 1, account: { type: "User", login: "live-admin" } }] })
+    await insertTenant(db, 1, "live-admin")
+    rosterMock.mockResolvedValue({
+      members: [{ githubUserId: "222", login: "legacy-member", avatarUrl: "" }],
+      complete: true,
+      source: "collaborators",
+    })
+
+    const res = await handleOrgOverviewRoute(reqWithSession("sess-1"), env)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as OrgOverviewResponse
+    expect(body.role).toBe("admin")
+    expect(body.seats[0]).toMatchObject({ githubUserId: "222", role: "member" })
+    expect(body.seats[0]).not.toHaveProperty("accessState")
   })
 
   it("fail-soft on a D1 read error: 200 with an empty seat list, never a 500", async () => {

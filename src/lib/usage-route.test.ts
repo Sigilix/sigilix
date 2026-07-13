@@ -32,6 +32,10 @@ const MIGRATION_EVENTS_SQL = readFileSync(
   new URL("../../migrations/0004_create_usage_events.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_SUBSCRIPTION_STATUS_SQL = readFileSync(
+  new URL("../../migrations/0011_add_tenant_subscription_status.sql", import.meta.url),
+  "utf8",
+)
 
 function makeKV(): KVNamespace {
   const store = new Map<string, string>()
@@ -55,6 +59,7 @@ async function makeDb(): Promise<D1Database> {
   await db.exec(MIGRATION_USAGE_SQL)
   await db.exec(MIGRATION_API_KEY_SQL)
   await db.exec(MIGRATION_EVENTS_SQL)
+  await db.exec(MIGRATION_SUBSCRIPTION_STATUS_SQL)
   await applyCostMigrations(db)
   return db
 }
@@ -83,15 +88,28 @@ async function insertTenant(db: D1Database, installationId: number, accountLogin
 
 async function insertReview(
   db: D1Database,
-  args: { installationId: number; prNumber: number; authorLogin: string | null; createdAt: string },
+  args: {
+    installationId: number
+    prNumber: number
+    authorLogin: string | null
+    createdAt: string
+    costUsd?: number
+  },
 ) {
   await db
     .prepare(
       "INSERT INTO usage_ledger" +
-        " (installation_id, repo_id, pr_number, head_sha, model_calls, tokens, author_login, created_at)" +
-        " VALUES (?, 100, ?, ?, 1, 100, ?, ?)",
+        " (installation_id, repo_id, pr_number, head_sha, model_calls, tokens, author_login, created_at, cost_usd)" +
+        " VALUES (?, 100, ?, ?, 1, 100, ?, ?, ?)",
     )
-    .bind(args.installationId, args.prNumber, `sha-${args.prNumber}`, args.authorLogin, args.createdAt)
+    .bind(
+      args.installationId,
+      args.prNumber,
+      `sha-${args.prNumber}`,
+      args.authorLogin,
+      args.createdAt,
+      args.costUsd ?? 0,
+    )
     .run()
 }
 
@@ -280,7 +298,8 @@ describe("handleUsageRoute (GET /v1/usage) — SIG-303 two pools", () => {
       createdAt: new Date(now - 10 * HOUR).toISOString(),
     })
 
-    const res = await handleUsageRoute(reqWithSession("sess-1"), env)
+    const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
+    const res = await worker.fetch(reqWithSession("sess-1"), env, ctx)
     expect(res.status).toBe(200)
     const body = (await res.json()) as UsageResponse
 
@@ -331,6 +350,141 @@ describe("handleUsageRoute (GET /v1/usage) — SIG-303 two pools", () => {
     const res = await handleUsageRoute(reqWithSession("sess-1"), env)
     const body = (await res.json()) as UsageResponse
     expect(body.plan).toBe("ultra")
+  })
+
+  it("reports the full effective seat budget for an active Pro subscriber", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "Octocat", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+      SIGILIX_USAGE_METER_MODE: "enforce",
+      SIGILIX_RATE_LIMIT_MODE: "enforce",
+    } as unknown as Env
+    stubInstallations([{ id: 1 }])
+    await insertTenant(db, 1, "octocat")
+    await db.prepare("UPDATE tenant SET tier = 'pro', subscription_status = 'active' WHERE installation_id = 1").run()
+
+    const res = await handleUsageRoute(reqWithSession("sess-1"), env)
+    const body = (await res.json()) as UsageResponse
+
+    expect(body.cost.session).toMatchObject({
+      budget_usd: 3.75,
+      budget_state: "limited",
+      budget_applies_to_used: true,
+    })
+    expect(body.cost.weekly.budget_usd).toBe(15)
+    expect(body.enforcement).toEqual({
+      usage_pool_mode: "enforce",
+      pr_review_mode: "enforce",
+      cost_budget_scope: "seat",
+      cost_windows: { session: true, weekly: true },
+      volume: "full",
+    })
+  })
+
+  it.each(["trialing", null])("reports the reduced effective seat budget for Pro status %s", async (status) => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "Octocat", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+    stubInstallations([{ id: 1 }])
+    await insertTenant(db, 1, "octocat")
+    await db
+      .prepare("UPDATE tenant SET tier = 'pro', subscription_status = ? WHERE installation_id = 1")
+      .bind(status)
+      .run()
+
+    const res = await handleUsageRoute(reqWithSession("sess-1"), env)
+    const body = (await res.json()) as UsageResponse
+
+    expect(body.cost.session.budget_usd).toBe(1.875)
+    expect(body.cost.weekly.budget_usd).toBe(7.5)
+    expect(body.enforcement.volume).toBe("reduced")
+  })
+
+  it("distinguishes an unbounded Enterprise seat from a non-applicable org budget", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "Octocat", 111)
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+    stubInstallations([{ id: 1 }])
+    await insertTenant(db, 1, "octocat")
+    await db
+      .prepare("UPDATE tenant SET tier = 'enterprise', subscription_status = 'active' WHERE installation_id = 1")
+      .run()
+
+    const res = await handleUsageRoute(reqWithSession("sess-1"), env)
+    const body = (await res.json()) as UsageResponse
+
+    expect(body.cost.session).toMatchObject({
+      budget_usd: null,
+      budget_state: "unbounded",
+      budget_applies_to_used: true,
+    })
+    expect(body.enforcement).toMatchObject({ cost_budget_scope: "seat", volume: "full" })
+  })
+
+  it("does not compare an unfiltered org aggregate to one author's budget", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    const env = {
+      OPENCLAW_STATE: kv,
+      SIGILIX_PLATFORM_DB: db,
+      OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
+      SIGILIX_RATE_LIMIT_MODE: "enforce",
+    } as unknown as Env
+    const plaintext = "sigilix_usage_truth_key"
+    await insertApiKey(db, {
+      id: "key-usage-truth",
+      keyHash: await sha256Hex(plaintext),
+      installationId: 9,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    await insertTenant(db, 9, "acme")
+    await db.prepare("UPDATE tenant SET tier = 'pro', subscription_status = 'active' WHERE installation_id = 9").run()
+    const createdAt = new Date(Date.now() - HOUR).toISOString()
+    await insertReview(db, { installationId: 9, prNumber: 1, authorLogin: "dev-a", createdAt, costUsd: 0.5 })
+    await insertReview(db, { installationId: 9, prNumber: 2, authorLogin: "dev-b", createdAt, costUsd: 0.75 })
+
+    const aggregateRes = await handleUsageRoute(reqWithBearer(plaintext, "?scope=org"), env)
+    const aggregate = (await aggregateRes.json()) as UsageResponse
+    expect(aggregate.cost.session).toMatchObject({
+      used_usd: 1.25,
+      budget_usd: null,
+      remaining_usd: null,
+      pct: null,
+      budget_state: "not_applicable",
+      budget_applies_to_used: false,
+    })
+    expect(aggregate.enforcement).toEqual({
+      usage_pool_mode: "shadow",
+      pr_review_mode: "enforce",
+      cost_budget_scope: "author",
+      cost_windows: { session: false, weekly: false },
+      volume: "full",
+    })
+
+    const authorRes = await handleUsageRoute(reqWithBearer(plaintext, "?scope=org&author=dev-a"), env)
+    const author = (await authorRes.json()) as UsageResponse
+    expect(author.cost.session).toMatchObject({
+      used_usd: 0.5,
+      budget_usd: 3.75,
+      budget_state: "limited",
+      budget_applies_to_used: true,
+    })
+    expect(author.enforcement.cost_windows).toEqual({ session: true, weekly: false })
   })
 
   it("POOL INDEPENDENCE: org-automation events never move a dev's SEAT counters", async () => {

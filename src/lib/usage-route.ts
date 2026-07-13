@@ -16,7 +16,8 @@
 //
 // Windows: 5h rolling (session/burst) AND a FIXED weekly window that resets every
 // Monday 09:00 UTC (the headline cap) — weekly resets_at is the next Monday 09:00.
-// Everything is COUNT-based (runs / messages / reviews) — never per-minute/cost.
+// Counts remain an anti-abuse dimension; real USD model spend is reported separately
+// and is the primary admission dimension where a comparable seat/author budget exists.
 //
 // Auth mirrors workspace-prs / org-overview: portal SESSION cookie first
 // (requireSession → SEAT scope by default), else a bearer API key (requireApiTenant
@@ -32,8 +33,11 @@ import { isLinkedToInstallation } from "@/src/lib/api-key-store"
 import { resolveGithubAuthors } from "@/src/shared/adapters/github/resolve-authors"
 import {
   resolveUsageMeterMode,
+  resolveRateLimitMode,
   resolveUsagePoolCap,
   resolveTierCostBudgetUsd,
+  readTenantSubscriptionStatus,
+  isFullPaidStatus,
   usagePct,
   readTenantUsageSince,
   readUsageEventCount,
@@ -47,7 +51,7 @@ import {
   weeklyWindowResetMs,
   USAGE_WINDOW_LABEL,
 } from "@/src/features/tenancy"
-import type { UsageMeter, UsageMeterMode, UsagePool } from "@/src/features/tenancy"
+import type { RateLimitMode, UsageMeter, UsageMeterMode, UsagePool } from "@/src/features/tenancy"
 import {
   modelBurnTable,
   approxTasksRemaining,
@@ -82,9 +86,10 @@ export interface UsageMeterBars {
 export interface UsageCostWindow {
   /** Blended model spend consumed in the window (USD), rounded to 4 dp. */
   used_usd: number
-  /** The tier's per-window USD budget, or null when unbounded. */
+  /** The tier's per-window USD budget, or null when unbounded/not comparable.
+   *  `budget_state` disambiguates those cases. */
   budget_usd: number | null
-  /** max(0, budget − used), or null when unbounded. */
+  /** max(0, budget − used), or null when unbounded/not comparable. */
   remaining_usd: number | null
   /** 0–100 % of the budget CONSUMED; null when unbounded. */
   pct: number | null
@@ -92,11 +97,29 @@ export interface UsageCostWindow {
   remaining_pct: number | null
   /** Intuitive "≈ N Boreas tasks left" from remaining_usd; null when unbounded. */
   approx_boreas_tasks_remaining: number | null
+  /** Why the budget fields are numeric or null. Distinguishes a genuinely
+   * unbounded seat from an org aggregate that has no comparable shared budget. */
+  budget_state: "limited" | "unbounded" | "not_applicable"
+  /** Whether this window's used_usd and budget_usd describe the same admission scope. */
+  budget_applies_to_used: boolean
 }
 
 export interface UsageCost {
   session: UsageCostWindow
   weekly: UsageCostWindow
+}
+
+export interface UsageEnforcement {
+  /** Shared source for seat-pool and Slack-pool count/cost admission. */
+  usage_pool_mode: UsageMeterMode
+  /** Independent source used by per-author PR-review admission. */
+  pr_review_mode: RateLimitMode
+  /** The subject one effective tier budget belongs to. */
+  cost_budget_scope: "seat" | "author"
+  /** Windows that can currently block the resolved cost subject. */
+  cost_windows: { session: boolean; weekly: boolean }
+  /** Whether the effective numeric budget is reduced from the tier's full budget. */
+  volume: "full" | "reduced"
 }
 
 /** Contract scope label: "user" ⇒ SEAT pool, "org" ⇒ ORG pool. */
@@ -107,17 +130,21 @@ export interface UsageResponse {
   account: string
   scope: UsageScope
   mode: UsageMeterMode
+  /** Explicit current admission facts. `mode` remains as the compatibility alias
+   * for enforcement.usage_pool_mode. */
+  enforcement: UsageEnforcement
   windows: {
     session: { window_label: string; resets_at: string }
     weekly: { window_label: string; resets_at: string }
   }
   /** Per-meter breakdown for the scope's pool. Keys vary by scope (see file header). */
   meters: Partial<Record<UsageMeter, UsageMeterBars>>
-  /** The pool aggregate — the enforced total (sum of the pool's meters vs the shared cap). */
+  /** The pool aggregate (sum of the pool's meters vs its count cap). Whether that
+   * comparison can block is explicit in mode/enforcement, never implied by this field. */
   totals: UsageMeterBars & { since_session: string; since_weekly: string }
-  /** sig-cost-based-metering — the pool's real model spend vs the tier's USD budget
-   *  per window. This is what cost enforcement actually gates on (the session window)
-   *  and what the "% of budget left" widgets should key on. */
+  /** sig-cost-based-metering — real model spend plus an effective tier budget only
+   *  when both values share a seat/author scope. Unfiltered org aggregates keep spend
+   *  but mark their budget not_applicable, so clients never render a fake balance. */
   cost: UsageCost
   /** Per-model RELATIVE burn rate (cheapest = 1.0×) so the user understands why a
    *  premium-model session drains the budget faster. Every model is available on
@@ -363,6 +390,7 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
   const url = new URL(request.url)
   const nowMs = Date.now()
   const mode = resolveUsageMeterMode(env)
+  const prReviewMode = resolveRateLimitMode(env)
 
   const session = await requireSession(request, env, ctx)
   let resolved: ResolvedScope
@@ -486,7 +514,10 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
   // Plan is the REAL tenant.tier for the resolved installation (the authoritative
   // entitlement source), not the OPENCLAW_PLAN placeholder — so the usage panel
   // header reads the org's true tier (e.g. "Ultra"), never a blanket "Free".
-  const plan = await resolveInstallationPlan(env, resolved.installationId)
+  const [plan, subscriptionStatus] = await Promise.all([
+    resolveInstallationPlan(env, resolved.installationId),
+    readTenantSubscriptionStatus(env, resolved.installationId),
+  ])
 
   const pool: UsagePool = resolved.scope === "org" ? "org" : "seat"
   const capSession = resolveUsagePoolCap(env, pool, "session")
@@ -534,12 +565,34 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
     costWeekly += costW ?? 0
   }
 
-  // The tier's per-window USD cost budgets (null = UNBOUNDED, e.g. enterprise). Full
-  // (non-trial) budget for DISPLAY — parity with the count caps above, which also use
-  // the full pool cap rather than the trial-halved enforcement value.
-  const costBudgetSession = resolveTierCostBudgetUsd(env, plan, "session")
-  const costBudgetWeekly = resolveTierCostBudgetUsd(env, plan, "weekly")
-  const costWindow = (used: number, budget: number | null): UsageCostWindow => {
+  // Use the exact subscription-status scaler admission uses, so a trial/unknown paid
+  // tenant never sees a full budget while enforcement is already using the reduced one.
+  const reduced = !isFullPaidStatus(subscriptionStatus)
+  const fullCostBudgetSession = resolveTierCostBudgetUsd(env, plan, "session")
+  const fullCostBudgetWeekly = resolveTierCostBudgetUsd(env, plan, "weekly")
+  const effectiveCostBudgetSession = resolveTierCostBudgetUsd(env, plan, "session", reduced)
+  const effectiveCostBudgetWeekly = resolveTierCostBudgetUsd(env, plan, "weekly", reduced)
+  const volume: UsageEnforcement["volume"] =
+    fullCostBudgetSession !== effectiveCostBudgetSession || fullCostBudgetWeekly !== effectiveCostBudgetWeekly
+      ? "reduced"
+      : "full"
+
+  // A tier budget is per seat/PR author. It is comparable to a user-seat read and an
+  // explicit org author drill, but NEVER to an unfiltered org-wide aggregate.
+  const budgetAppliesToUsed = pool === "seat" || resolved.authorFilter !== null
+  const costWindow = (used: number, budget: number | null, applies: boolean): UsageCostWindow => {
+    if (!applies) {
+      return {
+        used_usd: round4(used),
+        budget_usd: null,
+        remaining_usd: null,
+        pct: null,
+        remaining_pct: null,
+        approx_boreas_tasks_remaining: null,
+        budget_state: "not_applicable",
+        budget_applies_to_used: false,
+      }
+    }
     const remaining = budget === null ? null : Math.max(0, budget - used)
     const pctConsumed = usagePct(used, budget) // % of the budget consumed
     const remainingPct = pctConsumed === null ? null : Math.max(0, 100 - pctConsumed)
@@ -550,17 +603,33 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
       pct: pctConsumed,
       remaining_pct: remainingPct,
       approx_boreas_tasks_remaining: approxTasksRemaining(remaining, "boreas"),
+      budget_state: budget === null ? "unbounded" : "limited",
+      budget_applies_to_used: true,
     }
   }
   const costOut: UsageCost = {
-    session: costWindow(costSession, costBudgetSession),
-    weekly: costWindow(costWeekly, costBudgetWeekly),
+    session: costWindow(costSession, effectiveCostBudgetSession, budgetAppliesToUsed),
+    weekly: costWindow(costWeekly, effectiveCostBudgetWeekly, budgetAppliesToUsed),
   }
   // Transparency + upsell: the per-model relative burn rate, and a soft nudge keyed
   // on the ENFORCED (session) window's remaining budget. Every model is on every
   // tier — the premium model just burns the budget faster (no gating).
   const modelBurn = modelBurnTable()
-  const hint = usageUpsellHint(costOut.session.remaining_pct)
+  const hint = budgetAppliesToUsed ? usageUpsellHint(costOut.session.remaining_pct) : null
+
+  const costWindows: UsageEnforcement["cost_windows"] =
+    pool === "seat"
+      ? { session: mode === "enforce", weekly: mode === "enforce" }
+      : resolved.authorFilter !== null
+        ? { session: prReviewMode === "enforce", weekly: false }
+        : { session: false, weekly: false }
+  const enforcement: UsageEnforcement = {
+    usage_pool_mode: mode,
+    pr_review_mode: prReviewMode,
+    cost_budget_scope: pool === "seat" ? "seat" : "author",
+    cost_windows: costWindows,
+    volume,
+  }
 
   // Optional ORG per-author breakdown ("who triggered org usage") — merged across
   // the usage_events org meters (slack + linear_triage). Only when scope=org, an
@@ -604,6 +673,7 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
     account: resolved.account,
     scope: resolved.scope,
     mode,
+    enforcement,
     windows: {
       session: { window_label: USAGE_WINDOW_LABEL.session, resets_at: sessionResetsAt },
       weekly: { window_label: USAGE_WINDOW_LABEL.weekly, resets_at: weeklyResetsAt },

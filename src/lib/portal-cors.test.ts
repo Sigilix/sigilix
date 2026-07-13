@@ -12,6 +12,11 @@ describe("isAllowedPortalOrigin", () => {
     expect(isAllowedPortalOrigin("http://localhost:3300", DEFAULT_ENV)).toBe(true)
   })
 
+  it("allows the marketing origins so the site nav can read /auth/session", () => {
+    expect(isAllowedPortalOrigin("https://sigilix.ai", DEFAULT_ENV)).toBe(true)
+    expect(isAllowedPortalOrigin("https://www.sigilix.ai", DEFAULT_ENV)).toBe(true)
+  })
+
   it("rejects a non-allowlisted origin", () => {
     expect(isAllowedPortalOrigin("https://evil.example", DEFAULT_ENV)).toBe(false)
   })

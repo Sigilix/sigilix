@@ -21,11 +21,20 @@
 
 import type { Env } from "@/src/shared/types/env"
 import { handleReviewApiRoute } from "@/src/lib/api-review-route"
-import { handleDemoPreflight, handleDemoReviewRoute, withDemoCors } from "@/src/lib/api-demo-review-route"
+import {
+  handleDemoPreflight,
+  handleDemoReviewRoute,
+  handleDemoReviewPoll,
+  withDemoCors,
+} from "@/src/lib/api-demo-review-route"
 import { withPortalCors } from "@/src/lib/portal-cors"
 
 async function demoReview(request: Request, env: Env): Promise<Response> {
   return withDemoCors(request, await handleDemoReviewRoute(request, env), env)
+}
+
+async function demoReviewPoll(request: Request, env: Env): Promise<Response> {
+  return withDemoCors(request, await handleDemoReviewPoll(request, env), env)
 }
 
 async function authedReview(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -44,6 +53,8 @@ export function tryHandleReviewApiRoutes(
     // cookie-less endpoint, and a credentialed grant on it would be a needless CSRF surface.
     if (request.method === "OPTIONS") return Promise.resolve(handleDemoPreflight(request, env))
     if (request.method === "POST") return demoReview(request, env)
+    // GET ?jobId= polls a started (async) review — see api-demo-review-route.ts.
+    if (request.method === "GET") return demoReviewPoll(request, env)
     return null
   }
   if (request.method === "POST" && url.pathname === "/v1/review") return authedReview(request, env, ctx)

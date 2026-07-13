@@ -27,7 +27,8 @@ import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { insertApiKey } from "@/src/lib/api-key-store"
 import { sha256Hex as bearerSha256Hex } from "@/src/lib/auth-bearer"
-import { handleMemoryWriteRoute, storeMemoryFact, scopeMemoryUserId } from "./agent-memory-route"
+import { handleMemoryWriteRoute, storeMemoryFact } from "./agent-memory-route"
+import { personalMemoryUserId } from "./agent-memory-personal-subject"
 import type { Env } from "@/src/shared/types/env"
 
 const DIMS = 768
@@ -88,7 +89,7 @@ describe("agent-memory seat writes NEVER land in learnings:org:* (isolation inva
   })
 
   it("storeMemoryFact (the shared PUT+extract write leg) writes ONLY agent-memory:* keys", async () => {
-    const userId = scopeMemoryUserId("some-cli-user", SIGILIX_INSTALLATION_ID)
+    const userId = personalMemoryUserId(SIGILIX_INSTALLATION_ID, "internal-user-1")
     await storeMemoryFact(env, {
       userId,
       repoId: "sigilix/sigilix",
@@ -104,9 +105,17 @@ describe("agent-memory seat writes NEVER land in learnings:org:* (isolation inva
 
   it("PUT /v1/memory (full route, real per-tenant api key auth) writes ONLY agent-memory:* keys", async () => {
     const db = makeD1()
-    db.exec(
+    await db.exec(
       readFileSync(new URL("../../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url), "utf8"),
     )
+    await db.exec(readFileSync(new URL("../../../migrations/0006_create_user_identity.sql", import.meta.url), "utf8"))
+    await db
+      .prepare(
+        "INSERT INTO user_identity " +
+          "(user_id, github_user_id, providers, created_at, last_login_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .bind("internal-user-1", "1", '["github"]', "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+      .run()
     const plaintext = "sigilix_live_isolation_test"
     await insertApiKey(db, {
       id: "key-isolation",

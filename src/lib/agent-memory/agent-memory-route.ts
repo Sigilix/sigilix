@@ -1,9 +1,10 @@
 // Agent-memory store — PUT /v1/memory + POST /v1/memory/query route handlers.
 //
-// The local CLI agent persists durable per-(user, repo) memories and retrieves
-// the semantically-relevant ones to ground a turn. Auth is the same static bearer
-// ($OPENCLAW_SIGILIX_API_KEY) the other /v1 routes use, checked from the HEADER
-// before the body read (an unauthorized caller can't force a large buffer).
+// The local CLI agent persists durable per-(authenticated user, repo) memories
+// and retrieves the semantically-relevant ones to ground a turn. Authentication
+// is checked from the header before the body read (an unauthorized caller cannot
+// force a large buffer). The body userId is retained only for wire compatibility;
+// it never selects the owner namespace.
 //
 // SOFT-FAIL BY DESIGN (spec): retrieval is grounding, not a verdict, so a
 // transient backend failure must NOT 500 —
@@ -14,7 +15,7 @@
 //     leg degrades. 500 only on an unexpected throw.
 
 import type { Env } from "@/src/shared/types/env"
-import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
+import { requireApiTenant } from "@/src/lib/api-key-resolver"
 import { resolveCliOrgMemoryMode } from "@/src/features/learnings"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import type { AgentMemoryKind, AgentMemoryQueryResult, AgentMemoryRecord } from "./types"
@@ -22,6 +23,9 @@ import { ALL_AGENT_MEMORY_KINDS } from "./types"
 import { readHashId, readRecord, writeHashPointer, writeRecord } from "./storage"
 import { queryMemoryIds, upsertMemoryVector } from "./retrieval"
 import { loadOrgMemoryForCli, unionSeatAndOrgMemory } from "./agent-memory-org-union"
+import { canonicalTenantId, resolveApiPersonalMemoryUserId } from "./agent-memory-personal-subject"
+
+export { canonicalTenantId, scopeMemoryUserId } from "./agent-memory-personal-subject"
 
 // Memories are short (a decision / preference / task note), so the body is tiny —
 // the same cap the /v1/context turn-query route uses. Shared with the extract
@@ -70,51 +74,10 @@ function parseWriteBody(raw: unknown): WriteBody | string {
   if (typeof b.repoId !== "string" || b.repoId.trim() === "") return "repoId (non-empty string) is required"
   if (!isKind(b.kind)) return `kind must be one of: ${ALL_AGENT_MEMORY_KINDS.join(", ")}`
   if (typeof b.content !== "string" || b.content.trim() === "") return "content (non-empty string) is required"
-  // Canonicalize the tenant scope to ONE form (lowercased) so the KV keyspace and
-  // the Vectorize namespace derive from the same value — otherwise a write with
-  // `repoId: "Sigilix/Boreas"` and a query for `"sigilix/boreas"` would match the
-  // (lowercased-namespace) vector but miss the (cased-key) KV record on hydrate.
+  // Canonicalize repoId so the KV keyspace and Vectorize namespace agree.
+  // userId remains normalized only to preserve the existing parsed wire shape;
+  // authenticated identity replaces it before any storage/retrieval operation.
   return { userId: canonicalTenantId(b.userId), repoId: canonicalTenantId(b.repoId), kind: b.kind, content: b.content }
-}
-
-/** Canonical tenant id — trimmed + lowercased. The single normalization point so
- *  KV keys and the Vectorize namespace agree (`memoryNamespace` also lowercases). */
-export function canonicalTenantId(value: string): string {
-  return value.trim().toLowerCase()
-}
-
-/**
- * SIG-494 — installation-scoped tenant prefix for the agent-memory keyspace.
- *
- * The memory store's tenant scope is the caller-asserted `userId`/`repoId` body
- * fields (documented opaque strings — see AgentMemoryRecord in types.ts), NOT a
- * GitHub owner/repo pair with a `resolveInstallation` oracle to reconcile against.
- * That means the owner/repo reconciliation guard used on the grounding routes
- * (`callerOwnsRepo`) can't be ported here — there is no authoritative map from a
- * caller's installationId to the set of userId/repoId pairs it may touch, and
- * assuming `repoId === "<owner>/<repo>"` would risk 403-ing a legitimate
- * non-GitHub-backed scope.
- *
- * So instead of REJECTING a mismatch, we CONFINE by construction: for a REAL
- * per-tenant key we prepend an unforgeable `inst:<installationId>:` prefix to the
- * userId before it flows into the KV keyspace + Vectorize namespace. Because the
- * whole keyspace derives from userId+repoId, this physically walls each
- * installation into its own namespace — a per-tenant key can neither READ nor
- * (critically) WRITE/POISON another tenant's memory, and it cannot forge its way
- * out (a caller-supplied `userId` is only ever appended AFTER its own prefix).
- * This closes the same cross-tenant IDOR the grounding routes had, without the
- * availability risk of a reject-based guard.
- *
- * The LEGACY global key (`LEGACY_TENANT_INSTALLATION_ID === -1`) is exempt — it is
- * Sigilix-internal, and the in-process Slack surface writes/reads this same store
- * un-prefixed via `storeMemoryFact`/`queryMemoryIds` directly (not through these
- * routes), so leaving the legacy path un-prefixed keeps today's behavior exactly.
- * The prefix is all-lowercase-stable (digits + `inst:`) so it survives the
- * `memoryNamespace` lowercasing unchanged.
- */
-export function scopeMemoryUserId(userId: string, callerInstallationId: number): string {
-  if (callerInstallationId === LEGACY_TENANT_INSTALLATION_ID) return userId
-  return `inst:${callerInstallationId}:${userId}`
 }
 
 /** Outcome of {@link storeMemoryFact}: the record id plus the same per-leg flags
@@ -172,27 +135,17 @@ export async function storeMemoryFact(
  * success or graceful degrade (`stored` flag); 500 only on an unexpected throw.
  */
 export async function handleMemoryWriteRoute(request: Request, env: Env): Promise<Response> {
-  // #155 slice 2: resolve the bearer through the per-tenant API-key resolver (a D1
-  // api_key lookup), falling back to the legacy shared secret
-  // (env.OPENCLAW_SIGILIX_API_KEY -> LEGACY_TENANT_INSTALLATION_ID) so an existing
-  // global-key caller is unaffected. FAIL-CLOSED: a missing/bad bearer, a revoked
-  // key, OR a genuine D1 fault during the lookup all resolve to null here -> 401,
-  // never a bypass (see api-key-resolver.ts — this inverts the repo's usual
-  // fail-open D1 default on purpose, because this gates authentication).
-  //
-  // SIG-494: this store's tenant scope is the caller-asserted userId/repoId body
-  // fields — a DIFFERENT axis from the GitHub-installation one the grounding routes
-  // reconcile. There is no owner/repo oracle to reject against, so instead of a
-  // 403 guard we CONFINE by construction: a real per-tenant key's subject is
-  // namespaced under `inst:<installationId>:` (scopeMemoryUserId below) so it can
-  // neither read nor poison another tenant's memory. The legacy global key stays
-  // un-prefixed (broad) — see scopeMemoryUserId's header.
+  // Resolve a real tenant API key, then bind it to the provider-independent
+  // user_identity row for its creator. Missing/unprovable identity — including
+  // the legacy global key — fails closed before the body is read.
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "memory_endpoint_not_configured" }, 503)
   }
   const auth = await requireApiTenant(request, env)
   if ("response" in auth) return auth.response
   const caller = auth.caller
+  const personalUserId = await resolveApiPersonalMemoryUserId(env, caller)
+  if (personalUserId === null) return json({ error: "memory_identity_unavailable" }, 403)
 
   let raw: unknown
   try {
@@ -207,9 +160,9 @@ export async function handleMemoryWriteRoute(request: Request, env: Env): Promis
   if (typeof parsed === "string") return json({ error: "invalid_request", detail: parsed }, 400)
 
   try {
-    // SIG-494: confine to the caller's installation namespace (legacy key → unchanged).
-    const userId = scopeMemoryUserId(parsed.userId, caller.installationId)
-    const result = await storeMemoryFact(env, { ...parsed, userId })
+    // `parsed.userId` remains a required wire field for existing CLI clients but
+    // is never trusted as ownership. The authenticated identity is authoritative.
+    const result = await storeMemoryFact(env, { ...parsed, userId: personalUserId })
     if (result.deduped) {
       return json({ id: result.id, stored: true, deduped: true }, 200)
     }
@@ -271,24 +224,16 @@ function tsMs(ts: string): number {
  * degrades to the seat-only response, never throws.
  */
 export async function handleMemoryQueryRoute(request: Request, env: Env): Promise<Response> {
-  // #155 slice 2: resolve the bearer through the per-tenant API-key resolver (a D1
-  // api_key lookup), falling back to the legacy shared secret
-  // (env.OPENCLAW_SIGILIX_API_KEY -> LEGACY_TENANT_INSTALLATION_ID) so an existing
-  // global-key caller is unaffected. FAIL-CLOSED: a missing/bad bearer, a revoked
-  // key, OR a genuine D1 fault during the lookup all resolve to null here -> 401,
-  // never a bypass (see api-key-resolver.ts — this inverts the repo's usual
-  // fail-open D1 default on purpose, because this gates authentication).
-  //
-  // SIG-494: a real per-tenant key's subject is namespaced under
-  // `inst:<installationId>:` (scopeMemoryUserId below) so the query can only ever
-  // match its OWN installation's memory — see handleMemoryWriteRoute's comment.
-  // The legacy global key stays broad.
+  // The authenticated API-key creator, not body userId, selects the exact
+  // personal namespace. Missing/unprovable identity fails closed.
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "memory_endpoint_not_configured" }, 503)
   }
   const auth = await requireApiTenant(request, env)
   if ("response" in auth) return auth.response
   const caller = auth.caller
+  const personalUserId = await resolveApiPersonalMemoryUserId(env, caller)
+  if (personalUserId === null) return json({ error: "memory_identity_unavailable" }, 403)
 
   let raw: unknown
   try {
@@ -306,10 +251,9 @@ export async function handleMemoryQueryRoute(request: Request, env: Env): Promis
   // Fetch at least `limit` vector hits — a larger requested `limit` (up to
   // MAX_LIMIT) must not be starved by the default topK before the slice.
   const topK = Math.max(DEFAULT_TOP_K, limit)
-  // SIG-494: confine to the caller's installation namespace (legacy key → unchanged).
-  // The SAME scoped userId keys BOTH the vector query AND the KV hydrate below, or a
-  // hit would fail to resolve its record.
-  const userId = scopeMemoryUserId(parsed.userId, caller.installationId)
+  // The SAME authenticated personal subject keys BOTH the vector query and KV
+  // hydrate below, or a hit would fail to resolve its record.
+  const userId = personalUserId
 
   try {
     // Semantic hits (soft — returns [] on any embed/query failure).

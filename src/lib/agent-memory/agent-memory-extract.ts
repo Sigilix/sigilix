@@ -25,7 +25,8 @@ import {
 import { modelApiKeys, selectConfigApiKey } from "@/src/lib/ensemble/adapters/model-provider-routing"
 import type { AgentMemoryKind } from "./types"
 import { ALL_AGENT_MEMORY_KINDS } from "./types"
-import { MAX_BODY_BYTES, canonicalTenantId, json, scopeMemoryUserId, storeMemoryFact } from "./agent-memory-route"
+import { MAX_BODY_BYTES, canonicalTenantId, json, storeMemoryFact } from "./agent-memory-route"
+import { resolveApiPersonalMemoryUserId } from "./agent-memory-personal-subject"
 
 // The model may surface a few facts per exchange, but most exchanges yield none —
 // the conservative prompt prefers empty over noise. Cap so a runaway response
@@ -187,8 +188,8 @@ function parseExtractBody(raw: unknown): ExtractBody | string {
     return "userMessage (non-empty string) is required"
   if (typeof b.assistantMessage !== "string" || b.assistantMessage.trim() === "")
     return "assistantMessage (non-empty string) is required"
-  // Canonicalize the tenant scope to ONE form (lowercased) so the KV keyspace and
-  // the Vectorize namespace derive from the same value (mirrors the PUT route).
+  // Canonicalize repoId for storage. userId remains a required compatibility
+  // field but authenticated identity replaces it before any fact is stored.
   return {
     userId: canonicalTenantId(b.userId),
     repoId: canonicalTenantId(b.repoId),
@@ -216,24 +217,16 @@ interface StoredFactResult {
  * `{ stored, facts: [{ kind, content, id, deduped }] }`.
  */
 export async function handleMemoryExtractRoute(request: Request, env: Env): Promise<Response> {
-  // #155 slice 2: resolve the bearer through the per-tenant API-key resolver (a D1
-  // api_key lookup), falling back to the legacy shared secret
-  // (env.OPENCLAW_SIGILIX_API_KEY -> LEGACY_TENANT_INSTALLATION_ID) so an existing
-  // global-key caller is unaffected. FAIL-CLOSED: a missing/bad bearer, a revoked
-  // key, OR a genuine D1 fault during the lookup all resolve to null here -> 401,
-  // never a bypass (see api-key-resolver.ts — this inverts the repo's usual
-  // fail-open D1 default on purpose, because this gates authentication).
-  //
-  // SIG-494: a real per-tenant key's subject is namespaced under
-  // `inst:<installationId>:` (scopeMemoryUserId below) before the distilled facts
-  // are stored, so extract can only write into its OWN installation's memory — see
-  // agent-memory-route.ts's handleMemoryWriteRoute comment. Legacy key stays broad.
+  // Bind extraction to the authenticated API-key creator's stable user identity.
+  // Missing/unprovable identity — including the legacy global key — fails closed.
   if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
     return json({ error: "memory_endpoint_not_configured" }, 503)
   }
   const auth = await requireApiTenant(request, env)
   if ("response" in auth) return auth.response
   const caller = auth.caller
+  const personalUserId = await resolveApiPersonalMemoryUserId(env, caller)
+  if (personalUserId === null) return json({ error: "memory_identity_unavailable" }, 403)
 
   let raw: unknown
   try {
@@ -255,13 +248,11 @@ export async function handleMemoryExtractRoute(request: Request, env: Env): Prom
       assistantMessage: parsed.assistantMessage,
     })
 
-    // SIG-494: confine to the caller's installation namespace (legacy key → unchanged).
-    const userId = scopeMemoryUserId(parsed.userId, caller.installationId)
     const stored: StoredFactResult[] = []
     for (const fact of facts) {
       try {
         const result = await storeMemoryFact(env, {
-          userId,
+          userId: personalUserId,
           repoId: parsed.repoId,
           kind: fact.kind,
           content: fact.content,

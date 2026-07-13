@@ -13,6 +13,7 @@ import { sha256Hex } from "@/src/lib/auth-bearer"
 import { appendLearning } from "@/src/features/learnings"
 import type { LearningEntry } from "@/src/features/learnings"
 import { handleMemoryWriteRoute, handleMemoryQueryRoute, scopeMemoryUserId } from "./agent-memory-route"
+import { personalMemoryUserId } from "./agent-memory-personal-subject"
 import { LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { memoryNamespace } from "./retrieval"
 import type { Env } from "@/src/shared/types/env"
@@ -76,10 +77,11 @@ function fakeIndex() {
 
 let kv: KVNamespace
 let idx: ReturnType<typeof fakeIndex>
+let db: D1Database
 
 function makeEnv(extra: Partial<Env> = {}): Env {
   return {
-    OPENCLAW_SIGILIX_API_KEY: TOKEN,
+    SIGILIX_PLATFORM_DB: db,
     OPENCLAW_STATE: kv,
     AI: fakeAi(),
     OPENCLAW_AGENT_MEMORY_INDEX: idx.index,
@@ -90,6 +92,35 @@ const MIGRATION_SQL_API_KEY = readFileSync(
   new URL("../../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_SQL_IDENTITY = readFileSync(
+  new URL("../../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
+
+async function seedIdentity(database: D1Database, userId: string, githubUserId: string): Promise<void> {
+  await database
+    .prepare(
+      "INSERT INTO user_identity " +
+        "(user_id, github_user_id, providers, created_at, last_login_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(userId, githubUserId, '["github"]', "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+    .run()
+}
+
+async function applyAuthMigrations(database: D1Database): Promise<void> {
+  await database.exec(MIGRATION_SQL_API_KEY)
+  await database.exec(MIGRATION_SQL_IDENTITY)
+}
+
+function legacyEnv(extra: Partial<Env> = {}): Env {
+  return {
+    OPENCLAW_SIGILIX_API_KEY: TOKEN,
+    OPENCLAW_STATE: kv,
+    AI: fakeAi(),
+    OPENCLAW_AGENT_MEMORY_INDEX: idx.index,
+    ...extra,
+  } as unknown as Env
+}
 /** Throws on any operation — simulates a genuine D1 outage/fault. */
 function makeBrokenDb(): D1Database {
   return {
@@ -127,9 +158,19 @@ function queryReq(body: unknown, token: string | null = TOKEN): Request {
 
 const writeBody = { userId: "u1", repoId: "sigilix/boreas", kind: "decision", content: "use bun, not node" }
 
-beforeEach(() => {
+beforeEach(async () => {
   kv = fakeKV()
   idx = fakeIndex()
+  db = makeD1()
+  await applyAuthMigrations(db)
+  await seedIdentity(db, "user-1", "1")
+  await insertApiKey(db, {
+    id: "key-default",
+    keyHash: await sha256Hex(TOKEN),
+    installationId: 42,
+    createdBy: "1",
+    nowIso: "2026-01-01T00:00:00Z",
+  })
 })
 
 afterEach(() => {
@@ -148,25 +189,25 @@ describe("agent-memory routes — auth + validation", () => {
     expect((await handleMemoryQueryRoute(queryReq({ ...writeBody, query: "x" }, "nope"), makeEnv())).status).toBe(401)
   })
 
-  // #155 slice 2: both routes now authenticate via resolveApiKey (D1 api_key lookup,
-  // falling back to the legacy global key). These pin the new invariants at the
-  // route level (resolveApiKey's own unit suite covers the resolver exhaustively).
+  // Both routes authenticate via the D1 api_key lookup and resolve the key
+  // creator through user_identity before accepting personal-memory access.
   it("200 with a valid per-tenant api_key — NO global key configured at all (both routes)", async () => {
-    const db = makeD1()
-    await db.exec(MIGRATION_SQL_API_KEY)
+    const tenantDb = makeD1()
+    await applyAuthMigrations(tenantDb)
+    await seedIdentity(tenantDb, "user-tenant", "11")
     const plaintext = "sigilix_live_memory_test"
-    await insertApiKey(db, {
+    await insertApiKey(tenantDb, {
       id: "key-1",
       keyHash: await sha256Hex(plaintext),
       installationId: 42,
-      createdBy: "1",
+      createdBy: "11",
       nowIso: "2026-01-01T00:00:00Z",
     })
-    const env = unkeyedEnv({ SIGILIX_PLATFORM_DB: db })
+    const env = unkeyedEnv({ SIGILIX_PLATFORM_DB: tenantDb })
     expect((await handleMemoryWriteRoute(writeReq(writeBody, plaintext), env)).status).toBe(200)
     expect((await handleMemoryQueryRoute(queryReq({ ...writeBody, query: "x" }, plaintext), env)).status).toBe(200)
   })
-  it("401 on a genuine D1 fault — fails CLOSED even though the presented bearer is the valid global key (both routes)", async () => {
+  it("401 on a genuine D1 fault — API-key authentication fails CLOSED (both routes)", async () => {
     const env = makeEnv({ SIGILIX_PLATFORM_DB: makeBrokenDb() })
     expect((await handleMemoryWriteRoute(writeReq(writeBody, TOKEN), env)).status).toBe(401)
     expect((await handleMemoryQueryRoute(queryReq({ ...writeBody, query: "x" }, TOKEN), env)).status).toBe(401)
@@ -206,11 +247,11 @@ describe("PUT /v1/memory — write", () => {
     expect(out.vectorStored).toBe(true)
   })
 
-  it("upserts to the lowercased tenant namespace `<userId>/<repoId>`", async () => {
+  it("upserts under the authenticated internal user and lowercased repo namespace", async () => {
     await handleMemoryWriteRoute(writeReq({ ...writeBody, userId: "U1", repoId: "Sigilix/Boreas" }), makeEnv())
     expect(idx.upsertCalls.length).toBe(1)
-    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe(memoryNamespace("U1", "Sigilix/Boreas"))
-    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe("u1/sigilix/boreas")
+    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe(memoryNamespace("inst:42:user:user-1", "Sigilix/Boreas"))
+    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe("inst:42:user:user-1/sigilix/boreas")
   })
 
   it("puts { kind, ts } in the vector metadata", async () => {
@@ -285,12 +326,17 @@ describe("POST /v1/memory/query — retrieve", () => {
     })
   })
 
-  it("queries the tenant namespace (isolation): another tenant sees nothing", async () => {
+  it("ignores a spoofed body userId and queries the authenticated user's namespace", async () => {
     const env = makeEnv()
-    await handleMemoryWriteRoute(writeReq(writeBody), env) // tenant u1/sigilix/boreas
-    const res = await handleMemoryQueryRoute(queryReq({ userId: "u2", repoId: "other/repo", query: "build tool" }), env)
+    await handleMemoryWriteRoute(writeReq(writeBody), env)
+    const res = await handleMemoryQueryRoute(
+      queryReq({ userId: "spoofed-other-user", repoId: writeBody.repoId, query: "build tool" }),
+      env,
+    )
     expect(res.status).toBe(200)
-    expect(((await res.json()) as { results: unknown[] }).results).toEqual([])
+    expect(((await res.json()) as { results: Array<{ content: string }> }).results).toEqual([
+      expect.objectContaining({ content: writeBody.content }),
+    ])
   })
 
   it("sorts newest-first and honors `limit` (capped)", async () => {
@@ -334,10 +380,10 @@ describe("POST /v1/memory/query — retrieve", () => {
     expect(((await res.json()) as { results: unknown[] }).results).toEqual([])
   })
 
-  it("hydrates the KV record on a case-insensitive write→query round-trip", async () => {
+  it("hydrates the KV record on a case-insensitive repo write→query round-trip", async () => {
     const env = makeEnv()
-    // Write with mixed-case tenant ids; query with a different casing of the same
-    // tenant. KV keys and the Vectorize namespace must agree (both canonicalized)
+    // Write with a mixed-case repo; query with a different casing of the same
+    // repo. KV keys and the Vectorize namespace must agree (both canonicalized)
     // so the matched vector hydrates its record rather than missing it.
     await handleMemoryWriteRoute(writeReq({ ...writeBody, userId: "U1", repoId: "Sigilix/Boreas" }), env)
     const res = await handleMemoryQueryRoute(
@@ -358,17 +404,15 @@ describe("POST /v1/memory/query — retrieve", () => {
   })
 })
 
-// SIG-494: the memory store is keyed by caller-asserted userId/repoId — before the
-// fix, any authenticated bearer could READ or (worse) POISON another tenant's memory
-// by naming its subject. A real per-tenant key's subject is now namespaced under
-// `inst:<installationId>:` so it is physically confined to its own installation; the
-// legacy global key stays un-prefixed (broad).
-describe("scopeMemoryUserId — SIG-494 unit", () => {
-  it("prefixes a real per-tenant key's subject with its installation id", () => {
-    expect(scopeMemoryUserId("u1", 42)).toBe("inst:42:u1")
+// Personal memory is owned by the authenticated, provider-independent user id.
+// The wire-level body userId is intentionally absent from these subjects.
+describe("personal memory subject", () => {
+  it("combines the installation with the canonical internal user id", () => {
+    expect(personalMemoryUserId(42, " User-ABC ")).toBe("inst:42:user:user-abc")
   })
-  it("leaves the LEGACY global key's subject un-prefixed (broad)", () => {
-    expect(scopeMemoryUserId("u1", LEGACY_TENANT_INSTALLATION_ID)).toBe("u1")
+  it("preserves the generic helper's legacy contract while personal subjects stay installation-scoped", () => {
+    expect(scopeMemoryUserId("user:user-1", LEGACY_TENANT_INSTALLATION_ID)).toBe("user:user-1")
+    expect(personalMemoryUserId(LEGACY_TENANT_INSTALLATION_ID, "user-1")).toBe("inst:-1:user:user-1")
   })
   it("cannot be forged out of the caller's namespace — a spoofed inst: prefix is only ever nested under the real one", () => {
     // A caller with a key for installation 7 who names `userId: "inst:42:victim"`
@@ -379,18 +423,19 @@ describe("scopeMemoryUserId — SIG-494 unit", () => {
 
 describe("agent-memory routes — SIG-494 tenant-scope isolation", () => {
   async function twoTenantEnv(): Promise<{ env: Env; tokenA: string; tokenB: string }> {
-    const db = makeD1()
-    await db.exec(MIGRATION_SQL_API_KEY)
+    const tenantDb = makeD1()
+    await applyAuthMigrations(tenantDb)
+    await seedIdentity(tenantDb, "user-1", "1")
     const tokenA = "sigilix_live_mem_inst42"
     const tokenB = "sigilix_live_mem_inst999"
-    await insertApiKey(db, {
+    await insertApiKey(tenantDb, {
       id: "key-a",
       keyHash: await sha256Hex(tokenA),
       installationId: 42,
       createdBy: "1",
       nowIso: "2026-01-01T00:00:00Z",
     })
-    await insertApiKey(db, {
+    await insertApiKey(tenantDb, {
       id: "key-b",
       keyHash: await sha256Hex(tokenB),
       installationId: 999,
@@ -398,7 +443,7 @@ describe("agent-memory routes — SIG-494 tenant-scope isolation", () => {
       nowIso: "2026-01-01T00:00:00Z",
     })
     // No global key configured → force the per-tenant D1 path for both bearers.
-    return { env: unkeyedEnv({ SIGILIX_PLATFORM_DB: db }), tokenA, tokenB }
+    return { env: unkeyedEnv({ SIGILIX_PLATFORM_DB: tenantDb }), tokenA, tokenB }
   }
 
   it("a per-tenant key CANNOT read another installation's memory written under the SAME userId/repoId (the read leak + write poison, closed)", async () => {
@@ -414,35 +459,40 @@ describe("agent-memory routes — SIG-494 tenant-scope isolation", () => {
     expect(((await own.json()) as { results: Array<{ content: string }> }).results.length).toBe(1)
   })
 
-  it("upserts under the installation-prefixed namespace for a per-tenant key", async () => {
+  it("upserts under the installation-prefixed internal-user namespace for a per-tenant key", async () => {
     const { env, tokenA } = await twoTenantEnv()
     await handleMemoryWriteRoute(writeReq(writeBody, tokenA), env)
-    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe(memoryNamespace("inst:42:u1", "sigilix/boreas"))
+    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe(memoryNamespace("inst:42:user:user-1", "sigilix/boreas"))
   })
 
-  it("the legacy global key stays un-prefixed (broad) — namespace unchanged", async () => {
-    await handleMemoryWriteRoute(writeReq(writeBody), makeEnv()) // legacy TOKEN → installationId -1
-    expect(idx.upsertCalls[0]?.[0]?.namespace).toBe(memoryNamespace("u1", "sigilix/boreas"))
+  it("denies the legacy global key on personal-memory routes", async () => {
+    const legacyDb = makeD1()
+    await applyAuthMigrations(legacyDb)
+    const env = legacyEnv({ SIGILIX_PLATFORM_DB: legacyDb })
+    const write = await handleMemoryWriteRoute(writeReq(writeBody), env)
+    const query = await handleMemoryQueryRoute(queryReq({ ...writeBody, query: "x" }), env)
+    expect(write.status).toBe(403)
+    expect(query.status).toBe(403)
+    expect(await write.json()).toEqual({ error: "memory_identity_unavailable" })
+    expect(await query.json()).toEqual({ error: "memory_identity_unavailable" })
+    expect(idx.upsertCalls).toEqual([])
   })
 
-  it("a per-tenant key cannot read a memory the LEGACY global key wrote at the same subject", async () => {
-    const db = makeD1()
-    await db.exec(MIGRATION_SQL_API_KEY)
+  it("denies a per-tenant key whose creator has no user_identity row", async () => {
+    const tenantDb = makeD1()
+    await applyAuthMigrations(tenantDb)
     const perTenant = "sigilix_live_mem_inst7"
-    await insertApiKey(db, {
+    await insertApiKey(tenantDb, {
       id: "key-7",
       keyHash: await sha256Hex(perTenant),
       installationId: 7,
-      createdBy: "1",
+      createdBy: "missing-user",
       nowIso: "2026-01-01T00:00:00Z",
     })
-    const env = makeEnv({ SIGILIX_PLATFORM_DB: db }) // legacy TOKEN present + D1
-    // Legacy key writes under the raw (un-prefixed) userId.
-    await handleMemoryWriteRoute(writeReq(writeBody, TOKEN), env)
-    // A per-tenant key (installation 7) reads the same subject → sees nothing.
+    const env = unkeyedEnv({ SIGILIX_PLATFORM_DB: tenantDb })
     const res = await handleMemoryQueryRoute(queryReq({ ...writeBody, query: "build tool" }, perTenant), env)
-    expect(res.status).toBe(200)
-    expect(((await res.json()) as { results: unknown[] }).results).toEqual([])
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: "memory_identity_unavailable" })
   })
 })
 
@@ -471,10 +521,11 @@ describe("POST /v1/memory/query — Seat∪Org memory layering (Phase 3)", () =>
   }
 
   async function perTenantEnv(extra: Partial<Env> = {}): Promise<{ env: Env; token: string }> {
-    const db = makeD1()
-    await db.exec(MIGRATION_SQL_API_KEY)
+    const tenantDb = makeD1()
+    await applyAuthMigrations(tenantDb)
+    await seedIdentity(tenantDb, "user-1", "1")
     const token = "sigilix_live_cli_org_memory"
-    await insertApiKey(db, {
+    await insertApiKey(tenantDb, {
       id: "key-cli",
       keyHash: await sha256Hex(token),
       installationId: ORG_INSTALL_ID,
@@ -482,7 +533,7 @@ describe("POST /v1/memory/query — Seat∪Org memory layering (Phase 3)", () =>
       nowIso: "2026-01-01T00:00:00Z",
     })
     // No global key configured → force the per-tenant D1 path.
-    return { env: unkeyedEnv({ SIGILIX_PLATFORM_DB: db, ...extra }), token }
+    return { env: unkeyedEnv({ SIGILIX_PLATFORM_DB: tenantDb, ...extra }), token }
   }
 
   const seatBody = { userId: "u1", repoId: "sigilix/boreas", kind: "decision" as const, content: "seat fact" }
@@ -577,18 +628,12 @@ describe("POST /v1/memory/query — Seat∪Org memory layering (Phase 3)", () =>
     expect(out.results.map((r) => r.id)).toEqual(["org:a"])
   })
 
-  it("flag ON + the LEGACY global key — no single org to scope to, degrades to seat-only, no throw", async () => {
-    const env = makeEnv({ OPENCLAW_CLI_ORG_MEMORY: "on" }) // legacy TOKEN → installationId -1
-    await handleMemoryWriteRoute(writeReq(seatBody), env)
-    // Seed the legacy sentinel's own "org" key too — must never surface even
-    // though it technically exists under that (nonsensical) subjectId.
-    await appendLearning(env, "org", String(LEGACY_TENANT_INSTALLATION_ID), orgEntry("a"))
-    vi.spyOn(console, "log").mockImplementation(() => undefined)
-
+  it("flag ON + the LEGACY global key — personal memory remains denied", async () => {
+    const env = legacyEnv({ OPENCLAW_CLI_ORG_MEMORY: "on" })
+    expect((await handleMemoryWriteRoute(writeReq(seatBody), env)).status).toBe(403)
     const res = await handleMemoryQueryRoute(queryReq({ ...seatBody, query: "seat" }), env)
-    expect(res.status).toBe(200)
-    const out = (await res.json()) as { results: Array<{ content: string }> }
-    expect(out.results.map((r) => r.content)).toEqual(["seat fact"])
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: "memory_identity_unavailable" })
   })
 
   it("flag ON + an org-store read throwing — degrades to seat-only, logs, never throws", async () => {

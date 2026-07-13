@@ -55,6 +55,14 @@ const MIGRATION_SQL_API_KEY = readFileSync(
   new URL("../../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_SQL_IDENTITY = readFileSync(
+  new URL("../../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
+
+const USER_ID = "user-1"
+const PERSONAL_42 = `inst:42:user:${USER_ID}`
+const PERSONAL_99 = `inst:99:user:${USER_ID}`
 
 // ─── In-memory KV with list({prefix, limit, cursor}) ─────────
 
@@ -112,10 +120,12 @@ function fakeIndex() {
 
 let fk: FakeKV
 let idx: ReturnType<typeof fakeIndex>
+let sessionDb: D1Database
 
 function makeEnv(extra: Partial<Env> = {}): Env {
   return {
     OPENCLAW_SIGILIX_API_KEY: TOKEN,
+    SIGILIX_PLATFORM_DB: sessionDb,
     OPENCLAW_STATE: fk.kv,
     OPENCLAW_AGENT_MEMORY_INDEX: idx.index,
     ...extra,
@@ -125,6 +135,15 @@ function makeEnv(extra: Partial<Env> = {}): Env {
 /** Env with neither the static bearer NOR the D1 binding — the inert-503 case. */
 function unkeyedEnv(): Env {
   return { OPENCLAW_STATE: fk.kv, OPENCLAW_AGENT_MEMORY_INDEX: idx.index } as unknown as Env
+}
+
+/** Throws on any operation — simulates a genuine D1 outage/fault. */
+function makeBrokenDb(): D1Database {
+  return {
+    prepare() {
+      throw new Error("simulated D1 error")
+    },
+  } as unknown as D1Database
 }
 
 // ─── Seed helpers ────────────────────────────────────────────
@@ -165,10 +184,11 @@ async function seedRecord(args: {
   return { id, hash, recordKey, hashKey }
 }
 
-function seedSession(sessionId: string, githubUserId: number, login = "octocat"): void {
+function seedSession(sessionId: string, githubUserId: number, login = "octocat", userId?: string): void {
   const record = {
     login,
     githubUserId,
+    ...(userId !== undefined ? { userId } : {}),
     encryptedAccessToken: "x",
     iv: "y",
     createdAt: Date.now(),
@@ -178,14 +198,32 @@ function seedSession(sessionId: string, githubUserId: number, login = "octocat")
 }
 
 /** D1 with one per-tenant api key → the given installationId. */
-async function d1WithKey(plaintext: string, installationId: number): Promise<D1Database> {
+async function seedIdentity(db: D1Database, userId: string, githubUserId: string): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO user_identity
+       (user_id, github_user_id, providers, created_at, last_login_at)
+       VALUES (?, ?, '["github"]', ?, ?)`,
+    )
+    .bind(userId, githubUserId, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+    .run()
+}
+
+async function d1WithKey(
+  plaintext: string,
+  installationId: number,
+  createdBy = "1",
+  userId = USER_ID,
+): Promise<D1Database> {
   const db = makeD1()
   await db.exec(MIGRATION_SQL_API_KEY)
+  await db.exec(MIGRATION_SQL_IDENTITY)
+  await seedIdentity(db, userId, createdBy)
   await insertApiKey(db, {
     id: `key-${installationId}`,
     keyHash: await keyHash(plaintext),
     installationId,
-    createdBy: "1",
+    createdBy,
     nowIso: "2026-01-01T00:00:00Z",
   })
   return db
@@ -218,9 +256,13 @@ interface ListResponse {
   cursor?: string
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   fk = fakeKV()
   idx = fakeIndex()
+  sessionDb = makeD1()
+  await sessionDb.exec(MIGRATION_SQL_API_KEY)
+  await sessionDb.exec(MIGRATION_SQL_IDENTITY)
+  await seedIdentity(sessionDb, USER_ID, "12345")
 })
 
 afterEach(() => {
@@ -242,6 +284,16 @@ describe("GET /v1/memory — auth", () => {
   it("401 on a bad bearer", async () => {
     expect((await handleMemoryListRoute(listReq("", "nope"), makeEnv())).status).toBe(401)
   })
+
+  it("401 on a genuine D1 fault for both list and delete", async () => {
+    const env = makeEnv({ SIGILIX_PLATFORM_DB: makeBrokenDb() })
+    expect((await handleMemoryListRoute(listReq("", TOKEN), env)).status).toBe(401)
+    expect((await handleMemoryDeleteRoute(delReq("mem_x", TOKEN), env, "mem_x")).status).toBe(401)
+  })
+
+  it("403 for the legacy global key because it has no authenticated personal identity", async () => {
+    expect((await handleMemoryListRoute(listReq("", TOKEN), makeEnv())).status).toBe(403)
+  })
 })
 
 // ─── GET /v1/memory — tenant isolation ───────────────────────
@@ -249,11 +301,13 @@ describe("GET /v1/memory — auth", () => {
 describe("GET /v1/memory — tenant isolation", () => {
   it("lists only the caller-installation's records — never another installation's", async () => {
     // Two distinct tenants (installations), each with its own scoped record.
-    await seedRecord({ userId: "inst:42:u1", repoId: "sigilix/boreas", content: "A-42 secret" })
-    await seedRecord({ userId: "inst:99:u1", repoId: "sigilix/boreas", content: "B-99 secret" })
+    await seedRecord({ userId: PERSONAL_42, repoId: "sigilix/boreas", content: "A-42 secret" })
+    await seedRecord({ userId: PERSONAL_99, repoId: "sigilix/boreas", content: "B-99 secret" })
 
     const db = makeD1()
     await db.exec(MIGRATION_SQL_API_KEY)
+    await db.exec(MIGRATION_SQL_IDENTITY)
+    await seedIdentity(db, USER_ID, "1")
     await insertApiKey(db, {
       id: "k42",
       keyHash: await keyHash("key42"),
@@ -281,8 +335,8 @@ describe("GET /v1/memory — tenant isolation", () => {
   })
 
   it("does not confuse installation 42 with 421 (trailing-colon prefix boundary)", async () => {
-    await seedRecord({ userId: "inst:42:u1", repoId: "r", content: "keep" })
-    await seedRecord({ userId: "inst:421:u1", repoId: "r", content: "leak" })
+    await seedRecord({ userId: PERSONAL_42, repoId: "r", content: "keep" })
+    await seedRecord({ userId: `inst:421:user:${USER_ID}`, repoId: "r", content: "leak" })
     const env = makeEnv({ SIGILIX_PLATFORM_DB: await d1WithKey("key42", 42) })
     const out = (await (await handleMemoryListRoute(listReq("", "key42"), env)).json()) as ListResponse
     expect(out.memories.map((m) => m.content)).toEqual(["keep"])
@@ -291,9 +345,9 @@ describe("GET /v1/memory — tenant isolation", () => {
   it("session path resolves to the caller's installation namespace — sees the CLI-written inst:<id> records", async () => {
     // The CLI wrote under inst:42; a portal session that maps to installation 42
     // must see EXACTLY those records (the P1 fix: session scope == write scope).
-    await seedRecord({ userId: "inst:42:u1", repoId: "sigilix/boreas", content: "cli wrote this" })
-    await seedRecord({ userId: "inst:99:u1", repoId: "sigilix/boreas", content: "other org" })
-    seedSession("sess-a", 12345)
+    await seedRecord({ userId: PERSONAL_42, repoId: "sigilix/boreas", content: "cli wrote this" })
+    await seedRecord({ userId: PERSONAL_99, repoId: "sigilix/boreas", content: "other org" })
+    seedSession("sess-a", 12345, "octocat", USER_ID)
     stubInstallations([42])
     const out = (await (
       await handleMemoryListRoute(
@@ -305,10 +359,10 @@ describe("GET /v1/memory — tenant isolation", () => {
   })
 
   it("session across multiple installations unions their namespaces (compound cursor)", async () => {
-    await seedRecord({ userId: "inst:42:u1", repoId: "r", content: "from-42" })
-    await seedRecord({ userId: "inst:99:u1", repoId: "r", content: "from-99" })
-    await seedRecord({ userId: "inst:7:u1", repoId: "r", content: "not-mine" })
-    seedSession("sess-a", 12345)
+    await seedRecord({ userId: PERSONAL_42, repoId: "r", content: "from-42" })
+    await seedRecord({ userId: PERSONAL_99, repoId: "r", content: "from-99" })
+    await seedRecord({ userId: `inst:7:user:${USER_ID}`, repoId: "r", content: "not-mine" })
+    seedSession("sess-a", 12345, "octocat", USER_ID)
     stubInstallations([42, 99])
     const env = makeEnv({ OPENCLAW_SESSION_ENCRYPTION_KEY: SESSION_KEY })
 
@@ -329,8 +383,8 @@ describe("GET /v1/memory — tenant isolation", () => {
   })
 
   it("session with no linked installation → empty list (not an error)", async () => {
-    await seedRecord({ userId: "inst:42:u1", repoId: "r", content: "x" })
-    seedSession("sess-a", 12345)
+    await seedRecord({ userId: PERSONAL_42, repoId: "r", content: "x" })
+    seedSession("sess-a", 12345, "octocat", USER_ID)
     stubInstallations([])
     const res = await handleMemoryListRoute(
       listReq("", null, "__Host-sigilix_session=sess-a"),
@@ -340,9 +394,47 @@ describe("GET /v1/memory — tenant isolation", () => {
     expect(((await res.json()) as ListResponse).memories).toEqual([])
   })
 
+  it("legacy GitHub session without a stored user id resolves it from user_identity", async () => {
+    seedSession("legacy-session", 12345)
+    stubInstallations([42])
+    const res = await handleMemoryListRoute(
+      listReq("", null, "__Host-sigilix_session=legacy-session"),
+      makeEnv({ OPENCLAW_SESSION_ENCRYPTION_KEY: SESSION_KEY }),
+    )
+    expect(res.status).toBe(200)
+  })
+
+  it("session whose stored user id disagrees with its GitHub identity fails closed", async () => {
+    seedSession("mismatched-session", 12345, "octocat", "user-2")
+    stubInstallations([42])
+    const res = await handleMemoryListRoute(
+      listReq("", null, "__Host-sigilix_session=mismatched-session"),
+      makeEnv({ OPENCLAW_SESSION_ENCRYPTION_KEY: SESSION_KEY }),
+    )
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: "memory_identity_unavailable" })
+  })
+
+  it("uses the trusted server-side session user id when D1 is not bound", async () => {
+    seedSession("session-without-d1", 12345, "octocat", USER_ID)
+    stubInstallations([42])
+    const env = makeEnv({ OPENCLAW_SESSION_ENCRYPTION_KEY: SESSION_KEY })
+    delete env.SIGILIX_PLATFORM_DB
+    const res = await handleMemoryListRoute(listReq("", null, "__Host-sigilix_session=session-without-d1"), env)
+    expect(res.status).toBe(200)
+  })
+
+  it("does not list another member's records from the same installation", async () => {
+    await seedRecord({ userId: PERSONAL_42, repoId: "r", content: "mine" })
+    await seedRecord({ userId: "inst:42:user:user-2", repoId: "r", content: "peer secret" })
+    const env = makeEnv({ SIGILIX_PLATFORM_DB: await d1WithKey("key42", 42) })
+    const out = (await (await handleMemoryListRoute(listReq("", "key42"), env)).json()) as ListResponse
+    expect(out.memories.map((memory) => memory.content)).toEqual(["mine"])
+  })
+
   it("filters by ?repoId within the caller's scope", async () => {
-    await seedRecord({ userId: "inst:42:u1", repoId: "sigilix/boreas", content: "boreas note" })
-    await seedRecord({ userId: "inst:42:u1", repoId: "sigilix/portal", content: "portal note" })
+    await seedRecord({ userId: PERSONAL_42, repoId: "sigilix/boreas", content: "boreas note" })
+    await seedRecord({ userId: PERSONAL_42, repoId: "sigilix/portal", content: "portal note" })
     const env = makeEnv({ SIGILIX_PLATFORM_DB: await d1WithKey("key42", 42) })
     const out = (await (
       await handleMemoryListRoute(listReq("?repoId=Sigilix/Boreas", "key42"), env)
@@ -354,8 +446,8 @@ describe("GET /v1/memory — tenant isolation", () => {
   it("never returns the agent-memory-hash: dedup-pointer keys", async () => {
     // Each seed writes BOTH a record key and a hash-pointer key. A correct list
     // returns exactly one memory per record (N), not 2N.
-    await seedRecord({ userId: "inst:42:u1", repoId: "r", content: "one" })
-    await seedRecord({ userId: "inst:42:u1", repoId: "r", content: "two" })
+    await seedRecord({ userId: PERSONAL_42, repoId: "r", content: "one" })
+    await seedRecord({ userId: PERSONAL_42, repoId: "r", content: "two" })
     const env = makeEnv({ SIGILIX_PLATFORM_DB: await d1WithKey("key42", 42) })
     const out = (await (await handleMemoryListRoute(listReq("", "key42"), env)).json()) as ListResponse
     expect(out.memories).toHaveLength(2)
@@ -369,7 +461,7 @@ describe("GET /v1/memory — pagination", () => {
   it("returns a cursor when more pages remain and yields the rest without duplicates", async () => {
     const ids: string[] = []
     for (let i = 0; i < 5; i++) {
-      const s = await seedRecord({ userId: "inst:42:u1", repoId: "r", content: `note-${i}` })
+      const s = await seedRecord({ userId: PERSONAL_42, repoId: "r", content: `note-${i}` })
       ids.push(s.id)
     }
     const env = makeEnv({ SIGILIX_PLATFORM_DB: await d1WithKey("key42", 42) })
@@ -394,7 +486,7 @@ describe("GET /v1/memory — pagination", () => {
   it("caps limit at 100 and defaults to 50", async () => {
     // Sanity: an over-cap limit is accepted (clamped) without error, and returns
     // all seeded records in one page (well under the cap).
-    for (let i = 0; i < 3; i++) await seedRecord({ userId: "inst:42:u1", repoId: "r", content: `x-${i}` })
+    for (let i = 0; i < 3; i++) await seedRecord({ userId: PERSONAL_42, repoId: "r", content: `x-${i}` })
     const env = makeEnv({ SIGILIX_PLATFORM_DB: await d1WithKey("key42", 42) })
     const out = (await (await handleMemoryListRoute(listReq("?limit=9999", "key42"), env)).json()) as ListResponse
     expect(out.memories).toHaveLength(3)
@@ -410,7 +502,8 @@ describe("GET /v1/memory — fail-soft", () => {
     ;(fk.kv as unknown as { list: () => Promise<never> }).list = async () => {
       throw new Error("kv list down")
     }
-    const res = await handleMemoryListRoute(listReq("", TOKEN), makeEnv()) // legacy key → broad
+    const env = makeEnv({ SIGILIX_PLATFORM_DB: await d1WithKey("key42", 42) })
+    const res = await handleMemoryListRoute(listReq("", "key42"), env)
     expect(res.status).toBe(200)
     const out = (await res.json()) as ListResponse
     expect(out.memories).toEqual([])
@@ -428,11 +521,14 @@ describe("DELETE /v1/memory/:id — auth", () => {
   it("401 without a session or bearer", async () => {
     expect((await handleMemoryDeleteRoute(delReq("mem_x"), makeEnv(), "mem_x")).status).toBe(401)
   })
+  it("403 for the legacy global key because it has no authenticated personal identity", async () => {
+    expect((await handleMemoryDeleteRoute(delReq("mem_x", TOKEN), makeEnv(), "mem_x")).status).toBe(403)
+  })
 })
 
 describe("DELETE /v1/memory/:id — behavior", () => {
   it("deletes the record key, the hash-pointer key, AND the vector; returns { ok, deleted }", async () => {
-    const seeded = await seedRecord({ userId: "inst:42:u1", repoId: "r", content: "delete me" })
+    const seeded = await seedRecord({ userId: PERSONAL_42, repoId: "r", content: "delete me" })
     const env = makeEnv({ SIGILIX_PLATFORM_DB: await d1WithKey("key42", 42) })
 
     const res = await handleMemoryDeleteRoute(delReq(seeded.id, "key42"), env, seeded.id)
@@ -445,7 +541,7 @@ describe("DELETE /v1/memory/:id — behavior", () => {
   })
 
   it("is idempotent-safe: first delete succeeds, second returns 404", async () => {
-    const seeded = await seedRecord({ userId: "inst:42:u1", repoId: "r", content: "once" })
+    const seeded = await seedRecord({ userId: PERSONAL_42, repoId: "r", content: "once" })
     const env = makeEnv({ SIGILIX_PLATFORM_DB: await d1WithKey("key42", 42) })
 
     const first = await handleMemoryDeleteRoute(delReq(seeded.id, "key42"), env, seeded.id)
@@ -461,10 +557,12 @@ describe("DELETE /v1/memory/:id — behavior", () => {
   })
 
   it("returns 404 for another tenant's id and does NOT delete or mutate it", async () => {
-    const victim = await seedRecord({ userId: "inst:99:u1", repoId: "r", content: "not yours" })
+    const victim = await seedRecord({ userId: PERSONAL_99, repoId: "r", content: "not yours" })
     const raw = fk.store.get(victim.recordKey)
     const db = makeD1()
     await db.exec(MIGRATION_SQL_API_KEY)
+    await db.exec(MIGRATION_SQL_IDENTITY)
+    await seedIdentity(db, USER_ID, "1")
     await insertApiKey(db, {
       id: "k42",
       keyHash: await keyHash("key42"),
@@ -483,8 +581,25 @@ describe("DELETE /v1/memory/:id — behavior", () => {
     expect(idx.deleted).toHaveLength(0)
   })
 
+  it("returns 404 for another member's id in the same installation", async () => {
+    const victim = await seedRecord({
+      userId: "inst:42:user:user-2",
+      repoId: "r",
+      content: "peer secret",
+    })
+    const raw = fk.store.get(victim.recordKey)
+    const env = makeEnv({ SIGILIX_PLATFORM_DB: await d1WithKey("key42", 42) })
+
+    const res = await handleMemoryDeleteRoute(delReq(victim.id, "key42"), env, victim.id)
+
+    expect(res.status).toBe(404)
+    expect(fk.store.get(victim.recordKey)).toBe(raw)
+    expect(fk.store.has(victim.hashKey)).toBe(true)
+    expect(idx.deleted).toHaveLength(0)
+  })
+
   it("a Vectorize delete failure never fails the request — KV keys still removed", async () => {
-    const seeded = await seedRecord({ userId: "inst:42:u1", repoId: "r", content: "vec-fail" })
+    const seeded = await seedRecord({ userId: PERSONAL_42, repoId: "r", content: "vec-fail" })
     ;(idx.index as unknown as { deleteByIds: () => Promise<never> }).deleteByIds = async () => {
       throw new Error("vectorize down")
     }
@@ -497,8 +612,8 @@ describe("DELETE /v1/memory/:id — behavior", () => {
   })
 
   it("deletes via the session path scoped to the caller's installation", async () => {
-    const seeded = await seedRecord({ userId: "inst:42:u1", repoId: "r", content: "session-owned" })
-    seedSession("sess-a", 12345)
+    const seeded = await seedRecord({ userId: PERSONAL_42, repoId: "r", content: "session-owned" })
+    seedSession("sess-a", 12345, "octocat", USER_ID)
     stubInstallations([42])
     const res = await handleMemoryDeleteRoute(
       delReq(seeded.id, null, "__Host-sigilix_session=sess-a"),
@@ -510,9 +625,9 @@ describe("DELETE /v1/memory/:id — behavior", () => {
   })
 
   it("session cannot delete a record outside its installation(s) → 404, untouched", async () => {
-    const victim = await seedRecord({ userId: "inst:99:u1", repoId: "r", content: "not yours" })
+    const victim = await seedRecord({ userId: PERSONAL_99, repoId: "r", content: "not yours" })
     const raw = fk.store.get(victim.recordKey)
-    seedSession("sess-a", 12345)
+    seedSession("sess-a", 12345, "octocat", USER_ID)
     stubInstallations([42]) // session owns only installation 42
     const res = await handleMemoryDeleteRoute(
       delReq(victim.id, null, "__Host-sigilix_session=sess-a"),
@@ -546,9 +661,10 @@ describe("/v1/memory — portal CORS", () => {
   it("wraps a list response with credentialed CORS headers for an allowed origin", async () => {
     const req = new Request("https://api.sigilix.ai/v1/memory", {
       method: "GET",
-      headers: { origin: ORIGIN, authorization: `Bearer ${TOKEN}` },
+      headers: { origin: ORIGIN, authorization: "Bearer key42" },
     })
-    const wrapped = withPortalCors(req, await handleMemoryListRoute(req, makeEnv()), {} as Env)
+    const env = makeEnv({ SIGILIX_PLATFORM_DB: await d1WithKey("key42", 42) })
+    const wrapped = withPortalCors(req, await handleMemoryListRoute(req, env), {} as Env)
     expect(wrapped.status).toBe(200)
     expect(wrapped.headers.get("access-control-allow-origin")).toBe(ORIGIN)
     expect(wrapped.headers.get("access-control-allow-credentials")).toBe("true")

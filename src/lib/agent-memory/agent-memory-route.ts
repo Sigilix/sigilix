@@ -16,6 +16,7 @@
 
 import type { Env } from "@/src/shared/types/env"
 import { requireApiTenant } from "@/src/lib/api-key-resolver"
+import { readCliAppMemoryContext, resolveAppMemoryCliMode, type AppMemoryCliMode } from "@/src/features/app-memory"
 import { resolveCliOrgMemoryMode } from "@/src/features/learnings"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import type { AgentMemoryKind, AgentMemoryQueryResult, AgentMemoryRecord } from "./types"
@@ -23,7 +24,12 @@ import { ALL_AGENT_MEMORY_KINDS } from "./types"
 import { readHashId, readRecord, writeHashPointer, writeRecord } from "./storage"
 import { queryMemoryIds, upsertMemoryVector } from "./retrieval"
 import { loadOrgMemoryForCli, unionSeatAndOrgMemory } from "./agent-memory-org-union"
-import { canonicalTenantId, resolveApiPersonalMemoryUserId } from "./agent-memory-personal-subject"
+import {
+  canonicalTenantId,
+  personalMemoryUserId,
+  resolveApiPersonalMemoryUserId,
+  resolveApiStableUserId,
+} from "./agent-memory-personal-subject"
 
 export { canonicalTenantId, scopeMemoryUserId } from "./agent-memory-personal-subject"
 
@@ -179,6 +185,7 @@ interface QueryBody {
   repoId: string
   query: string
   limit?: number
+  includeManagedAppContext?: boolean
 }
 
 function parseQueryBody(raw: unknown): QueryBody | string {
@@ -190,11 +197,17 @@ function parseQueryBody(raw: unknown): QueryBody | string {
   if (b.limit !== undefined && (typeof b.limit !== "number" || !Number.isInteger(b.limit) || b.limit <= 0)) {
     return "limit must be a positive integer"
   }
+  if (b.includeManagedAppContext !== undefined && typeof b.includeManagedAppContext !== "boolean") {
+    return "includeManagedAppContext must be a boolean"
+  }
   return {
     userId: canonicalTenantId(b.userId),
     repoId: canonicalTenantId(b.repoId),
     query: b.query,
     ...(typeof b.limit === "number" ? { limit: b.limit } : {}),
+    ...(typeof b.includeManagedAppContext === "boolean"
+      ? { includeManagedAppContext: b.includeManagedAppContext }
+      : {}),
   }
 }
 
@@ -206,6 +219,59 @@ function parseQueryBody(raw: unknown): QueryBody | string {
 function tsMs(ts: string): number {
   const n = Date.parse(ts)
   return Number.isNaN(n) ? 0 : n
+}
+
+function exactInstallationId(value: number): value is number {
+  return Number.isSafeInteger(value) && value > 0
+}
+
+async function respondWithManagedAppContext(args: {
+  env: Env
+  mode: AppMemoryCliMode
+  include: boolean
+  installationId: number
+  stableUserId: string | null
+  results: AgentMemoryQueryResult[]
+  legacyResponse: Response
+}): Promise<Response> {
+  if (args.mode === "off" || !args.include || !exactInstallationId(args.installationId)) {
+    return args.legacyResponse
+  }
+
+  const read = await readCliAppMemoryContext(args.env, {
+    installationId: args.installationId,
+    personalUserId: args.stableUserId,
+  })
+  const event = args.mode === "shadow" ? "cli-app-memory-context-shadow" : "cli-app-memory-context-on"
+  if (read.status === "unavailable") {
+    emitTelemetry(event, {
+      available: false,
+      personalCandidates: 0,
+      personalSelected: 0,
+      personalChars: 0,
+      personalTruncated: false,
+      organizationCandidates: 0,
+      organizationSelected: 0,
+      organizationChars: 0,
+      organizationTruncated: false,
+    })
+    return args.legacyResponse
+  }
+
+  const stats = read.selection.stats
+  emitTelemetry(event, {
+    available: true,
+    personalCandidates: stats.personal.candidateCount,
+    personalSelected: stats.personal.selectedCount,
+    personalChars: stats.personal.selectedChars,
+    personalTruncated: stats.personal.truncated,
+    organizationCandidates: stats.organization.candidateCount,
+    organizationSelected: stats.organization.selectedCount,
+    organizationChars: stats.organization.selectedChars,
+    organizationTruncated: stats.organization.truncated,
+  })
+  if (args.mode === "shadow") return args.legacyResponse
+  return json({ results: args.results, appMemories: read.selection.memories }, 200)
 }
 
 /**
@@ -222,6 +288,12 @@ function tsMs(ts: string): number {
  * collision) — see agent-memory-org-union.ts. Default "off" is byte-identical
  * to the seat-only response above; a failure anywhere in the org branch
  * degrades to the seat-only response, never throws.
+ *
+ * A request may additionally opt into managed CLI app memories with
+ * `includeManagedAppContext: true`. OPENCLAW_APP_MEMORY_CLI_MODE keeps this
+ * dark by default; shadow performs the bounded D1 read but returns the exact
+ * legacy response, while on adds a separate `appMemories` array. The API-key
+ * creator's durable identity selects personal rows; body userId is never used.
  */
 export async function handleMemoryQueryRoute(request: Request, env: Env): Promise<Response> {
   // The authenticated API-key creator, not body userId, selects the exact
@@ -232,8 +304,15 @@ export async function handleMemoryQueryRoute(request: Request, env: Env): Promis
   const auth = await requireApiTenant(request, env)
   if ("response" in auth) return auth.response
   const caller = auth.caller
-  const personalUserId = await resolveApiPersonalMemoryUserId(env, caller)
-  if (personalUserId === null) return json({ error: "memory_identity_unavailable" }, 403)
+  const mode = resolveAppMemoryCliMode(env)
+  const identity = await resolveApiStableUserId(env, caller)
+  if (identity.status === "unavailable") return json({ error: "memory_identity_unavailable" }, 403)
+  // Off/shadow and legacy-global behavior stays exactly as before: reject an
+  // unprovable personal identity before reading the request body. Only an exact
+  // installation explicitly rolled on may reach the org-only response branch.
+  if (identity.userId === null && (mode !== "on" || !exactInstallationId(caller.installationId))) {
+    return json({ error: "memory_identity_unavailable" }, 403)
+  }
 
   let raw: unknown
   try {
@@ -247,14 +326,28 @@ export async function handleMemoryQueryRoute(request: Request, env: Env): Promis
   const parsed = parseQueryBody(raw)
   if (typeof parsed === "string") return json({ error: "invalid_request", detail: parsed }, 400)
 
+  if (identity.userId === null) {
+    const legacyResponse = json({ error: "memory_identity_unavailable" }, 403)
+    return respondWithManagedAppContext({
+      env,
+      mode,
+      include: parsed.includeManagedAppContext === true,
+      installationId: caller.installationId,
+      stableUserId: null,
+      results: [],
+      legacyResponse,
+    })
+  }
+
   const limit = Math.min(parsed.limit ?? DEFAULT_LIMIT, MAX_LIMIT)
   // Fetch at least `limit` vector hits — a larger requested `limit` (up to
   // MAX_LIMIT) must not be starved by the default topK before the slice.
   const topK = Math.max(DEFAULT_TOP_K, limit)
   // The SAME authenticated personal subject keys BOTH the vector query and KV
   // hydrate below, or a hit would fail to resolve its record.
-  const userId = personalUserId
+  const userId = personalMemoryUserId(caller.installationId, identity.userId)
 
+  let legacyResults: AgentMemoryQueryResult[] = []
   try {
     // Semantic hits (soft — returns [] on any embed/query failure).
     const hits = await queryMemoryIds(env, {
@@ -292,50 +385,59 @@ export async function handleMemoryQueryRoute(request: Request, env: Env): Promis
     // soft internally — this is belt-and-suspenders around the mode/union logic
     // itself).
     try {
-      const mode = resolveCliOrgMemoryMode(env)
+      const orgMode = resolveCliOrgMemoryMode(env)
       // OFF: seat-only, immediately — no installation check, no org KV read.
       // This is the byte-identical-to-before path.
-      if (mode === "off") return json({ results: seatResults }, 200)
+      legacyResults = seatResults
+      if (orgMode !== "off") {
+        const org = await loadOrgMemoryForCli(env, caller.installationId)
+        if (org.truncated) {
+          emitTelemetry("cli-org-memory-truncated", {
+            installationId: caller.installationId,
+            kept: org.entries.length,
+          })
+        }
 
-      const org = await loadOrgMemoryForCli(env, caller.installationId)
-      if (org.truncated) {
-        emitTelemetry("cli-org-memory-truncated", {
-          installationId: caller.installationId,
-          kept: org.entries.length,
-        })
+        if (orgMode === "shadow") {
+          emitTelemetry("cli-org-memory-shadow", {
+            installationId: caller.installationId,
+            count: org.entries.length,
+            ids: org.entries.map((e) => e.id),
+          })
+        } else {
+          // ON: seat ∪ org, deduped by id (seat wins any collision), seat first.
+          legacyResults = unionSeatAndOrgMemory(seatResults, org.entries)
+          emitTelemetry("cli-org-memory-union", {
+            installationId: caller.installationId,
+            seatCount: seatResults.length,
+            orgCount: org.entries.length,
+            added: legacyResults.length - seatResults.length,
+          })
+        }
       }
-
-      if (mode === "shadow") {
-        emitTelemetry("cli-org-memory-shadow", {
-          installationId: caller.installationId,
-          count: org.entries.length,
-          ids: org.entries.map((e) => e.id),
-        })
-        // Shadow NEVER changes the returned results — seat-only.
-        return json({ results: seatResults }, 200)
-      }
-
-      // ON: seat ∪ org, deduped by id (seat wins any collision), seat first.
-      const merged = unionSeatAndOrgMemory(seatResults, org.entries)
-      emitTelemetry("cli-org-memory-union", {
-        installationId: caller.installationId,
-        seatCount: seatResults.length,
-        orgCount: org.entries.length,
-        added: merged.length - seatResults.length,
-      })
-      return json({ results: merged }, 200)
     } catch (err) {
       emitTelemetry("cli-org-memory-union-failed", {
         installationId: caller.installationId,
         err: err instanceof Error ? err.message : String(err),
       })
-      return json({ results: seatResults }, 200)
+      legacyResults = seatResults
     }
   } catch (err) {
     // Defensive: the legs above are soft, so this only fires on a truly
     // unexpected throw. Still answer with empty results, not 500 — retrieval is
     // grounding, and an honest "no memory" beats a hard error for the agent.
     emitTelemetry("agent-memory-query-unexpected", { err: err instanceof Error ? err.message : String(err) })
-    return json({ results: [] }, 200)
+    legacyResults = []
   }
+
+  const legacyResponse = json({ results: legacyResults }, 200)
+  return respondWithManagedAppContext({
+    env,
+    mode,
+    include: parsed.includeManagedAppContext === true,
+    installationId: caller.installationId,
+    stableUserId: identity.userId,
+    results: legacyResults,
+    legacyResponse,
+  })
 }

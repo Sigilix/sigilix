@@ -306,7 +306,7 @@ export async function handleBillingCheckoutRoute(
     tier: validation.tier,
     installationId: admin.installationId,
     customerId: customer.customerId,
-    successUrl: `${base}/org?checkout=success`,
+    successUrl: `${base}/org?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
     cancelUrl: `${base}/org?checkout=cancel`,
   })
 

@@ -32,6 +32,7 @@ import {
 import { handlePrStaleMark } from "@/src/lib/triage-pr-stale-mark"
 import { handlePrReviewEnsemble } from "@/src/lib/triage-pr-review-ensemble"
 import { dispatchGitLabMrReview } from "@/src/index-dispatch-gitlab"
+import { runDemoReviewJob } from "@/src/lib/demo-review-job"
 import { parseEnsembleConfig } from "@/src/lib/ensemble/config"
 import { recordValidationMetrics } from "@/src/lib/validation-metrics-client"
 import type { ValidationRejectionEvent } from "@/src/do/validation-metrics"
@@ -988,11 +989,10 @@ export async function dispatchJob(
       // run the SAME SCM-agnostic ensemble GitHub uses (posting through the GitLab
       // client). Recall-safety is enforced inside (an errored run surfaces a note).
       return dispatchGitLabMrReview(job, env, backgroundWaitUntil)
+    case "demo-review": // sig-public-demo (async): PUBLIC no-signup demo, run off-request. See demo-review-job.ts.
+      return runDemoReviewJob(job, env)
     default: {
-      // Exhaustiveness check — if a new JobMessage variant is added but
-      // not handled here, TypeScript flags it via the `never` type at
-      // compile time, AND we throw at runtime so a stale producer/
-      // consumer pairing surfaces loudly instead of silently acking.
+      // Exhaustiveness check — an unhandled JobMessage variant is a compile error (`never`) and a loud throw.
       const exhaustive: never = job
       throw new Error(`unknown queue job type: ${JSON.stringify(exhaustive).slice(0, 200)}`)
     }

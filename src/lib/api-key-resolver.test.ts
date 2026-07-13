@@ -11,8 +11,12 @@ import { LEGACY_TENANT_INSTALLATION_ID, resolveApiKey, requireApiTenant } from "
 import { insertApiKey, revokeApiKeyById } from "@/src/lib/api-key-store"
 import { sha256Hex } from "@/src/lib/auth-bearer"
 
-const MIGRATION_SQL = readFileSync(
+const API_KEY_MIGRATION_SQL = readFileSync(
   new URL("../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
+  "utf8",
+)
+const ORG_ACCESS_MIGRATION_SQL = readFileSync(
+  new URL("../../migrations/0022_create_org_workspace_access.sql", import.meta.url),
   "utf8",
 )
 
@@ -36,8 +40,31 @@ describe("resolveApiKey", () => {
 
   beforeEach(async () => {
     db = makeD1()
-    await db.exec(MIGRATION_SQL)
+    await db.exec(API_KEY_MIGRATION_SQL)
   })
+
+  async function applyOrgAccessSchema(): Promise<void> {
+    await db.exec(ORG_ACCESS_MIGRATION_SQL)
+  }
+
+  async function seedActiveAccess(installationId: number, githubUserId: string): Promise<void> {
+    await db
+      .prepare(
+        `INSERT INTO org_workspace_access
+          (installation_id, github_user_id, role, created_at, updated_at,
+           revoked_at, updated_by, last_audit_id, last_action)
+         VALUES (?, ?, 'member', ?, ?, NULL, ?, ?, 'member_added_or_regranted')`,
+      )
+      .bind(
+        installationId,
+        githubUserId,
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:00:00Z",
+        "test:admin",
+        `audit-${installationId}-${githubUserId}`,
+      )
+      .run()
+  }
 
   it("returns null when no Authorization header is present", async () => {
     expect(await resolveApiKey(reqWith(), { SIGILIX_PLATFORM_DB: db, OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY })).toBeNull()
@@ -58,6 +85,144 @@ describe("resolveApiKey", () => {
       OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
     })
     expect(result).toEqual({ installationId: 777, createdBy: "1" })
+  })
+
+  it("D1 hit — resolves a live key when the legacy global key is unset", async () => {
+    const plaintext = "sigilix_live_without_global"
+    await insertApiKey(db, {
+      id: "key-without-global",
+      keyHash: await sha256Hex(plaintext),
+      installationId: 777,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+
+    await expect(resolveApiKey(reqWith(`Bearer ${plaintext}`), { SIGILIX_PLATFORM_DB: db })).resolves.toEqual({
+      installationId: 777,
+      createdBy: "1",
+    })
+  })
+
+  it("membership mode — resolves only when the key creator has active access to that exact installation", async () => {
+    await applyOrgAccessSchema()
+    const plaintext = "sigilix_live_member"
+    await insertApiKey(db, {
+      id: "key-member",
+      keyHash: await sha256Hex(plaintext),
+      installationId: 777,
+      createdBy: "123",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    await seedActiveAccess(777, "123")
+
+    await expect(
+      resolveApiKey(reqWith(`Bearer ${plaintext}`), {
+        SIGILIX_PLATFORM_DB: db,
+        OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
+        OPENCLAW_ORG_MEMBERSHIP_MODE: "on",
+      }),
+    ).resolves.toEqual({ installationId: 777, createdBy: "123" })
+  })
+
+  it("membership mode — denies a live key when its creator has no stored access", async () => {
+    await applyOrgAccessSchema()
+    const plaintext = "sigilix_live_missing_access"
+    await insertApiKey(db, {
+      id: "key-missing-access",
+      keyHash: await sha256Hex(plaintext),
+      installationId: 777,
+      createdBy: "123",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+
+    await expect(
+      resolveApiKey(reqWith(`Bearer ${plaintext}`), {
+        SIGILIX_PLATFORM_DB: db,
+        OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
+        OPENCLAW_ORG_MEMBERSHIP_MODE: "on",
+      }),
+    ).resolves.toBeNull()
+  })
+
+  it("membership mode — exact-installation access cannot authorize a key for another installation", async () => {
+    await applyOrgAccessSchema()
+    const plaintext = "sigilix_live_cross_install"
+    await insertApiKey(db, {
+      id: "key-cross-install",
+      keyHash: await sha256Hex(plaintext),
+      installationId: 777,
+      createdBy: "123",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    await seedActiveAccess(778, "123")
+
+    await expect(
+      resolveApiKey(reqWith(`Bearer ${plaintext}`), {
+        SIGILIX_PLATFORM_DB: db,
+        OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
+        OPENCLAW_ORG_MEMBERSHIP_MODE: "on",
+      }),
+    ).resolves.toBeNull()
+  })
+
+  it("membership mode — revoked stored access denies an otherwise-live key", async () => {
+    await applyOrgAccessSchema()
+    const plaintext = "sigilix_live_revoked_access"
+    await insertApiKey(db, {
+      id: "key-revoked-access",
+      keyHash: await sha256Hex(plaintext),
+      installationId: 777,
+      createdBy: "123",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    await seedActiveAccess(777, "123")
+    await db
+      .prepare(
+        `UPDATE org_workspace_access
+            SET revoked_at = ?, updated_at = ?, updated_by = ?,
+                last_audit_id = ?, last_action = 'access_removed'
+          WHERE installation_id = ? AND github_user_id = ?`,
+      )
+      .bind("2026-02-01T00:00:00Z", "2026-02-01T00:00:00Z", "test:admin", "audit-revoked-access", 777, "123")
+      .run()
+
+    await expect(
+      resolveApiKey(reqWith(`Bearer ${plaintext}`), {
+        SIGILIX_PLATFORM_DB: db,
+        OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
+        OPENCLAW_ORG_MEMBERSHIP_MODE: "on",
+      }),
+    ).resolves.toBeNull()
+  })
+
+  it("membership mode — a persisted denied key cannot escape through the global-key fallback", async () => {
+    await applyOrgAccessSchema()
+    await insertApiKey(db, {
+      id: "key-global-collision",
+      keyHash: await sha256Hex(GLOBAL_KEY),
+      installationId: 777,
+      createdBy: "123",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+
+    await expect(
+      resolveApiKey(reqWith(`Bearer ${GLOBAL_KEY}`), {
+        SIGILIX_PLATFORM_DB: db,
+        OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
+        OPENCLAW_ORG_MEMBERSHIP_MODE: "on",
+      }),
+    ).resolves.toBeNull()
+  })
+
+  it("membership mode — the internal global key still resolves when no persisted key row matches", async () => {
+    await applyOrgAccessSchema()
+    await expect(
+      resolveApiKey(reqWith(`Bearer ${GLOBAL_KEY}`), {
+        SIGILIX_PLATFORM_DB: db,
+        OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
+        OPENCLAW_ORG_MEMBERSHIP_MODE: "on",
+      }),
+    ).resolves.toEqual({ installationId: LEGACY_TENANT_INSTALLATION_ID, createdBy: null })
   })
 
   it("D1 hit — best-effort updates last_used_at without affecting the result", async () => {
@@ -93,8 +258,8 @@ describe("resolveApiKey", () => {
     expect(result).toBeNull()
   })
 
-  it("revoked key does NOT resolve — falls through (and, here, also fails the global compare)", async () => {
-    const plaintext = "sigilix_live_revoked"
+  it("a persisted revoked key never escapes through the global-key fallback", async () => {
+    const plaintext = GLOBAL_KEY
     await insertApiKey(db, {
       id: "key-1",
       keyHash: await sha256Hex(plaintext),
@@ -109,6 +274,26 @@ describe("resolveApiKey", () => {
       OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
     })
     expect(result).toBeNull()
+  })
+
+  it.each([
+    { installationId: -7, createdBy: "123" },
+    { installationId: Number.MAX_SAFE_INTEGER + 1, createdBy: "123" },
+    { installationId: 7, createdBy: "007" },
+    { installationId: 7, createdBy: "not-a-github-id" },
+  ])("denies a malformed persisted key identity without global fallback: %o", async ({ installationId, createdBy }) => {
+    const keyHash = await sha256Hex(GLOBAL_KEY)
+    await db
+      .prepare("INSERT INTO api_key (id, key_hash, installation_id, created_by, created_at) VALUES (?, ?, ?, ?, ?)")
+      .bind(`malformed-${installationId}-${createdBy}`, keyHash, installationId, createdBy, "2026-01-01T00:00:00Z")
+      .run()
+
+    await expect(
+      resolveApiKey(reqWith(`Bearer ${GLOBAL_KEY}`), {
+        SIGILIX_PLATFORM_DB: db,
+        OPENCLAW_SIGILIX_API_KEY: GLOBAL_KEY,
+      }),
+    ).resolves.toBeNull()
   })
 
   it("FAILS CLOSED — a genuine D1 error during the lookup returns null and never falls through to the global key", async () => {
@@ -168,7 +353,7 @@ describe("requireApiTenant", () => {
 
   beforeEach(async () => {
     db = makeD1()
-    await db.exec(MIGRATION_SQL)
+    await db.exec(API_KEY_MIGRATION_SQL)
   })
 
   it("the global key still resolves — dual-key transition, zero behavior change for existing callers", async () => {

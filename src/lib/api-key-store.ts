@@ -42,6 +42,8 @@ export async function insertApiKey(
     name?: string | null
   },
 ): Promise<void> {
+  if (!validInstallationId(args.installationId)) throw new Error("invalid API key installation id")
+  if (!validGithubUserId(args.createdBy)) throw new Error("invalid API key creator id")
   // Reference the `name` column (migrations/0009) ONLY when a label is actually
   // supplied. A null/absent name keeps the original 5-column INSERT, so this
   // helper still works against a DB that predates 0009 (and no existing caller
@@ -59,6 +61,16 @@ export async function insertApiKey(
     .prepare("INSERT INTO api_key (id, key_hash, installation_id, created_by, created_at) VALUES (?, ?, ?, ?, ?)")
     .bind(args.id, args.keyHash, args.installationId, args.createdBy, args.nowIso)
     .run()
+}
+
+function validInstallationId(value: number): boolean {
+  return Number.isSafeInteger(value) && value > 0
+}
+
+function validGithubUserId(value: string): boolean {
+  if (!/^[1-9]\d*$/.test(value)) return false
+  const numeric = Number(value)
+  return Number.isSafeInteger(numeric) && numeric > 0 && String(numeric) === value
 }
 
 /** One api_key row as the portal's list surface shows it — NEVER the hash. */

@@ -73,6 +73,36 @@ describe("insertApiKey + getApiKeyById", () => {
   it("getApiKeyById returns null (not throw) on a D1 error", async () => {
     await expect(getApiKeyById(makeBrokenDb(), "key-1")).resolves.toBeNull()
   })
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects a non-canonical installation id before writing: %s",
+    async (installationId) => {
+      await expect(
+        insertApiKey(db, {
+          id: `invalid-installation-${installationId}`,
+          keyHash: await sha256Hex(String(installationId)),
+          installationId,
+          createdBy: "123",
+          nowIso: "2026-01-01T00:00:00Z",
+        }),
+      ).rejects.toThrow("invalid API key installation id")
+    },
+  )
+
+  it.each(["", "0", "-1", "01", "1.5", "not-a-github-id", String(Number.MAX_SAFE_INTEGER + 1)])(
+    "rejects a non-canonical GitHub creator id before writing: %s",
+    async (createdBy) => {
+      await expect(
+        insertApiKey(db, {
+          id: `invalid-creator-${createdBy}`,
+          keyHash: await sha256Hex(createdBy),
+          installationId: 42,
+          createdBy,
+          nowIso: "2026-01-01T00:00:00Z",
+        }),
+      ).rejects.toThrow("invalid API key creator id")
+    },
+  )
 })
 
 describe("revokeApiKeyById", () => {

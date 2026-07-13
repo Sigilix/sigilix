@@ -73,6 +73,57 @@ export async function userCanAccessInstallation(
   }
 }
 
+/**
+ * List every installation id in the current user's GitHub App installation
+ * listing (same bounded, timed-out `GET /user/installations` as
+ * {@link userCanAccessInstallation}). Used at login to link the user to every
+ * org tenant they belong to (account_tenant) so a signed-in user is NEVER
+ * tenant-less — each tenant carries its own fairness/isolation.
+ *
+ * FAIL-SOFT: returns whatever pages it read and an empty array on any
+ * error/timeout/short-read. The caller (login) must never block on it, so a
+ * partial or empty result just means "link fewer/no tenants this time" — the
+ * next login re-links, and every mutating org action re-verifies live access.
+ */
+export async function listUserInstallationIds(
+  accessToken: string,
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+): Promise<number[]> {
+  if (!accessToken) return []
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), Math.max(1, options.timeoutMs ?? DEFAULT_TIMEOUT_MS))
+  const ids: number[] = []
+  try {
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const fetchOperation = (options.fetchImpl ?? fetch)(
+        `https://api.github.com/user/installations?per_page=${PER_PAGE}&page=${page}`,
+        { headers: githubHeaders(accessToken), signal: controller.signal },
+      )
+      void fetchOperation.then(
+        (lateResponse) => {
+          if (controller.signal.aborted) void lateResponse.body?.cancel().catch(() => undefined)
+        },
+        () => undefined,
+      )
+      const response = await raceAbort(fetchOperation, controller.signal)
+      if (!response.ok) return ids
+      const body = (await readJsonCapped(response, controller.signal)) as InstallationsResponse
+      if (!Array.isArray(body.installations)) return ids
+      for (const installation of body.installations) {
+        if (typeof installation.id === "number" && Number.isSafeInteger(installation.id) && installation.id > 0) {
+          ids.push(installation.id)
+        }
+      }
+      if (body.installations.length < PER_PAGE) break
+    }
+    return ids
+  } catch {
+    return ids
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function readJsonCapped(response: Response, signal: AbortSignal): Promise<unknown> {
   const declared = response.headers.get("content-length")
   if (declared !== null && Number(declared) > MAX_RESPONSE_BYTES) throw new Error("github_response_too_large")

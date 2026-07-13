@@ -137,6 +137,15 @@ function unkeyedEnv(): Env {
   return { OPENCLAW_STATE: fk.kv, OPENCLAW_AGENT_MEMORY_INDEX: idx.index } as unknown as Env
 }
 
+/** Throws on any operation — simulates a genuine D1 outage/fault. */
+function makeBrokenDb(): D1Database {
+  return {
+    prepare() {
+      throw new Error("simulated D1 error")
+    },
+  } as unknown as D1Database
+}
+
 // ─── Seed helpers ────────────────────────────────────────────
 
 interface Seeded {
@@ -274,6 +283,12 @@ describe("GET /v1/memory — auth", () => {
 
   it("401 on a bad bearer", async () => {
     expect((await handleMemoryListRoute(listReq("", "nope"), makeEnv())).status).toBe(401)
+  })
+
+  it("401 on a genuine D1 fault for both list and delete", async () => {
+    const env = makeEnv({ SIGILIX_PLATFORM_DB: makeBrokenDb() })
+    expect((await handleMemoryListRoute(listReq("", TOKEN), env)).status).toBe(401)
+    expect((await handleMemoryDeleteRoute(delReq("mem_x", TOKEN), env, "mem_x")).status).toBe(401)
   })
 
   it("403 for the legacy global key because it has no authenticated personal identity", async () => {

@@ -6,14 +6,17 @@ export function canonicalTenantId(value: string): string {
   return value.trim().toLowerCase()
 }
 
-/** Installation confinement for one already-authenticated subject. */
+/** Generic installation scope with the historical internal-global-key exemption. */
 export function scopeMemoryUserId(userId: string, installationId: number): string {
+  if (installationId === LEGACY_TENANT_INSTALLATION_ID) return userId
   return `inst:${installationId}:${userId}`
 }
 
-/** Provider-independent personal subject shared by API-key and portal callers. */
+/** Provider-independent personal subject shared by API-key and portal callers.
+ * Unlike the generic helper, personal subjects are always installation-scoped;
+ * personal HTTP routes reject the legacy key before this helper is reached. */
 export function personalMemoryUserId(installationId: number, stableUserId: string): string {
-  return scopeMemoryUserId(`user:${canonicalTenantId(stableUserId)}`, installationId)
+  return `inst:${installationId}:user:${canonicalTenantId(stableUserId)}`
 }
 
 /**

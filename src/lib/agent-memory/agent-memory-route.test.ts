@@ -410,8 +410,9 @@ describe("personal memory subject", () => {
   it("combines the installation with the canonical internal user id", () => {
     expect(personalMemoryUserId(42, " User-ABC ")).toBe("inst:42:user:user-abc")
   })
-  it("always applies installation confinement, including the legacy sentinel", () => {
-    expect(scopeMemoryUserId("user:user-1", LEGACY_TENANT_INSTALLATION_ID)).toBe("inst:-1:user:user-1")
+  it("preserves the generic helper's legacy contract while personal subjects stay installation-scoped", () => {
+    expect(scopeMemoryUserId("user:user-1", LEGACY_TENANT_INSTALLATION_ID)).toBe("user:user-1")
+    expect(personalMemoryUserId(LEGACY_TENANT_INSTALLATION_ID, "user-1")).toBe("inst:-1:user:user-1")
   })
   it("cannot be forged out of the caller's namespace — a spoofed inst: prefix is only ever nested under the real one", () => {
     // A caller with a key for installation 7 who names `userId: "inst:42:victim"`
@@ -465,7 +466,9 @@ describe("agent-memory routes — SIG-494 tenant-scope isolation", () => {
   })
 
   it("denies the legacy global key on personal-memory routes", async () => {
-    const env = legacyEnv()
+    const legacyDb = makeD1()
+    await applyAuthMigrations(legacyDb)
+    const env = legacyEnv({ SIGILIX_PLATFORM_DB: legacyDb })
     const write = await handleMemoryWriteRoute(writeReq(writeBody), env)
     const query = await handleMemoryQueryRoute(queryReq({ ...writeBody, query: "x" }), env)
     expect(write.status).toBe(403)

@@ -31,6 +31,11 @@ describe("personal memory subjects", () => {
     expect(personalMemoryUserId(42, " User-ABC ")).toBe("inst:42:user:user-abc")
   })
 
+  it("preserves the legacy generic-scope contract without weakening personal subjects", () => {
+    expect(scopeMemoryUserId("legacy-user", LEGACY_TENANT_INSTALLATION_ID)).toBe("legacy-user")
+    expect(personalMemoryUserId(LEGACY_TENANT_INSTALLATION_ID, "internal-user")).toBe("inst:-1:user:internal-user")
+  })
+
   it("rejects the legacy global key and unprovable key creators", async () => {
     expect(
       await resolveApiPersonalMemoryUserId(

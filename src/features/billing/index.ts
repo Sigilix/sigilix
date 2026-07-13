@@ -34,3 +34,22 @@ export {
   type MarketplacePlanMap,
   type MarketplaceEvent,
 } from "./domain/marketplace-plan"
+// Stripe seat reconciliation foundation. These are tenant-bound D1 reads and
+// the atomic lease primitive only; provider mutation remains a later slice.
+export {
+  acquireOrgSeatBillingLease,
+  deriveBillableSeatQuantity,
+  readActiveOrgSeatBillingOperation,
+  readStripeSeatSubscription,
+  readTenantBillingState,
+  releaseOrgSeatBillingLease,
+} from "./adapters/d1-seat-reconciliation-store"
+export {
+  decodeStripeSeatSubscriptionRow,
+  decodeOrgSeatBillingOperationRow,
+  type OrgSeatBillingOperation,
+  type OrgSeatBillingOperationState,
+  type StripeSeatSubscriptionSnapshot,
+  type StripeSnapshotState,
+  type TenantBillingState,
+} from "./domain/seat-reconciliation"

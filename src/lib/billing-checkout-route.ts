@@ -1,19 +1,18 @@
 // sig-stripe-checkout: the OUTBOUND billing routes that turn an admin's "upgrade"
 // click into a hosted Stripe Checkout / Billing-Portal URL. Lives in src/lib (next to
-// usage-route.ts / org-routes.ts) because it composes the session + GitHub admin gate
-// helpers here with the billing feature's Stripe helpers (imported via its barrel).
+// usage-route.ts / org-routes.ts) because it composes the central exact-installation
+// org access gate with the billing feature's Stripe helpers (imported via its barrel).
 //
 //   POST /v1/billing/checkout → { url }   (start a subscription — Pro gets a 14-day
 //                                          trial; Teams/Max/Ultra are paid immediately)
 //   POST /v1/billing/portal   → { url }   (manage/cancel an existing subscription)
 //
-// Security spine (mirrors /v1/usage's admin gate):
+// Security spine:
 //   • Session-authed. No session → 401.
-//   • The installation being subscribed is resolved SERVER-SIDE from the session's
-//     own GitHub token, NEVER trusted from the body: the request may pass an
-//     `installationId` only as a SELECTOR, and it is honored only after
-//     `isAdminOfInstallation` proves the caller administers it (else 403). That
-//     server-verified id — not any body value — becomes Stripe's client_reference_id.
+//   • An explicit positive `installationId` is required. `requireOrgAccess` proves
+//     the session's fresh GitHub token can see that exact installation, then uses
+//     its stored Sigilix role while managed membership is on (or the exact live
+//     role while rollout is off). Only the verified id reaches Stripe.
 //   • Seat bounds (Teams 10–150, others 1–500) are validated server-side.
 //   • Customer reuse: the KV installation→customer link is read FIRST; a returning
 //     org reuses its one customer (a KV read ERROR fails 503 rather than risk a
@@ -21,9 +20,7 @@
 //   • Unconfigured secret → 503. The secret is never leaked in any response.
 
 import type { Env } from "@/src/shared/types/env"
-import { requireSession } from "@/src/lib/auth-middleware"
-import { getValidGithubToken } from "@/src/lib/github-user-token"
-import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
+import { requireOrgAccess } from "@/src/lib/org-access"
 import { withPortalCors, handlePortalPreflight, hasJsonContentType } from "@/src/lib/portal-cors"
 import {
   resolvePriceTierConfig,
@@ -38,7 +35,6 @@ import {
 } from "@/src/features/billing"
 
 const DEFAULT_PORTAL_URL = "https://app.sigilix.ai"
-const MAX_INSTALLATION_PAGES = 20
 
 /**
  * The sole active/trialing tenant marker allowed to start self-serve Stripe Checkout.
@@ -56,51 +52,6 @@ function json(body: unknown, status: number): Response {
 function portalBase(env: Env): string {
   const raw = env.OPENCLAW_PORTAL_URL
   return raw && raw.length > 0 ? raw.replace(/\/+$/, "") : DEFAULT_PORTAL_URL
-}
-
-function githubHeaders(accessToken: string): HeadersInit {
-  return {
-    accept: "application/vnd.github+json",
-    "x-github-api-version": "2022-11-28",
-    authorization: `Bearer ${accessToken}`,
-    "user-agent": "sigilix-worker",
-  }
-}
-
-interface UserInstallationsResponse {
-  total_count?: number
-  installations?: Array<{ id?: number }>
-}
-
-/** Every installation id the session's GitHub token can see (paginated, soft-fails to []). */
-async function fetchUserInstallationIds(accessToken: string): Promise<number[]> {
-  const ids: number[] = []
-  let seen = 0
-  for (let page = 1; page <= MAX_INSTALLATION_PAGES; page++) {
-    let res: Response
-    try {
-      res = await fetch(`https://api.github.com/user/installations?per_page=100&page=${page}`, {
-        headers: githubHeaders(accessToken),
-      })
-    } catch {
-      break
-    }
-    if (!res.ok) break
-    let body: UserInstallationsResponse
-    try {
-      body = (await res.json()) as UserInstallationsResponse
-    } catch {
-      break
-    }
-    const installs = Array.isArray(body.installations) ? body.installations : []
-    for (const inst of installs) {
-      if (typeof inst.id === "number") ids.push(inst.id)
-    }
-    seen += installs.length
-    const total = typeof body.total_count === "number" ? body.total_count : seen
-    if (installs.length === 0 || seen >= total) break
-  }
-  return ids
 }
 
 /**
@@ -157,12 +108,12 @@ async function readSubscriptionLiveness(
   }
 }
 
-/** Parse a body installationId SELECTOR (string or number) into a positive int, or null. */
+/** Parse an explicit body installationId (number or trimmed decimal string). */
 function parseInstallationSelector(v: unknown): number | null {
-  if (typeof v === "number" && Number.isInteger(v) && v > 0) return v
+  if (typeof v === "number" && Number.isSafeInteger(v) && v > 0) return v
   if (typeof v === "string" && /^\d+$/.test(v.trim())) {
-    const n = Number.parseInt(v.trim(), 10)
-    if (Number.isInteger(n) && n > 0) return n
+    const n = Number(v.trim())
+    if (Number.isSafeInteger(n) && n > 0) return n
   }
   return null
 }
@@ -171,9 +122,10 @@ function parseInstallationSelector(v: unknown): number | null {
 type AdminContext = { ok: true; installationId: number } | { ok: false; response: Response }
 
 /**
- * The shared front half of both routes: session → decrypt token → resolve the
- * target installation from the session (body value is a selector only) → admin gate.
- * Returns the server-verified installation id, or a ready-to-send error Response.
+ * Require one explicit installation, then delegate all session, fresh-token,
+ * exact-visibility, rollout, and role policy to the central org access guard.
+ * JSON structure is validated by each route before this call so a malformed or
+ * CORS-simple request can never trigger the guard's first-admin bootstrap.
  */
 async function resolveAdminContext(
   request: Request,
@@ -181,62 +133,23 @@ async function resolveAdminContext(
   ctx: ExecutionContext | undefined,
   selector: unknown,
 ): Promise<AdminContext> {
-  const session = await requireSession(request, env, ctx)
-  if (!session) return { ok: false, response: json({ error: "unauthorized" }, 401) }
-
-  if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) {
-    console.error(JSON.stringify({ event: "billing-encryption-key-missing" }))
-    return { ok: false, response: json({ error: "misconfigured" }, 503) }
-  }
-
-  let accessToken: string
-  try {
-    // sig-portal-bugs: refresh the short-lived GitHub App user token before the
-    // installation-scope + admin-role lookups. A stale token 401s both, which
-    // fail-safe to "no installations / not admin" — that would 403 a REAL org admin
-    // out of checkout until they re-login. getValidGithubToken renews it transparently.
-    accessToken = await getValidGithubToken({
-      env,
-      sessionId: session.sessionId,
-      record: session.record,
-      encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-    })
-  } catch (error) {
-    console.error(
-      JSON.stringify({ event: "billing-decrypt-failed", err: error instanceof Error ? error.message : String(error) }),
-    )
-    return { ok: false, response: json({ error: "billing_failed" }, 500) }
-  }
-
-  const requested = parseInstallationSelector(selector)
-  const ownedIds = await fetchUserInstallationIds(accessToken)
-  if (ownedIds.length === 0) {
-    // No installation visible to this session → nothing they could admin. 403 (not 401:
-    // they're authenticated, just not an admin of any installed org).
-    return { ok: false, response: json({ error: "no_admin_installation" }, 403) }
-  }
-
-  // The selector, when present, must be one the token can see; otherwise pick the sole
-  // installation. Ambiguous (multiple installs, none selected) → the client must choose.
-  let target: number
-  if (requested !== null) {
-    if (!ownedIds.includes(requested)) {
-      return { ok: false, response: json({ error: "forbidden" }, 403) }
-    }
-    target = requested
-  } else if (ownedIds.length === 1) {
-    target = ownedIds[0]!
-  } else {
+  const installationId = parseInstallationSelector(selector)
+  if (installationId === null) {
     return { ok: false, response: json({ error: "installation_required" }, 400) }
   }
-
-  // The authoritative gate: admin of THIS installation specifically (not the aggregate
-  // role). A mere member — even the selector's own owner elsewhere — is rejected here.
-  const isAdmin = await isAdminOfInstallation(accessToken, session.record.login, target)
-  if (!isAdmin) {
+  const access = await requireOrgAccess(request, env, ctx, installationId, { requiredRole: "admin" })
+  if (!access.ok) return { ok: false, response: access.response }
+  if (access.installationId !== installationId) {
+    console.error(
+      JSON.stringify({
+        event: "billing-org-access-scope-mismatch",
+        requestedInstallationId: installationId,
+        resolvedInstallationId: access.installationId,
+      }),
+    )
     return { ok: false, response: json({ error: "forbidden" }, 403) }
   }
-  return { ok: true, installationId: target }
+  return { ok: true, installationId }
 }
 
 /**
@@ -288,15 +201,15 @@ export async function handleBillingCheckoutRoute(
   const body = await parseJsonObject(request)
   if (!body) return json({ error: "invalid_json" }, 400)
 
-  const admin = await resolveAdminContext(request, env, ctx, body.installationId)
-  if (!admin.ok) return admin.response
-
   const validation = validateCheckoutRequest({
     tier: body.tier,
     seats: body.seats,
     billingPeriod: body.billingPeriod,
   })
   if (!validation.ok) return json({ error: validation.error }, validation.status)
+
+  const admin = await resolveAdminContext(request, env, ctx, body.installationId)
+  if (!admin.ok) return admin.response
 
   // Worker-first rollout compatibility: old Portal clients omit the new field. Emit
   // at validation time (including later 409/503 paths), separately from success, so
@@ -371,9 +284,10 @@ export async function handleBillingPortalRoute(request: Request, env: Env, ctx?:
 
   if (!hasJsonContentType(request)) return json({ error: "content_type_must_be_json" }, 415)
 
-  // The portal call carries no meaningful body beyond an optional selector — a null /
-  // non-object / absent body is fine (defaults to the caller's sole installation).
-  const body = (await parseJsonObject(request)) ?? {}
+  // Both billing routes require an explicit exact installation. Old clients
+  // that omitted it must refresh rather than letting the server guess an org.
+  const body = await parseJsonObject(request)
+  if (!body) return json({ error: "invalid_json" }, 400)
 
   const admin = await resolveAdminContext(request, env, ctx, body.installationId)
   if (!admin.ok) return admin.response

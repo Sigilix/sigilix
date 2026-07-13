@@ -4,7 +4,13 @@
 // The portal (https://app.sigilix.ai in prod, http://localhost:3300 in dev)
 // is a DIFFERENT ORIGIN from this Worker, and its setup wizard drives the
 // session-based onboarding flow over `fetch(..., { credentials: "include" })`
-// — a credentialed cross-origin request. The Fetch spec forbids
+// — a credentialed cross-origin request. The marketing site
+// (https://sigilix.ai / https://www.sigilix.ai) is likewise a different
+// origin: its nav reads GET /auth/session credentialed to swap the "Sign in /
+// Start a free trial" CTAs for a "Dashboard" link when the visitor already has
+// a live session. Both are same-site (*.sigilix.ai) so the SameSite=None
+// session cookie is attached; they still need an EXACT-Origin CORS grant to
+// read the response. The Fetch spec forbids
 // `Access-Control-Allow-Origin: *` whenever credentials are involved (the
 // browser refuses the response if a server tries it), so every response on
 // a portal-facing session endpoint must echo back the EXACT matched Origin
@@ -42,7 +48,7 @@ export function hasJsonContentType(request: Request): boolean {
   return raw.toLowerCase().split(";")[0]!.trim() === "application/json"
 }
 
-const DEFAULT_PORTAL_ORIGINS = "https://app.sigilix.ai,http://localhost:3300"
+const DEFAULT_PORTAL_ORIGINS = "https://app.sigilix.ai,https://sigilix.ai,https://www.sigilix.ai,http://localhost:3300"
 const ALLOWED_METHODS = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 const ALLOWED_HEADERS = "content-type"
 const PREFLIGHT_MAX_AGE_SECONDS = "600"

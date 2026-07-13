@@ -4,6 +4,8 @@
 // src/do/mcp/routes.ts's `tryHandleMcpRoute`.
 //
 //   GET  /v1/org/overview                              → org-overview-route.ts
+//   POST /v1/org/:installationId/members               → org-members-route.ts
+//   PATCH/DELETE /v1/org/:installationId/members/:id   → org-members-route.ts
 //   POST /v1/org/:installationId/members/:login/seat   → org-seat-route.ts
 //   GET  /v1/org/:installationId/data-consent          → data-consent-route.ts
 //   POST /v1/org/:installationId/data-consent          → data-consent-route.ts
@@ -16,8 +18,10 @@
 // nothing under /v1/org/ matches, so index.ts falls through to its own routing.
 
 import { handleGetDataConsent, handleSetDataConsent } from "@/src/lib/data-consent-route"
+import { handleAdminOrgAccessRecoveryRoute } from "@/src/lib/admin-org-access-route"
 import { handleCreateAppMemory, handleDeleteAppMemory, handleListAppMemories } from "@/src/lib/app-memory-route"
 import { handleOrgOverviewRoute } from "@/src/lib/org-overview-route"
+import { handleAddOrgMember, handleDeleteOrgMember, handleUpdateOrgMemberRole } from "@/src/lib/org-members-route"
 import { handleOrgSeatRoute } from "@/src/lib/org-seat-route"
 import { handleGetReviewConfig, handleSetReviewConfig } from "@/src/lib/review-config-route"
 import { handleGetLinearConfig, handleSetLinearConfig } from "@/src/lib/linear-config-route"
@@ -29,6 +33,8 @@ import type { Env } from "@/src/shared/types/env"
 // Non-global (no `g` flag) so it is safe to reuse for both `.test()` and
 // `.exec()` — matches the two regex literals index.ts used inline.
 const SEAT_PATH_RE = /^\/v1\/org\/([^/]+)\/members\/([^/]+)\/seat$/
+const MEMBERS_PATH_RE = /^\/v1\/org\/([^/]+)\/members$/
+const MEMBER_PATH_RE = /^\/v1\/org\/([^/]+)\/members\/([^/]+)$/
 const DATA_CONSENT_PATH_RE = /^\/v1\/org\/([^/]+)\/data-consent$/
 const REVIEW_CONFIG_PATH_RE = /^\/v1\/org\/([^/]+)\/review-config$/
 const LINEAR_CONFIG_PATH_RE = /^\/v1\/org\/([^/]+)\/linear-config$/
@@ -40,6 +46,8 @@ const APP_MEMORY_PATH_RE = /^\/v1\/org\/([^/]+)\/apps\/([^/]+)\/memories(?:\/([^
 function isOrgPath(pathname: string): boolean {
   return (
     pathname === "/v1/org/overview" ||
+    MEMBERS_PATH_RE.test(pathname) ||
+    MEMBER_PATH_RE.test(pathname) ||
     SEAT_PATH_RE.test(pathname) ||
     DATA_CONSENT_PATH_RE.test(pathname) ||
     REVIEW_CONFIG_PATH_RE.test(pathname) ||
@@ -59,12 +67,34 @@ function isOrgPath(pathname: string): boolean {
 export async function handleOrgRoutes(request: Request, env: Env, ctx: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url)
 
+  // Operator-only, bearer-gated recovery intentionally bypasses portal CORS.
+  if (request.method === "POST" && url.pathname === "/admin/org-access/recover") {
+    return handleAdminOrgAccessRecoveryRoute(request, env)
+  }
   if (request.method === "OPTIONS" && isOrgPath(url.pathname)) {
     return handlePortalPreflight(request, env)
   }
   // portal Organization page: overview (GET) + seat assign/unassign (POST) — org-*-route.ts
   if (request.method === "GET" && url.pathname === "/v1/org/overview") {
     return withPortalCors(request, await handleOrgOverviewRoute(request, env, ctx), env)
+  }
+  const membersMatch = MEMBERS_PATH_RE.exec(url.pathname)
+  if (request.method === "POST" && membersMatch) {
+    const iid = decodeInstallationId(membersMatch[1]!)
+    return withPortalCors(request, await handleAddOrgMember(request, env, ctx, iid), env)
+  }
+  const memberMatch = MEMBER_PATH_RE.exec(url.pathname)
+  if ((request.method === "PATCH" || request.method === "DELETE") && memberMatch) {
+    const iid = decodeInstallationId(memberMatch[1]!)
+    const githubUserId = decodePathSegment(memberMatch[2]!)
+    if (githubUserId === null) {
+      return withPortalCors(request, json({ error: "invalid_github_user_id" }, 400), env)
+    }
+    const response =
+      request.method === "PATCH"
+        ? await handleUpdateOrgMemberRole(request, env, ctx, iid, githubUserId)
+        : await handleDeleteOrgMember(request, env, ctx, iid, githubUserId)
+    return withPortalCors(request, response, env)
   }
   const seatMatch = SEAT_PATH_RE.exec(url.pathname)
   if (request.method === "POST" && seatMatch) {
@@ -147,6 +177,19 @@ export async function handleOrgRoutes(request: Request, env: Env, ctx: Execution
     }
   }
   return null
+}
+
+function decodeInstallationId(value: string): number {
+  const decoded = decodePathSegment(value)
+  return decoded === null ? Number.NaN : Number(decoded)
+}
+
+function decodePathSegment(value: string): string | null {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return null
+  }
 }
 
 function json(body: unknown, status: number): Response {

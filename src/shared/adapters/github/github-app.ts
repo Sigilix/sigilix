@@ -458,15 +458,31 @@ export async function listOrgMemberIds(
 
 /** A GitHub account (org member or repo collaborator) as the org page needs it. */
 export interface GitHubMember {
+  /** Immutable GitHub account identity, serialized from the API's positive integer `id`. */
+  githubUserId: string
+  /** Mutable display login; never use it as the account identity. */
   login: string
-  /** GitHub avatar URL from the API payload; "" when the payload omitted it. */
+  /** Mutable display avatar URL; "" when the API payload omitted it. */
   avatarUrl: string
+}
+
+function parseGitHubMember(value: unknown): GitHubMember | undefined {
+  if (typeof value !== "object" || value === null) return undefined
+  const row = value as Record<string, unknown>
+  if (typeof row.id !== "number" || !Number.isSafeInteger(row.id) || row.id <= 0) return undefined
+  if (typeof row.login !== "string" || row.login === "") return undefined
+  return {
+    githubUserId: String(row.id),
+    login: row.login,
+    avatarUrl: typeof row.avatar_url === "string" ? row.avatar_url : "",
+  }
 }
 
 /**
  * sig-org-members: list an ORGANIZATION's members via the App installation
  * token (`GET /orgs/{org}/members`, paginated). Powers the portal Organization
- * → Members roster for an org install. Fail-soft + `complete` flag, mirroring
+ * → Members roster for an org install. Repeated rows are deduped by immutable
+ * GitHub user ID. Fail-soft + `complete` flag, mirroring
  * listInstallationRepoFullNames — a 403/404 (the App lacks the "Members" org
  * read permission, or the account isn't an org) returns `{ items: [], complete:
  * false }` so the caller degrades to the activity-derived seats rather than 5xx.
@@ -478,7 +494,7 @@ export async function listOrgMembers(
   installationId: number,
   orgLogin: string,
 ): Promise<ListingResult<GitHubMember>> {
-  const items: GitHubMember[] = []
+  const byId = new Map<string, GitHubMember>()
   try {
     const token = await getInstallationToken({ kv, appId, privateKey, installationId })
     for (let page = 1; page <= MAX_PAGES; page++) {
@@ -495,22 +511,21 @@ export async function listOrgMembers(
             status: res.status,
           }),
         )
-        return { items, complete: false }
+        return { items: [...byId.values()], complete: false }
       }
-      const arr = (await res.json()) as Array<{ login?: unknown; avatar_url?: unknown }>
-      if (!Array.isArray(arr) || arr.length === 0) return { items, complete: true }
+      const arr = (await res.json()) as unknown
+      if (!Array.isArray(arr) || arr.length === 0) return { items: [...byId.values()], complete: true }
       for (const m of arr) {
-        if (typeof m.login === "string" && m.login !== "") {
-          items.push({ login: m.login, avatarUrl: typeof m.avatar_url === "string" ? m.avatar_url : "" })
-        }
+        const member = parseGitHubMember(m)
+        if (member && !byId.has(member.githubUserId)) byId.set(member.githubUserId, member)
       }
-      if (arr.length < 100) return { items, complete: true }
+      if (arr.length < 100) return { items: [...byId.values()], complete: true }
       if (page === MAX_PAGES) {
         console.warn(JSON.stringify({ event: "list-org-members-truncated", installation_id: installationId }))
-        return { items, complete: false }
+        return { items: [...byId.values()], complete: false }
       }
     }
-    return { items, complete: false }
+    return { items: [...byId.values()], complete: false }
   } catch (err) {
     console.warn(
       JSON.stringify({
@@ -519,7 +534,7 @@ export async function listOrgMembers(
         error: err instanceof Error ? err.message : String(err),
       }),
     )
-    return { items, complete: false }
+    return { items: [...byId.values()], complete: false }
   }
 }
 
@@ -528,9 +543,9 @@ export async function listOrgMembers(
  * an installation can access (`GET /repos/{owner}/{repo}/collaborators`,
  * installation-token auth). Used for a PERSONAL (`account.type: "User"`) install
  * where there is no org roster — the "members" are the people who can touch the
- * installed repos. Deduped case-insensitively (first-seen avatar wins). Fail-soft
- * + `complete` flag: any repo enumeration / page error marks the result partial
- * but keeps whatever was collected.
+ * installed repos. Deduped by immutable GitHub user ID (first-seen display
+ * fields win). Fail-soft + `complete` flag: any repo enumeration / page error
+ * marks the result partial but keeps whatever was collected.
  */
 export async function listInstallationCollaborators(
   kv: KVNamespace,
@@ -538,7 +553,7 @@ export async function listInstallationCollaborators(
   privateKey: string,
   installationId: number,
 ): Promise<ListingResult<GitHubMember>> {
-  const byLogin = new Map<string, GitHubMember>()
+  const byId = new Map<string, GitHubMember>()
   const repos = await listInstallationRepoFullNames(kv, appId, privateKey, installationId)
   let complete = repos.complete
   try {
@@ -560,13 +575,12 @@ export async function listInstallationCollaborators(
           complete = false
           break
         }
-        const arr = (await res.json()) as Array<{ login?: unknown; avatar_url?: unknown }>
+        const arr = (await res.json()) as unknown
         if (!Array.isArray(arr) || arr.length === 0) break
         for (const c of arr) {
-          if (typeof c.login !== "string" || c.login === "") continue
-          const key = c.login.toLowerCase()
-          if (!byLogin.has(key)) {
-            byLogin.set(key, { login: c.login, avatarUrl: typeof c.avatar_url === "string" ? c.avatar_url : "" })
+          const collaborator = parseGitHubMember(c)
+          if (collaborator && !byId.has(collaborator.githubUserId)) {
+            byId.set(collaborator.githubUserId, collaborator)
           }
         }
         if (arr.length < 100) break
@@ -583,7 +597,7 @@ export async function listInstallationCollaborators(
     )
     complete = false
   }
-  return { items: [...byLogin.values()], complete }
+  return { items: [...byId.values()], complete }
 }
 
 /**

@@ -26,22 +26,30 @@ afterEach(() => {
 describe("fetchInstallationRoster", () => {
   it("Organization install → lists org members", async () => {
     listOrgMembers.mockResolvedValue({
-      items: [{ login: "alice", avatarUrl: "a" }],
+      items: [{ githubUserId: "101", login: "alice", avatarUrl: "a" }],
       complete: true,
     })
     const res = await fetchInstallationRoster(appEnv, 7, "acme", "Organization")
-    expect(res).toEqual({ members: [{ login: "alice", avatarUrl: "a" }], complete: true, source: "org" })
+    expect(res).toEqual({
+      members: [{ githubUserId: "101", login: "alice", avatarUrl: "a" }],
+      complete: true,
+      source: "org",
+    })
     expect(listOrgMembers).toHaveBeenCalledWith(KV, "123", "pem", 7, "acme")
     expect(listInstallationCollaborators).not.toHaveBeenCalled()
   })
 
   it("personal (User) install → lists repo collaborators", async () => {
     listInstallationCollaborators.mockResolvedValue({
-      items: [{ login: "dana", avatarUrl: "d" }],
+      items: [{ githubUserId: "301", login: "dana", avatarUrl: "d" }],
       complete: true,
     })
     const res = await fetchInstallationRoster(appEnv, 7, "octocat", "User")
-    expect(res).toEqual({ members: [{ login: "dana", avatarUrl: "d" }], complete: true, source: "collaborators" })
+    expect(res).toEqual({
+      members: [{ githubUserId: "301", login: "dana", avatarUrl: "d" }],
+      complete: true,
+      source: "collaborators",
+    })
     expect(listInstallationCollaborators).toHaveBeenCalledWith(KV, "123", "pem", 7)
     expect(listOrgMembers).not.toHaveBeenCalled()
   })

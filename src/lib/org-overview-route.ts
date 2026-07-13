@@ -85,6 +85,9 @@ const MAX_PAGE_LIMIT = 200
 export type OrgPlan = PlanName
 
 export interface OrgSeat {
+  /** Immutable GitHub account identity. Present for seats proven by the
+   * installation roster; login remains display-only and may change. */
+  githubUserId?: string
   login: string
   role: UserRole
   reviews: number
@@ -463,6 +466,9 @@ async function mergeGitHubRoster(
     const key = member.login.toLowerCase()
     const existing = byLogin.get(key)
     if (existing) {
+      // The roster is the identity authority: enrich the activity-derived
+      // display row with the immutable account id used by member mutations.
+      existing.githubUserId = member.githubUserId
       // Prefer the GitHub avatar for a seat we can now match to the roster.
       if (member.avatarUrl !== "") existing.avatarUrl = member.avatarUrl
       continue
@@ -470,6 +476,7 @@ async function mergeGitHubRoster(
     // Roster-only member: no activity yet, so default UNASSIGNED (an admin
     // grants the seat). An org_seat_assignment override is applied afterwards.
     const seat: OrgSeat = {
+      githubUserId: member.githubUserId,
       login: member.login,
       role: "member",
       reviews: 0,

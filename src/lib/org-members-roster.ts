@@ -10,8 +10,9 @@
 //
 //   - ORGANIZATION install → GET /orgs/{org}/members (needs the App's "Members"
 //     org read permission; absent → fail-soft empty, source unchanged).
-//   - PERSONAL (account.type "User") install → the deduped repo COLLABORATORS
-//     across the installation's repos (there is no org roster).
+//   - PERSONAL (account.type "User") install → the repo COLLABORATORS deduped
+//     by immutable GitHub user ID across the installation's repos (there is no
+//     org roster).
 //
 // FULLY FAIL-SOFT: a missing App credential / KV binding, a non-positive
 // installation id, or any GitHub error resolves to an empty roster + a reason,
@@ -26,7 +27,7 @@ import {
 import type { Env } from "@/src/shared/types/env"
 
 export interface RosterResult {
-  /** The GitHub members (org members or repo collaborators). Empty on any fault. */
+  /** GitHub members keyed downstream by immutable `githubUserId`; login/avatar are display-only. */
   members: GitHubMember[]
   /** True only when every App-roster page was consumed without an error/cap. */
   complete: boolean

@@ -142,7 +142,7 @@ function seatReq(sessionId: string | null, installationId: number | string, logi
 function stubGitHub(opts: {
   installations: Array<{ id: number; account: { type: string; login: string } }>
   memberships?: Array<{ role: string; state: string; organization: { login: string } }>
-  orgMemberPages?: Record<number, Array<{ login: string; avatar_url?: string }> | { status: number }>
+  orgMemberPages?: Record<number, Array<{ id: number; login: string; avatar_url?: string }> | { status: number }>
   requiredUserToken?: string
   refresh?: { accessToken: string; refreshToken: string }
 }) {
@@ -344,7 +344,7 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     stubGitHub({
       installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
       memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
-      orgMemberPages: { 1: [{ login: "Newbie", avatar_url: "https://avatars.test/newbie" }] },
+      orgMemberPages: { 1: [{ id: 222, login: "Newbie", avatar_url: "https://avatars.test/newbie" }] },
     })
 
     const assign = await handleOrgSeatRoute(
@@ -383,7 +383,7 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     stubGitHub({
       installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
       memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
-      orgMemberPages: { 1: [{ login: "someone-else" }] },
+      orgMemberPages: { 1: [{ id: 333, login: "someone-else" }] },
     })
 
     const res = await handleOrgSeatRoute(seatReq("sess-1", 1, "ghost", { assigned: true }), env, undefined, 1, "ghost")
@@ -403,7 +403,7 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
       GITHUB_APP_ID: "123",
       GITHUB_PRIVATE_KEY: "cached-token-avoids-key-use",
     } as Env
-    const firstPage = Array.from({ length: 100 }, (_, i) => ({ login: `member-${i}` }))
+    const firstPage = Array.from({ length: 100 }, (_, i) => ({ id: i + 1000, login: `member-${i}` }))
     stubGitHub({
       installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
       memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
@@ -433,7 +433,10 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
       GITHUB_APP_ID: "123",
       GITHUB_PRIVATE_KEY: "cached-token-avoids-key-use",
     } as Env
-    const firstPage = Array.from({ length: 100 }, (_, i) => ({ login: i === 0 ? "newbie" : `member-${i}` }))
+    const firstPage = Array.from({ length: 100 }, (_, i) => ({
+      id: i + 1000,
+      login: i === 0 ? "newbie" : `member-${i}`,
+    }))
     stubGitHub({
       installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
       memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
@@ -633,7 +636,7 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     stubGitHub({
       installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
       memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
-      orgMemberPages: { 1: [{ login: "newbie" }] },
+      orgMemberPages: { 1: [{ id: 222, login: "newbie" }] },
     })
     const req = new Request("https://x/v1/org/1/members/newbie/seat", {
       method: "POST",
@@ -667,7 +670,7 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     stubGitHub({
       installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
       memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
-      orgMemberPages: { 1: [{ login: "someone-else" }] },
+      orgMemberPages: { 1: [{ id: 333, login: "someone-else" }] },
     })
     const req = new Request("https://x/v1/org/1/members/ghost/seat", {
       method: "POST",
@@ -697,7 +700,7 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
       installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
       memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
       orgMemberPages: {
-        1: Array.from({ length: 100 }, (_, i) => ({ login: `member-${i}` })),
+        1: Array.from({ length: 100 }, (_, i) => ({ id: i + 1000, login: `member-${i}` })),
         2: { status: 503 },
       },
     })

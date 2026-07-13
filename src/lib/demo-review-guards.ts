@@ -89,6 +89,11 @@ export const DEMO_ASSUMED_COST_USD = 0.25
 const CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 /** Day-keyed counters expire after 2 days (yesterday's key is dead weight). */
 const DAY_COUNTER_TTL_SECONDS = 2 * 24 * 60 * 60
+/** Poll-job record TTL. The async run resolves in ~2 min and the frontend polls
+ *  within that window; 1h bounds storage while comfortably covering a slow run + a
+ *  reconnecting client. Distinct from the 7d PR@SHA result cache (a job id is a
+ *  one-shot poll handle, not a reusable review). */
+const JOB_TTL_SECONDS = 60 * 60
 
 export type DemoMode = "on" | "off"
 
@@ -326,5 +331,41 @@ export async function writeDemoCache(
     })
   } catch {
     /* best-effort — a cache-write failure only costs money on the next identical request */
+  }
+}
+
+// ─── Poll-job records (async start-then-poll) ───────────────────────
+
+/** The KV key for a poll job. `jobId` is a crypto-random UUID minted by the POST
+ *  handler; unguessable, so a bare read is not a cross-caller disclosure (and the
+ *  payload is a review of a PUBLIC PR either way). */
+function jobKey(jobId: string): string {
+  return `demo:job:${jobId}`
+}
+
+/**
+ * Persist the poll-job record (pending → done/error). Best-effort with an EXPLICIT
+ * failure log: unlike the result cache, a lost job record strands a caller polling a
+ * job that never resolves, so a persistently-failing write is a real signal.
+ */
+export async function writeDemoJob(env: DemoEnv, jobId: string, record: unknown): Promise<void> {
+  try {
+    await env.OPENCLAW_STATE.put(jobKey(jobId), JSON.stringify(record), { expirationTtl: JOB_TTL_SECONDS })
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "demo-job-write-failed",
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+  }
+}
+
+/** Read a poll-job record, or null on a miss (unknown/expired id) / KV fault. */
+export async function readDemoJob<T>(env: DemoEnv, jobId: string): Promise<T | null> {
+  try {
+    return await env.OPENCLAW_STATE.get<T>(jobKey(jobId), "json")
+  } catch {
+    return null
   }
 }

@@ -110,7 +110,7 @@ export function emitAndAttachLogicInputComposition(args: {
     args.telemetry.logicInputComposition = composition
     // Reconcile against the configured PRIMARY logic model. This is exact today
     // because `SPECIALIST_CONFIGS.logic.fallback === null` — every logic call is
-    // the configured primary (`moonshotai/kimi-k2.7-code`, SIG-450), so the recorder's
+    // the configured primary (`deepseek-v4-pro:cloud` on Ollama Turbo), so the recorder's
     // per-call sum equals `tokenUsageByModel[that model].inputTokens`. If logic ever gains a
     // cross-provider fallback, switch this to the model that actually answered
     // (or sum across the logic attempt's model keys) so the reconciliation

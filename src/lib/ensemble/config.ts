@@ -83,8 +83,8 @@ const REASONING_ROLE_NAMES: ReadonlySet<string> = new Set<SpecialistRole>(["logi
  *
  *  SIG-450 (per-role level): a token may carry an optional per-role override
  *  `role:level` (e.g. `"logic:high,tests"`) so ONE role can run at a different
- *  effort than the shared default — needed when logic (Kimi, screened at high)
- *  and tests (v4-pro, validated at medium) coexist. A bare `role` uses the global
+ *  effort than the shared default — needed when logic (v4-pro on Ollama Turbo,
+ *  screened at high) and tests (v4-pro, validated at medium) coexist. A bare `role` uses the global
  *  default level; `role:level` pins that role. An invalid per-role level DROPS
  *  that token (strict, mirrors the global guard) rather than falling back, so a
  *  typo can't silently downgrade effort. Backward-compatible: a list with no

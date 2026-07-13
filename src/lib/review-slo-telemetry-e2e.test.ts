@@ -296,7 +296,8 @@ describe("review-slo-summary — real specialist fan-out token aggregation (SIG-
     for (const role of ALL_SPECIALISTS) {
       const res = await runSpecialist({
         role,
-        apiKeys: { ollama: undefined, openrouter: "k" },
+        // logic runs on Ollama Turbo now; the rest on OpenRouter — provide both keys.
+        apiKeys: { ollama: "k", openrouter: "k" },
         systemPrompt: "system",
         initialMessage: "user",
         chatEnabled: "on",

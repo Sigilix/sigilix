@@ -199,8 +199,10 @@ describe("SIG-406 — OpenRouter alpha model lineup", () => {
   // concurrent-PR burst; tests/synth stay `retries: 1`. SIG-369 (2026-06-16) then set every
   // per-attempt cap = the role wall (all-roles uncap; the role-wall signal is the sole limiter).
   // Source of truth: SPECIALIST_CONFIGS / SYNTHESIZER_CONFIG.
-  it("logic specialist runs moonshotai/kimi-k2.7-code (SIG-450 retries:2, no fallback; SIG-369 cap = role wall)", () => {
-    expect(SPECIALIST_CONFIGS.logic.primary).toBe("moonshotai/kimi-k2.7-code")
+  it("logic specialist runs deepseek-v4-pro:cloud on Ollama Turbo (2026-07-12; retries:2, no fallback; SIG-369 cap = role wall)", () => {
+    // Moved OFF OpenRouter onto Ollama Turbo — won the K=12 subtle-logic recall
+    // bake-off (99% recall / 23% FP vs Kimi 93/31), zero marginal OpenRouter spend.
+    expect(SPECIALIST_CONFIGS.logic.primary).toBe("deepseek-v4-pro:cloud")
     expect(SPECIALIST_CONFIGS.logic.retries).toBe(2)
     expect(SPECIALIST_CONFIGS.logic.fallback).toBeNull()
     // SIG-369: per-attempt cap = the role wall → the absolute role-wall signal is the sole limiter.
@@ -270,8 +272,9 @@ describe("SIG-406 — OpenRouter alpha model lineup", () => {
     //   synth:       primary + 1 retry                        = 2
     //   synth retry: primary + 1 retry                        = 2 (ARC-278
     //                retry path, fires when attempt 1 fails)
-    //   total: 16.  Only security carries a fallback model (SIG-468);
-    //   the other roles rely on OpenRouter's per-call upstream routing.
+    //   total: 16.  Only security carries a fallback model (SIG-468); the OpenRouter
+    //   roles rely on OpenRouter's per-call upstream routing, and logic (Ollama Turbo,
+    //   2026-07-12) relies on its retries:2 + the unavailable-banner degrade.
     expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(16)
 
     // Cross-check: the constant matches the sum of `1 + retries + (fallback ? 1 : 0)`

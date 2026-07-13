@@ -101,7 +101,7 @@ describe("resolveBedrockSpecialistConfig / resolveBedrockSynthConfig — activat
 })
 
 describe("the Bedrock lineup — decorrelation, fallback legs, attempt parity, pricing", () => {
-  it("keeps the SIG-406 four-family split: security+tests=DeepSeek, performance=GLM(Z.ai), synth=Nvidia, logic=Moonshot (unchanged default)", () => {
+  it("keeps the SIG-406 four-family split: security+tests=DeepSeek, performance=GLM(Z.ai), synth=Nvidia; logic=Ollama-Turbo v4-pro (2026-07-12 default)", () => {
     expect(BEDROCK_SPECIALIST_CONFIGS.security.primary.startsWith("deepseek.")).toBe(true)
     expect(BEDROCK_SPECIALIST_CONFIGS.tests.primary.startsWith("deepseek.")).toBe(true)
     expect(BEDROCK_SPECIALIST_CONFIGS.performance.primary.startsWith("zai.")).toBe(true)
@@ -112,10 +112,10 @@ describe("the Bedrock lineup — decorrelation, fallback legs, attempt parity, p
         BEDROCK_SYNTHESIZER_CONFIG.primary.split(".")[0],
       )
     }
-    // Logic's shipped default is untouched — still the OpenRouter Kimi config.
-    expect(SPECIALIST_CONFIGS.logic.primary).toBe("moonshotai/kimi-k2.7-code")
+    // Logic's shipped default moved to Ollama Turbo (2026-07-12): deepseek-v4-pro:cloud.
+    expect(SPECIALIST_CONFIGS.logic.primary).toBe("deepseek-v4-pro:cloud")
   })
-  it("every fallback leg is TODAY'S OpenRouter model for that role (degrade = the shipped lineup)", () => {
+  it("every fallback leg is TODAY'S shipped model for that role (degrade = the shipped lineup; logic is now Ollama Turbo)", () => {
     expect(BEDROCK_SPECIALIST_CONFIGS.security.fallback).toBe(SPECIALIST_CONFIGS.security.primary)
     expect(BEDROCK_SPECIALIST_CONFIGS.performance.fallback).toBe(SPECIALIST_CONFIGS.performance.primary)
     expect(BEDROCK_SPECIALIST_CONFIGS.tests.fallback).toBe(SPECIALIST_CONFIGS.tests.primary)

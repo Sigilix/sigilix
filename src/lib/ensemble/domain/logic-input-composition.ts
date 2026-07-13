@@ -3,7 +3,7 @@
 // On a real PR (#568) the packed diff was ~13K tokens but the logic specialist's
 // call consumed ~140K INPUT tokens (`tokenUsageByModel[logic model].inputTokens`
 // in the per-PR `ensemble-review-telemetry` KV record; logic was `openai/o3` for
-// that measurement — it's `moonshotai/kimi-k2.7-code` now, SIG-450). That ~10×
+// that measurement — it's `deepseek-v4-pro:cloud` (Ollama Turbo) now). That ~10×
 // gap is unexplained, and the logic model is a dominant review cost, so a follow-up
 // MUST be able to cut the biggest low-recall-value input block — but only after we
 // MEASURE where the tokens go. This module is the

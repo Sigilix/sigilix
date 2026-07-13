@@ -65,15 +65,24 @@ describe("invariant: no shipped config mixes providers", () => {
     }
   })
 
-  it("every shipped config resolves to the OpenRouter key (the all-OpenRouter alpha lineup)", () => {
-    // SIG-406: specialists + synth + the claim-extractor are ALL on OpenRouter, so the
-    // key selector must return the OpenRouter key for each. Reverting any to a `:cloud`
-    // model without re-wiring its call site to the Ollama key would resurface the
-    // claim-extractor key-leak class (the call site passes a key the config doesn't match).
-    const reachable: ModelConfig[] = [...Object.values(SPECIALIST_CONFIGS), SYNTHESIZER_CONFIG, CLAIM_EXTRACTOR_CONFIG]
-    for (const config of reachable) {
+  it("every shipped config EXCEPT logic resolves to the OpenRouter key; logic resolves to the Ollama key", () => {
+    // SIG-406: synth + the claim-extractor + every specialist EXCEPT logic are on
+    // OpenRouter, so the key selector must return the OpenRouter key for each. Since
+    // 2026-07-12 `logic` runs on Ollama Turbo (`deepseek-v4-pro:cloud`), so its key
+    // follows the same shape rule to the OLLAMA key — this proves the switch does NOT
+    // resurface the claim-extractor key-leak class: the key tracks the config's model
+    // shape, so an Ollama-shaped primary can never be handed the OpenRouter key.
+    const openRouterConfigs: ModelConfig[] = [
+      SPECIALIST_CONFIGS.security,
+      SPECIALIST_CONFIGS.performance,
+      SPECIALIST_CONFIGS.tests,
+      SYNTHESIZER_CONFIG,
+      CLAIM_EXTRACTOR_CONFIG,
+    ]
+    for (const config of openRouterConfigs) {
       expect(selectConfigApiKey(config, BOTH_KEYS)).toBe("openrouter-key")
     }
+    expect(selectConfigApiKey(SPECIALIST_CONFIGS.logic, BOTH_KEYS)).toBe("ollama-key")
   })
 })
 
@@ -98,22 +107,43 @@ describe("runSpecialist — routes the role's OpenRouter model to the OpenRouter
   })
   afterEach(() => vi.restoreAllMocks())
 
-  it("logic → chat gets model moonshotai/kimi-k2.7-code + the OpenRouter key", async () => {
-    await runSpecialist({ role: "logic", apiKeys: BOTH_KEYS, ...baseArgs })
+  it("tests → chat gets model deepseek/deepseek-v4-pro + the OpenRouter key", async () => {
+    await runSpecialist({ role: "tests", apiKeys: BOTH_KEYS, ...baseArgs })
     expect(mockChat).toHaveBeenCalledTimes(1)
     const call = mockChat.mock.calls[0]![0] as { model: string; apiKey: string }
-    expect(call.model).toBe("moonshotai/kimi-k2.7-code")
+    expect(call.model).toBe("deepseek/deepseek-v4-pro")
     expect(call.apiKey).toBe("openrouter-key")
   })
 
-  it("logic but OPENROUTER_API_KEY unset → fails closed, never calls chat with the Ollama key", async () => {
+  it("tests but OPENROUTER_API_KEY unset → fails closed, never calls chat with the Ollama key", async () => {
     const res = await runSpecialist({
-      role: "logic",
+      role: "tests",
       apiKeys: { ollama: "ollama-key", openrouter: undefined },
       ...baseArgs,
     })
     expect(res.failureReason).toBe("missing_api_key")
-    expect(res.modelUsed).toBe("moonshotai/kimi-k2.7-code")
+    expect(res.modelUsed).toBe("deepseek/deepseek-v4-pro")
+    expect(mockChat).not.toHaveBeenCalled()
+  })
+
+  // 2026-07-12: logic runs on Ollama Turbo (`deepseek-v4-pro:cloud`). The shape-driven
+  // key selector routes it to the OLLAMA key automatically — no OpenRouter key leak.
+  it("logic → chat gets model deepseek-v4-pro:cloud + the Ollama key", async () => {
+    await runSpecialist({ role: "logic", apiKeys: BOTH_KEYS, ...baseArgs })
+    expect(mockChat).toHaveBeenCalledTimes(1)
+    const call = mockChat.mock.calls[0]![0] as { model: string; apiKey: string }
+    expect(call.model).toBe("deepseek-v4-pro:cloud")
+    expect(call.apiKey).toBe("ollama-key")
+  })
+
+  it("logic but OLLAMA_API_KEY unset → fails closed, never calls chat with the OpenRouter key", async () => {
+    const res = await runSpecialist({
+      role: "logic",
+      apiKeys: { ollama: undefined, openrouter: "openrouter-key" },
+      ...baseArgs,
+    })
+    expect(res.failureReason).toBe("missing_api_key")
+    expect(res.modelUsed).toBe("deepseek-v4-pro:cloud")
     expect(mockChat).not.toHaveBeenCalled()
   })
 
@@ -129,10 +159,10 @@ describe("runSpecialist — routes the role's OpenRouter model to the OpenRouter
     expect(res.modelUsed).toBe("deepseek/deepseek-v4-pro")
   })
 
-  it("modelOverride absent → byte-identical to the role default (moonshotai/kimi-k2.7-code)", async () => {
+  it("modelOverride absent → byte-identical to the role default (logic = deepseek-v4-pro:cloud)", async () => {
     const res = await runSpecialist({ role: "logic", apiKeys: BOTH_KEYS, ...baseArgs })
     const call = mockChat.mock.calls[0]![0] as { model: string }
-    expect(call.model).toBe("moonshotai/kimi-k2.7-code")
-    expect(res.modelUsed).toBe("moonshotai/kimi-k2.7-code")
+    expect(call.model).toBe("deepseek-v4-pro:cloud")
+    expect(res.modelUsed).toBe("deepseek-v4-pro:cloud")
   })
 })

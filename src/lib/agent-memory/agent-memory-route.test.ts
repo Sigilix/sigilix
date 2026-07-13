@@ -486,7 +486,7 @@ describe("agent-memory routes — SIG-494 tenant-scope isolation", () => {
       id: "key-7",
       keyHash: await sha256Hex(perTenant),
       installationId: 7,
-      createdBy: "missing-user",
+      createdBy: "999999",
       nowIso: "2026-01-01T00:00:00Z",
     })
     const env = unkeyedEnv({ SIGILIX_PLATFORM_DB: tenantDb })

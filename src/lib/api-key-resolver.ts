@@ -24,17 +24,16 @@
 //   - D1 query throws (genuine error)        -> FAIL CLOSED. Return null
 //                                                immediately. Do NOT fall
 //                                                through to the global key.
-//   - D1 query succeeds, no matching row     -> clean "not found" (covers a
-//     (revoked or never-issued key)             revoked key, since the query
-//                                                filters revoked_at IS NULL).
-//                                                Falls through to the legacy
-//                                                global-key compare.
-//   - D1 query succeeds, row found           -> resolved to that
-//                                                installation. last_used_at
-//                                                is updated best-effort; a
-//                                                touch failure never flips a
-//                                                successful resolution to a
-//                                                failure.
+//   - D1 query succeeds, no matching row     -> clean "not found". May use the
+//                                                legacy global-key result.
+//   - D1 query succeeds, revoked/malformed   -> FAIL CLOSED. A persisted row
+//     row, or missing exact active access        can never escape through the
+//     while membership mode is on               broad global-key fallback.
+//   - D1 query succeeds, active row          -> resolved to that installation
+//                                                (and, in membership mode, only
+//                                                with exact active workspace
+//                                                access). last_used_at is
+//                                                updated best-effort.
 
 import { extractBearerToken, requireBearerToken, sha256Hex } from "@/src/lib/auth-bearer"
 import { touchApiKeyLastUsed } from "@/src/lib/api-key-store"
@@ -61,7 +60,14 @@ export interface ResolvedApiKey {
   createdBy: string | null
 }
 
-type ResolverEnv = Pick<Env, "SIGILIX_PLATFORM_DB" | "OPENCLAW_SIGILIX_API_KEY">
+type ResolverEnv = Pick<Env, "SIGILIX_PLATFORM_DB" | "OPENCLAW_SIGILIX_API_KEY" | "OPENCLAW_ORG_MEMBERSHIP_MODE">
+
+interface ApiKeyAuthRow {
+  installation_id: unknown
+  created_by: unknown
+  revoked_at: unknown
+  has_active_access: unknown
+}
 
 export async function resolveApiKey(
   request: Request,
@@ -71,15 +77,36 @@ export async function resolveApiKey(
   const presented = extractBearerToken(request)
   if (!presented) return null
 
+  // Always perform the legacy comparison, regardless of whether D1 later
+  // returns a missing, active, revoked, or unauthorized persisted row. The
+  // result is used only after the persisted-row decision below.
+  const [keyHash, globalKeyMatches] = await Promise.all([
+    sha256Hex(presented),
+    requireBearerToken(request, env.OPENCLAW_SIGILIX_API_KEY ?? ""),
+  ])
+
   if (env.SIGILIX_PLATFORM_DB) {
     const db = env.SIGILIX_PLATFORM_DB
-    const keyHash = await sha256Hex(presented)
-    let row: { installation_id: number; created_by: string | null } | null
+    const membershipMode = env.OPENCLAW_ORG_MEMBERSHIP_MODE === "on"
+    let row: ApiKeyAuthRow | null
     try {
-      row = await db
-        .prepare("SELECT installation_id, created_by FROM api_key WHERE key_hash = ? AND revoked_at IS NULL")
-        .bind(keyHash)
-        .first<{ installation_id: number; created_by: string | null }>()
+      // Keep rollout-off compatible with databases where migration 0022 has
+      // not landed yet. Rollout-on deliberately requires that table and fails
+      // closed if it is absent.
+      const sql = membershipMode
+        ? `SELECT key_row.installation_id, key_row.created_by, key_row.revoked_at,
+                  CASE WHEN EXISTS (
+                    SELECT 1 FROM org_workspace_access AS access
+                     WHERE access.installation_id = key_row.installation_id
+                       AND access.github_user_id = key_row.created_by
+                       AND access.revoked_at IS NULL
+                  ) THEN 1 ELSE 0 END AS has_active_access
+             FROM api_key AS key_row
+            WHERE key_row.key_hash = ?`
+        : `SELECT installation_id, created_by, revoked_at, 1 AS has_active_access
+             FROM api_key
+            WHERE key_hash = ?`
+      row = await db.prepare(sql).bind(keyHash).first<ApiKeyAuthRow>()
     } catch (error) {
       // FAIL CLOSED. See file header — never fall through on a genuine D1 fault.
       console.error(
@@ -91,6 +118,13 @@ export async function resolveApiKey(
       return null
     }
     if (row != null) {
+      const decoded = decodeApiKeyAuthRow(row)
+      // Any persisted hash match owns the decision. Revoked/malformed rows and
+      // missing exact workspace access are unconditional denials and can never
+      // fall through to the broad internal key.
+      if (decoded === null || decoded.revoked || (membershipMode && !decoded.hasActiveAccess)) {
+        return null
+      }
       // Best-effort last_used_at touch. With a ctx (the request path, slice 2),
       // fire-and-forget via waitUntil so it adds no latency to the hot auth
       // path; without one (tests / non-request callers), await it so behavior
@@ -107,20 +141,45 @@ export async function resolveApiKey(
         }
       }
       return {
-        installationId: row.installation_id,
-        createdBy: typeof row.created_by === "string" && row.created_by !== "" ? row.created_by : null,
+        installationId: decoded.installationId,
+        createdBy: decoded.createdBy,
       }
     }
-    // Clean "not found" (never issued, or revoked) — fall through below.
+    // Clean "not found" — the precomputed global-key result may be used below.
   }
 
-  // Legacy fallback — constant-time compare against the single shared global
-  // key, preserving the existing /v1/review-style auth behavior unchanged.
-  if (await requireBearerToken(request, env.OPENCLAW_SIGILIX_API_KEY ?? "")) {
+  // Legacy fallback — the constant-time comparison ran unconditionally above.
+  // A persisted denied row returned already, so only a true D1 miss (or absent
+  // D1 binding) can reach this broad internal identity.
+  if (globalKeyMatches) {
     // The legacy shared global key is Sigilix-internal — no developer behind it.
     return { installationId: LEGACY_TENANT_INSTALLATION_ID, createdBy: null }
   }
   return null
+}
+
+function decodeApiKeyAuthRow(
+  row: ApiKeyAuthRow,
+): { installationId: number; createdBy: string; revoked: boolean; hasActiveAccess: boolean } | null {
+  if (!validInstallationId(row.installation_id) || !validGithubUserId(row.created_by)) return null
+  if (row.revoked_at !== null && typeof row.revoked_at !== "string") return null
+  if (row.has_active_access !== 0 && row.has_active_access !== 1) return null
+  return {
+    installationId: row.installation_id,
+    createdBy: row.created_by,
+    revoked: row.revoked_at !== null,
+    hasActiveAccess: row.has_active_access === 1,
+  }
+}
+
+function validInstallationId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+}
+
+function validGithubUserId(value: unknown): value is string {
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) return false
+  const numeric = Number(value)
+  return Number.isSafeInteger(numeric) && numeric > 0 && String(numeric) === value
 }
 
 /**

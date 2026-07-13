@@ -168,6 +168,37 @@ describe("bedrock chat — the wire call", () => {
     expect(body.system[1]!.text).toContain('{"type":"object"}')
   })
 
+  it("embeds a SANITIZED schema (integer min/max stripped) ONLY for an Anthropic Bedrock id", async () => {
+    mockFetch.mockResolvedValue(converseOk())
+    const schema = {
+      type: "object",
+      properties: { score: { type: "integer", minimum: 1, maximum: 5 } },
+      required: ["score"],
+    }
+    await bedrockChat({ model: "us.anthropic.claude-sonnet-5", ...baseArgs, format: schema })
+    const body = JSON.parse((mockFetch.mock.calls[0]![1] as { body: string }).body) as {
+      system: Array<{ text: string }>
+    }
+    const instruction = body.system[1]!.text
+    expect(instruction).not.toContain('"minimum"')
+    expect(instruction).not.toContain('"maximum"')
+    expect(instruction).toContain('{"type":"object","properties":{"score":{"type":"integer"}},"required":["score"]}')
+  })
+
+  it("embeds the ORIGINAL schema unchanged for a non-Anthropic Bedrock id (not sanitized)", async () => {
+    mockFetch.mockResolvedValue(converseOk())
+    const schema = {
+      type: "object",
+      properties: { score: { type: "integer", minimum: 1, maximum: 5 } },
+      required: ["score"],
+    }
+    await bedrockChat({ model: "deepseek.v3.2", ...baseArgs, format: schema })
+    const body = JSON.parse((mockFetch.mock.calls[0]![1] as { body: string }).body) as {
+      system: Array<{ text: string }>
+    }
+    expect(body.system[1]!.text).toContain(JSON.stringify(schema))
+  })
+
   it("maps tools to Converse toolConfig and returned toolUse blocks to tool_calls", async () => {
     mockFetch.mockResolvedValue(
       converseOk({

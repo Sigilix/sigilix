@@ -19,10 +19,10 @@
 //     token can see via `GET /user/installations` (fetchUserInstallationIds,
 //     the same call the setup wizard + workspace-prs page use). Unlike
 //     workspace-prs (which scans across ALL of them), an org page shows ONE org
-//     at a time, so we pick a "current" installation: the `?installationId=`
-//     query param IFF the caller actually owns it (tenant-isolation guard),
-//     else the first owned installation. The ledger scan is scoped to exactly
-//     that one installation.
+//     at a time. An explicit `?installationId=` must be visible to the caller or
+//     the route fails closed with 403; a request with no query keeps the legacy
+//     default of GitHub's first visible installation. The ledger scan and role
+//     decision are both scoped to exactly that one installation.
 //   - Api-key path: the key's own installationId. The legacy global-key
 //     sentinel (LEGACY_TENANT_INSTALLATION_ID) stays broad on purpose — it is
 //     Sigilix-internal, never handed to an external tenant — matching
@@ -37,7 +37,7 @@
 //     + the real total seatCount, but `seats` contains ONLY the caller's own
 //     seat (never another member's login / activity / role). A member is NEVER
 //     403'd — always 200 with the role-appropriate shape.
-//   The api-key path has no GitHub identity to run resolveUserRole against; a
+//   The api-key path has no GitHub identity to run an installation role check against; a
 //   per-installation key is a tenant-scoped service credential with full access
 //   to its own installation's data (the same access workspace-prs grants it), so
 //   it is treated as "admin" for its installation.
@@ -63,13 +63,13 @@ import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
 import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { fetchInstallationRoster } from "@/src/lib/org-members-roster"
-import { resolveUserRole, type UserRole } from "@/src/lib/resolve-user-role"
+import {
+  resolveDefaultUserInstallationScope,
+  resolveExactUserInstallationScope,
+  type UserRole,
+} from "@/src/lib/resolve-user-role"
 import { resolveInstallationPlan, type PlanName } from "@/src/lib/resolve-plan"
 import type { Env } from "@/src/shared/types/env"
-
-// Defensive pagination cap on GET /user/installations (session→installation
-// bridge) — mirrors workspace-prs-route.ts.
-const MAX_INSTALLATION_PAGES = 20
 
 // Distinct-author scan cap: read up to this many seats from D1 before
 // in-memory case-insensitive de-dup + pagination. Generous relative to any
@@ -114,51 +114,6 @@ export interface OrgOverviewResponse {
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
-}
-
-function githubHeaders(accessToken: string): HeadersInit {
-  return {
-    accept: "application/vnd.github+json",
-    "x-github-api-version": "2022-11-28",
-    authorization: `Bearer ${accessToken}`,
-    "user-agent": "sigilix-worker",
-  }
-}
-
-interface UserInstallationsResponse {
-  total_count?: number
-  installations?: Array<{ id?: number }>
-}
-
-/** Every installation id the session's GitHub user-to-server token can see. Soft-fails to []. */
-async function fetchUserInstallationIds(accessToken: string): Promise<number[]> {
-  const ids: number[] = []
-  let seen = 0
-  for (let page = 1; page <= MAX_INSTALLATION_PAGES; page++) {
-    let res: Response
-    try {
-      res = await fetch(`https://api.github.com/user/installations?per_page=100&page=${page}`, {
-        headers: githubHeaders(accessToken),
-      })
-    } catch {
-      break
-    }
-    if (!res.ok) break
-    let body: UserInstallationsResponse
-    try {
-      body = (await res.json()) as UserInstallationsResponse
-    } catch {
-      break
-    }
-    const installs = Array.isArray(body.installations) ? body.installations : []
-    for (const inst of installs) {
-      if (typeof inst.id === "number") ids.push(inst.id)
-    }
-    seen += installs.length
-    const total = typeof body.total_count === "number" ? body.total_count : seen
-    if (installs.length === 0 || seen >= total) break
-  }
-  return ids
 }
 
 // ─── Config helpers (plan + billing placeholders) ─────────────
@@ -215,14 +170,16 @@ function parseLimit(raw: string | null): number {
   return Math.min(n, MAX_PAGE_LIMIT)
 }
 
-function parseInstallationIdParam(url: URL): number | null {
+type InstallationSelection = { kind: "default" } | { kind: "exact"; installationId: number } | { kind: "invalid" }
+
+function parseInstallationSelection(url: URL): InstallationSelection {
   const raw = url.searchParams.get("installationId")
-  if (raw === null || raw.trim() === "") return null
-  const n = Number(raw)
+  if (raw === null || raw.trim() === "") return { kind: "default" }
+  const n = /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : NaN
   // Real installation ids are always positive (0 and the legacy sentinel
   // LEGACY_TENANT_INSTALLATION_ID = -1 are never something a query param
   // should be able to request into scope).
-  return Number.isInteger(n) && n > 0 ? n : null
+  return Number.isInteger(n) && n > 0 ? { kind: "exact", installationId: n } : { kind: "invalid" }
 }
 
 // ─── Resolved caller scope ────────────────────────────────────
@@ -232,32 +189,35 @@ interface OrgScope {
   installationId: number
   /** The ledger scan scope: one owned installation, or "all" for the legacy global key. */
   ledgerScope: number[] | "all"
-  /** The caller's aggregate role. */
+  /** The caller's role for this exact installation. */
   role: UserRole
   /** The caller's own login (session path); null on the api-key path (no GitHub identity). */
   login: string | null
 }
 
+type OrgScopeResult = { scope: OrgScope } | { response: Response }
+
 /**
- * Resolve a portal browser session to its org scope: the installation ids its
- * GitHub token can see, a "current" one (the `?installationId=` param if owned,
- * else the first), and its admin/member role. Best-effort: a missing session-
+ * Resolve a portal browser session to its org scope. Explicit selections are
+ * exact and fail closed when not visible; the no-query branch uses the named
+ * legacy default selector. The returned role belongs to that installation only.
+ * Best-effort: a missing session-
  * encryption key or a token-decrypt failure degrades to an empty scope +
  * "member" (telemetered) rather than throwing — see the file header.
  */
 async function resolveSessionScope(
   env: Env,
   session: AuthedSession,
-  requestedInstallationId: number | null,
-): Promise<OrgScope> {
+  selection: Exclude<InstallationSelection, { kind: "invalid" }>,
+): Promise<OrgScopeResult> {
   const login = session.record.login
 
   if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) {
     console.error(JSON.stringify({ event: "org-overview-encryption-key-missing" }))
     // installationId is forced to 0 (never the caller-supplied, unverified
-    // requestedInstallationId) so readAccountInfo's `installationId <= 0`
+    // explicit selection) so readAccountInfo's `installationId <= 0`
     // guard short-circuits — a genuinely empty panel, not a cross-tenant leak.
-    return { installationId: 0, ledgerScope: [], role: "member", login }
+    return { scope: { installationId: 0, ledgerScope: [], role: "member", login } }
   }
 
   let accessToken: string
@@ -280,28 +240,28 @@ async function resolveSessionScope(
       }),
     )
     // Same rationale as the missing-key branch above: force installationId to
-    // 0, never the unverified requestedInstallationId.
-    return { installationId: 0, ledgerScope: [], role: "member", login }
+    // 0, never an unverified explicit selection.
+    return { scope: { installationId: 0, ledgerScope: [], role: "member", login } }
   }
 
-  const [ownedIds, role] = await Promise.all([
-    fetchUserInstallationIds(accessToken),
-    resolveUserRole(accessToken, login),
-  ])
-
-  // Current installation: the requested one IFF the caller owns it (tenant-
-  // isolation guard — never scope to an installation the token can't see),
-  // else the first owned installation, else none.
-  const current =
-    requestedInstallationId !== null && ownedIds.includes(requestedInstallationId)
-      ? requestedInstallationId
-      : (ownedIds[0] ?? 0)
+  const resolved =
+    selection.kind === "exact"
+      ? await resolveExactUserInstallationScope(accessToken, login, selection.installationId)
+      : await resolveDefaultUserInstallationScope(accessToken, login)
+  if (resolved === null && selection.kind === "exact") {
+    return { response: json({ error: "forbidden" }, 403) }
+  }
+  if (resolved === null) {
+    return { scope: { installationId: 0, ledgerScope: [], role: "member", login } }
+  }
 
   return {
-    installationId: current,
-    ledgerScope: current > 0 ? [current] : [],
-    role,
-    login,
+    scope: {
+      installationId: resolved.installationId,
+      ledgerScope: [resolved.installationId],
+      role: resolved.role,
+      login,
+    },
   }
 }
 
@@ -529,11 +489,14 @@ export async function handleOrgOverviewRoute(request: Request, env: Env, ctx?: E
   const session = await requireSession(request, env, ctx)
 
   const url = new URL(request.url)
-  const requestedInstallationId = parseInstallationIdParam(url)
+  const selection = parseInstallationSelection(url)
 
   let scope: OrgScope
   if (session) {
-    scope = await resolveSessionScope(env, session, requestedInstallationId)
+    if (selection.kind === "invalid") return json({ error: "invalid installation id" }, 400)
+    const resolved = await resolveSessionScope(env, session, selection)
+    if ("response" in resolved) return resolved.response
+    scope = resolved.scope
   } else {
     const apiAuth = await requireApiTenant(request, env, ctx)
     if ("response" in apiAuth) return apiAuth.response // 401

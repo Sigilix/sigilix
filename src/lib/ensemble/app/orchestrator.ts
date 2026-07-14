@@ -48,6 +48,7 @@ import type { EnsembleHandlerArgs, EnsembleTelemetry, EnsembleResult } from "./o
 import { verifyReviewPersisted } from "@/src/lib/ensemble/adapters/review-sink"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import { resolveReviewClient } from "./review-client"
+import { readRepositoryContextForReview } from "@/src/features/repository-context"
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 export {
   INLINE_OVERVIEW_MIN_BUDGET_MS,
@@ -382,10 +383,13 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       })
     }
 
-    // ─── SIG-318 (PR 12g-2): the GATHER-EVIDENCE seam ─────────
-    // Multi-corpus retrieval, dep-vuln scan, AST-source fetch + parse-once cache, branch-vector
-    // build, and symbol retrieval live in ensemble/app/context/gather-evidence. It mutates
-    // `telemetry` (dep-vuln) by reference; returns the retrieval cache (12a pre-try-let reassign).
+    const repositoryContextPromise = readRepositoryContextForReview({
+      mode: ensembleConfig.flags.repositoryContextReviewMode,
+      ...(env.SIGILIX_PLATFORM_DB !== undefined ? { db: env.SIGILIX_PLATFORM_DB } : {}),
+      ...(args.scmProvider === "github" && args.repositoryContextIdentity !== undefined
+        ? { identity: args.repositoryContextIdentity }
+        : {}),
+    })
     const evidence = await gatherRetrievalEvidence({
       scmProvider: args.scmProvider,
       env,
@@ -480,6 +484,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     // testing-evidence pack, and the dynamic evidence block live in ensemble/app/
     // context/assemble-prompts. The two closures are RETURNED (they hide their
     // captures); every other value the downstream phases consume flows out unchanged.
+    await repositoryContextPromise
     const prompts = await assembleSpecialistPrompts({
       scmProvider: args.scmProvider,
       env,

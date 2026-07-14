@@ -163,7 +163,7 @@ async function resolveSessionInstallationIds(env: Env, session: AuthedSession): 
  * GitHub identity. Non-GitHub sessions have no githubUserId, so their server-side
  * session userId remains the only stable identity available.
  */
-async function resolveSessionStableUserId(env: Env, session: AuthedSession): Promise<string | null> {
+export async function resolveSessionStableUserId(env: Env, session: AuthedSession): Promise<string | null> {
   const storedUserId = session.record.userId?.trim()
   const githubUserId = session.record.githubUserId
   if (githubUserId === undefined) return storedUserId || null

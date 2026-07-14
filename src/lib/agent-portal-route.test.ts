@@ -23,6 +23,7 @@ const routeMocks = vi.hoisted(() => ({
   getAgentRunEvents: vi.fn(),
   appendAgentRunEvent: vi.fn(),
   getValidGithubToken: vi.fn(),
+  renderChatSurfaceMemoryForPrompt: vi.fn(),
 }))
 
 vi.mock("@/src/lib/agent-runner/dispatch", () => ({
@@ -34,6 +35,14 @@ vi.mock("@/src/lib/agent-runner/dispatch", () => ({
 
 vi.mock("@/src/lib/github-user-token", () => ({
   getValidGithubToken: routeMocks.getValidGithubToken,
+}))
+
+// Surface memory apply — the chat-surface helper is exercised for real in
+// agent-memory-chat-surface.test.ts; here we mock it to pin the ROUTE's wiring
+// (it is called with the trusted session + authorized target, and its output is
+// injected as grounding only when non-empty).
+vi.mock("@/src/lib/agent-memory", () => ({
+  renderChatSurfaceMemoryForPrompt: routeMocks.renderChatSurfaceMemoryForPrompt,
 }))
 
 const SESSION_COOKIE = "__Host-sigilix_session"
@@ -197,6 +206,8 @@ beforeEach(() => {
   routeMocks.appendAgentRunEvent.mockResolvedValue({ ok: true, seq: 1 })
   routeMocks.getValidGithubToken.mockReset()
   routeMocks.getValidGithubToken.mockResolvedValue("ghu_refreshed_token")
+  routeMocks.renderChatSurfaceMemoryForPrompt.mockReset()
+  routeMocks.renderChatSurfaceMemoryForPrompt.mockResolvedValue("")
 })
 
 afterEach(() => {
@@ -459,6 +470,58 @@ describe("handleAgentRunCreateRoute (POST /v1/agent/runs)", () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual(expect.objectContaining({ dispatched: true, status: "started" }))
     expect(routeMocks.dispatchAgentRun).toHaveBeenCalledTimes(1)
+  })
+
+  it("injects resolved org∪repo∪seat memory as grounding, resolved from the trusted session (not the prompt)", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "s1")
+    stubGithubOwning42()
+    const memoryBlock = "## Team & repository guidance\n- [org policy — must follow] Require a rollback plan."
+    routeMocks.renderChatSurfaceMemoryForPrompt.mockResolvedValue(memoryBlock)
+    const env = baseEnv(kv, {
+      OPENCLAW_AGENT_RUNNER_MODE: "on",
+      SIGILIX_PORTAL_AGENT_RUNNER_MODE: "on",
+      OLLAMA_API_KEY: "model-key",
+    })
+    const res = await handleAgentRunCreateRoute(
+      reqPost("https://x/v1/agent/runs", "s1", { installationId: 42, repo: "acme/api", prompt: "fix the bug" }),
+      env,
+    )
+    expect(res.status).toBe(200)
+    // installationId + repo come from the authorized target; the seat identity is
+    // the trusted session — NEVER the message/prompt content.
+    expect(routeMocks.renderChatSurfaceMemoryForPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        installationId: 42,
+        repo: { owner: "acme", name: "api" },
+        session: expect.objectContaining({ record: expect.objectContaining({ githubUserId: 111 }) }),
+      }),
+    )
+    // The resolved block is forwarded to the runner as assembled grounding context.
+    expect(routeMocks.dispatchAgentRun).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ grounding: memoryBlock }),
+    )
+  })
+
+  it("omits grounding when the memory apply flag is off (helper returns '') — a true no-op", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "s1")
+    stubGithubOwning42()
+    routeMocks.renderChatSurfaceMemoryForPrompt.mockResolvedValue("") // flag off / nothing to apply
+    const env = baseEnv(kv, {
+      OPENCLAW_AGENT_RUNNER_MODE: "on",
+      SIGILIX_PORTAL_AGENT_RUNNER_MODE: "on",
+      OLLAMA_API_KEY: "model-key",
+    })
+    const res = await handleAgentRunCreateRoute(
+      reqPost("https://x/v1/agent/runs", "s1", { installationId: 42, repo: "acme/api", prompt: "fix" }),
+      env,
+    )
+    expect(res.status).toBe(200)
+    expect(routeMocks.dispatchAgentRun).toHaveBeenCalledTimes(1)
+    const dispatchArg = routeMocks.dispatchAgentRun.mock.calls[0]![1] as Record<string, unknown>
+    expect(dispatchArg).not.toHaveProperty("grounding")
   })
 
   it("does not dispatch when the durable run-owner binding cannot be written", async () => {

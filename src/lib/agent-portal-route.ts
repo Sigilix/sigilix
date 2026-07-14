@@ -43,6 +43,7 @@ import {
   getAgentRunStatus,
 } from "@/src/lib/agent-runner/dispatch"
 import { resolveAgentRunnerMode, resolvePortalEngine } from "@/src/lib/agent-runner/mode"
+import { renderChatSurfaceMemoryForPrompt } from "@/src/lib/agent-memory"
 import type { Env } from "@/src/shared/types/env"
 
 const MAX_BRANCH_PAGES = 10
@@ -573,6 +574,20 @@ export async function handleAgentRunCreateRoute(request: Request, env: Env, ctx?
   })
   if (!bound) return json({ error: "run_owner_unavailable" }, 503)
 
+  // Surface memory apply — inject the org∪repo∪(own-seat) learnings the signed-in
+  // user should apply as assembled grounding context (org guardrails labeled above
+  // repo facts above the caller's own seat preferences). Flag-gated dark behind
+  // OPENCLAW_SURFACE_MEMORY_APPLY (off ⇒ ""); the helper is contracted never-throw
+  // and fails soft to "" on any load error — a memory miss never blocks a run.
+  // installationId + repo are the session-authorized target; the seat identity is
+  // derived from the trusted session, never from the prompt.
+  const surfaceMemory = await renderChatSurfaceMemoryForPrompt({
+    env,
+    installationId,
+    repo: { owner: repo.owner, name: repo.name },
+    session: authed,
+  })
+
   const result = await dispatchAgentRun(env, {
     runId,
     owner: repo.owner,
@@ -585,6 +600,7 @@ export async function handleAgentRunCreateRoute(request: Request, env: Env, ctx?
       body: prompt,
       url: "",
     },
+    ...(surfaceMemory ? { grounding: surfaceMemory } : {}),
     model: { id: AGENT_MODEL_ID, key: modelKey, baseUrl: AGENT_MODEL_BASE_URL },
     // Portal runs default to the bounded minimal engine (5-tool loop). The full
     // CLI agent is gated behind SIGILIX_PORTAL_FULL_ENGINE_MODE="on" (default

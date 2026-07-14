@@ -5,4 +5,5 @@
 export { handleMemoryWriteRoute, handleMemoryQueryRoute } from "./agent-memory-route"
 export { handleMemoryExtractRoute } from "./agent-memory-extract"
 export { handleMemoryListRoute, handleMemoryDeleteRoute } from "./agent-memory-crud-route"
+export { renderChatSurfaceMemoryForPrompt } from "./agent-memory-chat-surface"
 export type { AgentMemoryKind, AgentMemoryRecord, AgentMemoryQueryResult } from "./types"

@@ -57,6 +57,16 @@ describe("D1 repository-context store and schema", () => {
     await db.exec(MIGRATION_SQL)
   })
 
+  it("keeps the commit guard parseable by remote D1", () => {
+    // Production D1 rejects CASE/END inside a trigger SELECT with
+    // `incomplete input: SQLITE_ERROR [code: 7500]`, even though local SQLite
+    // accepts it. The WHERE form is equivalent and was verified with a
+    // read-only EXPLAIN against the remote engine.
+    const trigger = MIGRATION_SQL.slice(MIGRATION_SQL.indexOf("CREATE TRIGGER trg_repository_context_commit_guard"))
+    expect(trigger).toContain("SELECT RAISE(ABORT, 'repository context child count mismatch') WHERE NOT EXISTS (")
+    expect(trigger).not.toContain("SELECT CASE WHEN NOT EXISTS (")
+  })
+
   it("round-trips one normalized snapshot and writes content-free immutable audit metadata", async () => {
     const result = await replaceRepositoryContext(db, args())
     expect(result).toMatchObject({

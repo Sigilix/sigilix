@@ -265,10 +265,13 @@ SELECT provider, scope_id, write_token
 FROM repository_context_scope
 WHERE 0;
 
+-- Remote D1 rejects CASE/END wrapping RAISE inside a trigger SELECT even though
+-- local SQLite accepts it. Keep the equivalent RAISE/WHERE form so this
+-- migration parses in both engines.
 CREATE TRIGGER trg_repository_context_commit_guard
 INSTEAD OF INSERT ON repository_context_commit_guard
 BEGIN
-  SELECT CASE WHEN NOT EXISTS (
+  SELECT RAISE(ABORT, 'repository context child count mismatch') WHERE NOT EXISTS (
     SELECT 1
     FROM repository_context_scope AS scope
     WHERE scope.provider = NEW.provider
@@ -282,5 +285,5 @@ BEGIN
         SELECT COUNT(*) FROM repository_context_relationship AS rel
         WHERE rel.provider = NEW.provider AND rel.scope_id = NEW.scope_id
       )
-  ) THEN RAISE(ABORT, 'repository context child count mismatch') END;
+  );
 END;

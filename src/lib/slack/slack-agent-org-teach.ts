@@ -1,9 +1,5 @@
 import type { Env } from "@/src/shared/types/env"
-import {
-  captureInstructiveLearning,
-  resolveLearningsMode,
-  resolveOrgMemoryCaptureMode,
-} from "@/src/features/learnings"
+import { captureInstructiveLearning, resolveLearningsMode, resolveOrgMemoryCaptureMode } from "@/src/features/learnings"
 import { isSlackOrgTeacher } from "@/src/lib/slack/slack-api"
 
 /**
@@ -31,8 +27,7 @@ export async function maybeCaptureSlackOrgTeach(
   },
 ): Promise<void> {
   const orgTeachActive =
-    resolveLearningsMode(env.OPENCLAW_LEARNINGS_MODE) !== "off" &&
-    resolveOrgMemoryCaptureMode(env) !== "off"
+    resolveLearningsMode(env.OPENCLAW_LEARNINGS_MODE) !== "off" && resolveOrgMemoryCaptureMode(env) !== "off"
   if (!orgTeachActive) return
 
   // A missing bot token can't verify admin; pass "" so the workspace-admin check

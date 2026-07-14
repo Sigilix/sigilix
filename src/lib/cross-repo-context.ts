@@ -122,6 +122,8 @@ export async function resolveCrossRepoNamespaces(
     return []
   }
 
+  // The namespace helpers return lowercase by contract; D1 preserves display
+  // casing in `full_name`, so canonicalize only that side of the intersection.
   const exactInstallation = new Set(installationRepos.map((name) => name.trim().toLowerCase()).filter(Boolean))
   const candidates = indexed.filter((ns) => ns !== base && ns.startsWith(`${owner.toLowerCase()}/`))
   const eligible = exactInstallation.has(base) ? candidates.filter((ns) => exactInstallation.has(ns)) : []

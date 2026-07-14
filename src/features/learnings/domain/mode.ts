@@ -36,6 +36,31 @@ export function resolveMemoryDecayMode(env: Pick<Env, "OPENCLAW_MEMORY_DECAY_MOD
 }
 
 /**
+ * The Memory Gardener's memory-CONSOLIDATION rollout mode (Gardener P2).
+ *
+ * Three-state, off-by-default — the exact off/shadow/enforce shape of
+ * `resolveMemoryDecayMode`:
+ *   - `"off"`     — (default / unset / anything else) the consolidation pass is
+ *                   fully inert: no KV scan, no embed, no LLM call, no telemetry.
+ *   - `"shadow"`  — the pass scans + embeds + clusters each store and enqueues a
+ *                   Gardener consolidation for every qualifying cluster; the
+ *                   consumer RUNS the LLM + logs + writes the digest but writes
+ *                   NO canonical rule and archives NOTHING (bake the signal).
+ *   - `"enforce"` — the consumer ALSO appends the canonical rule and tombstones
+ *                   its merged inputs (archive-then-remove; never a hard delete).
+ *
+ * Pure: the only import is the `Env` TYPE (type-only, zero runtime cost).
+ */
+export type MemoryConsolidateMode = "off" | "shadow" | "enforce"
+
+export function resolveMemoryConsolidateMode(env: Pick<Env, "OPENCLAW_MEMORY_CONSOLIDATE">): MemoryConsolidateMode {
+  const v = env.OPENCLAW_MEMORY_CONSOLIDATE?.trim().toLowerCase()
+  if (v === "enforce") return "enforce"
+  if (v === "shadow") return "shadow"
+  return "off"
+}
+
+/**
  * Seat∪Org memory layering — Phase 1 (write side only) rollout gate.
  *
  * Two-state, off-by-default (mirrors resolveMemoryDecayMode's

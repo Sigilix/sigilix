@@ -32,6 +32,7 @@ import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken, resolveRepoInstallationId } from "@/src/shared/adapters/github/github-app"
 import type { Env } from "@/src/shared/types/env"
 import { parseRepoIndexManifest, repoTenantKey } from "./repo-index-manifest"
+import { writeDecayDigestHalf, type DecayWouldReapSample } from "./memory-gardener-digest"
 
 /** Max active `learnings:` keys visited per tick. The scan reads up to this many
  *  `learnings:` keys in lexicographic order FROM THE START (no cursor is carried
@@ -107,6 +108,11 @@ export async function runMemoryDecayPass(env: Env, opts: { nowMs?: number } = {}
     token: new Map(),
   }
 
+  // Founder visibility (see memory-gardener-digest.ts): the top would-reap
+  // memories this tick (collected in BOTH shadow AND enforce), surfaced read-only
+  // behind the admin route so eligibility is visible without `wrangler tail`.
+  const wouldReapSamples: DecayWouldReapSample[] = []
+
   const listed = await env.OPENCLAW_STATE.list({
     prefix: LEARNINGS_PREFIX,
     limit: MAX_LEARNINGS_KEYS_PER_TICK,
@@ -164,6 +170,17 @@ export async function runMemoryDecayPass(env: Env, opts: { nowMs?: number } = {}
           // Eligible ⇒ prClosedAtMs is a concrete number (the gate rejects null).
           if (prClosedAtMs === null) continue
           summary.eligible += 1
+          if (wouldReapSamples.length < 100) {
+            wouldReapSamples.push({
+              scope,
+              subjectId,
+              learningId: entry.id,
+              ...(entry.type !== undefined ? { type: entry.type } : {}),
+              prNumber,
+              closedAt: new Date(prClosedAtMs).toISOString(),
+              ageDays: (nowMs - prClosedAtMs) / MS_PER_DAY,
+            })
+          }
 
           if (mode === "shadow") {
             emitDecayEvent("memory-decay-shadow", scope, subjectId, entry, prNumber, prClosedAtMs, nowMs)
@@ -225,6 +242,12 @@ export async function runMemoryDecayPass(env: Env, opts: { nowMs?: number } = {}
       }),
     )
   }
+  await writeDecayDigestHalf(env, {
+    ranAt: new Date(nowMs).toISOString(),
+    mode,
+    summary: { ...summary },
+    wouldReapSamples,
+  })
   console.log(JSON.stringify({ event: "memory-decay-complete", ...summary }))
   return summary
 }

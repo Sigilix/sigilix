@@ -12,6 +12,7 @@ export { captureInstructiveLearning } from "./adapters/instructive-capture"
 export type { CaptureInstructiveLearningArgs, CaptureInstructiveLearningResult } from "./adapters/instructive-capture"
 export { appendLearning, forgetLearning, hardDeleteLearnings, loadLearnings } from "./adapters/store"
 export { loadEffectiveLearnings } from "./adapters/org-apply"
+export { renderSurfaceMemoryForPrompt } from "./adapters/surface-apply"
 export { mirrorLearningToOrgScope } from "./adapters/org-mirror"
 export { classifyLearningMemory } from "./domain/classify"
 export type { ClassifiedLearningMemory, ClassifyLearningMemoryInput } from "./domain/classify"
@@ -40,6 +41,7 @@ export {
   resolveMemoryDecayMode,
   resolveOrgMemoryApplyMode,
   resolveOrgMemoryCaptureMode,
+  resolveSurfaceMemoryApplyMode,
 } from "./domain/mode"
 export type {
   CliOrgMemoryMode,
@@ -47,6 +49,7 @@ export type {
   MemoryDecayMode,
   OrgMemoryApplyMode,
   OrgMemoryCaptureMode,
+  SurfaceMemoryApplyMode,
 } from "./domain/mode"
 export {
   renderBoostedCategoriesForPrompt,
@@ -54,6 +57,7 @@ export {
   renderForgetConfirm,
   renderLearningsForPrompt,
   renderOverviewFooter,
+  renderSurfaceLearningsForPrompt,
 } from "./domain/render"
 export {
   MAX_LEARNINGS,

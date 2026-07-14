@@ -344,11 +344,9 @@ export interface Env extends AwsBedrockEnv {
   //   - "off" (default / unset / any other value): review reads repo-scope
   //           learnings ONLY — byte-identical to before this slice. No
   //           installation-id resolution, no `learnings:org:*` KV read.
-  //   - "shadow": review ALSO loads the org-scope corpus (installation id
-  //           resolved via OPENCLAW_GITHUB_INSTALLATION_MAP, same as the rest
-  //           of the GitHub-App tenant-resolution call sites) and LOGS the
-  //           delta — which org learnings WOULD widen the applied set — but the
-  //           APPLIED set stays repo-only (bake the signal, output unchanged).
+  //   - "shadow": review ALSO loads the org-scope corpus (installation id via
+  //           OPENCLAW_GITHUB_INSTALLATION_MAP) and LOGS the delta that WOULD
+  //           widen the applied set, but the APPLIED set stays repo-only.
   //   - "on": the applied set is repo ∪ org, deduped by learning id (a repo
   //           copy wins a collision — a learning mirrored repo→org shares its
   //           id, so exactly one copy applies). An org-scope learning can then
@@ -360,27 +358,29 @@ export interface Env extends AwsBedrockEnv {
   OPENCLAW_ORG_MEMORY_APPLY?: string
 
   // Seat∪Org memory layering — Phase 3 (CLI read side). Three-state, DEFAULT
-  // OFF. This gates whether POST /v1/memory/query — the CLI's own seat-memory
-  // read — ALSO unions the caller-installation's ORG-scope corpus (the same
-  // corpus Phase 1/2 write and apply), independent of OPENCLAW_ORG_MEMORY_APPLY
-  // (the PR-review read side above — a different call site, its own flag):
-  //   - "off" (default / unset / any other value): the CLI's memory-query
-  //           response is seat-memory ONLY — byte-identical to before this
-  //           slice. No installation check, no `learnings:org:*` KV read.
-  //   - "shadow": ALSO loads the org-scope corpus for the caller's own
-  //           installation and LOGS the delta (`cli-org-memory-shadow`), but
-  //           the returned results stay seat-only (bake the signal, output
-  //           unchanged).
-  //   - "on": the returned results are seat ∪ org, deduped by id (a seat
-  //           memory wins any id collision) — a developer's fresh CLI session
-  //           inherits everything the team's PR reviews taught the org.
-  // ADDITIVE ONLY: never suppresses or reorders a seat-memory result, only
-  // appends more. Fail-soft: the LEGACY global key (no single installation to
-  // scope an org corpus to) or any org-store read error degrades to
-  // seat-memory-only — never blocks/delays the response, never throws.
-  // Parsed by resolveCliOrgMemoryMode (@/features/learnings). Operator flips
-  // via `wrangler secret put OPENCLAW_CLI_ORG_MEMORY on`.
+  // OFF. Gates whether POST /v1/memory/query (the CLI's own seat-memory read)
+  // ALSO unions the caller-installation's ORG-scope corpus — a different call
+  // site from OPENCLAW_ORG_MEMORY_APPLY (PR review), so its own flag:
+  //   - "off" (default/any other value): seat-memory ONLY, byte-identical to
+  //           before — no installation check, no `learnings:org:*` KV read.
+  //   - "shadow": ALSO loads the caller-installation's org corpus and LOGS the
+  //           delta (`cli-org-memory-shadow`); results stay seat-only.
+  //   - "on": results are seat ∪ org, deduped by id (a seat memory wins a
+  //           collision) — a fresh CLI session inherits the org's learnings.
+  // ADDITIVE ONLY (never suppresses/reorders a seat result). Fail-soft: the
+  // legacy global key or any org-store read error degrades to seat-only, never
+  // throws. Parsed by resolveCliOrgMemoryMode (@/features/learnings).
   OPENCLAW_CLI_ORG_MEMORY?: string
+
+  // Surface memory apply — Slack + Linear ANSWERS read org∪repo learnings.
+  // Two-state, DEFAULT OFF. "off" (default/any other value): byte-identical to
+  // before — no org/repo learnings read for these surfaces, no injection. "on":
+  // the answer prompt carries repo ∪ org learnings (deduped by id, repo wins a
+  // collision) with ORG durable_preference guardrails labeled above repo facts;
+  // SEAT memory is never applied here (shared channels — org + repo scope only).
+  // Fail-soft: a load error degrades to answering without memory (never throws).
+  // Parsed by resolveSurfaceMemoryApplyMode (@/features/learnings).
+  OPENCLAW_SURFACE_MEMORY_APPLY?: string
 
   // ARC-184 kill-switch for the review-provenance + stale-marker
   // pipeline. When set to "off", manifest writes and stale-mark

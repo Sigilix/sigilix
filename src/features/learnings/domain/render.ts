@@ -36,6 +36,35 @@ export function renderLearningsForPrompt(entries: ReadonlyArray<LearningEntry>):
  * subordinate to the non-negotiable recall constraints — it raises attention, it
  * never suppresses. Returns "" when no category is boosted. Pure.
  */
+/**
+ * Render the org∪repo learnings a Slack / Linear ANSWER should apply, as a
+ * prompt block. Distinct from `renderLearningsForPrompt` (PR review) in one way:
+ * it labels ORG guardrails ABOVE repo facts — an org `durable_preference` (a
+ * team policy an admin taught) is a must-follow, so it is surfaced FIRST and
+ * tagged `[org policy — must follow]`. Other org entries are `[org guidance]`;
+ * repo-scope entries keep the review polarity tags. Pure; returns "" for [].
+ */
+export function renderSurfaceLearningsForPrompt(entries: ReadonlyArray<LearningEntry>): string {
+  if (entries.length === 0) return ""
+  const isOrgPolicy = (e: LearningEntry): boolean => e.scope === "org" && e.type === "durable_preference"
+  // Stable partition — org must-follow policies first, everything else after,
+  // each keeping its incoming order. The label carries precedence; the ordering
+  // reinforces it for the model.
+  const ordered = [...entries.filter(isOrgPolicy), ...entries.filter((e) => !isOrgPolicy(e))]
+  return [
+    "## Team & repository guidance (learned from past reviews and chats)",
+    "Apply this guidance when answering. Org policies are team-wide and take precedence over repo-specific facts.",
+    ...ordered.map((entry) => `- ${surfacePromptTag(entry)} ${promptRule(entry)}`),
+  ].join("\n")
+}
+
+function surfacePromptTag(entry: LearningEntry): string {
+  if (entry.scope === "org") {
+    return entry.type === "durable_preference" ? "[org policy — must follow]" : "[org guidance]"
+  }
+  return promptTag(entry)
+}
+
 export function renderBoostedCategoriesForPrompt(categories: ReadonlyArray<FindingCategory>): string {
   if (categories.length === 0) return ""
   const unique = [...new Set(categories)]

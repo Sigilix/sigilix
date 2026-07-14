@@ -42,6 +42,8 @@ vi.mock("@/src/features/learnings", () => ({
   // (byte-identical routing for this Linear-config suite).
   resolveLearningsMode: vi.fn(() => "off"),
   resolveOrgMemoryCaptureMode: vi.fn(() => "off"),
+  // Surface memory apply is off here — no injection (byte-identical prompt).
+  renderSurfaceMemoryForPrompt: vi.fn(async () => ""),
 }))
 vi.mock("@/src/lib/slack/slack-memory", () => ({
   recallSlackMemory: vi.fn(async () => []),

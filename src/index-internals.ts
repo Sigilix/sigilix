@@ -12,7 +12,16 @@ import type { JobMessage } from "@/src/shared/types/job"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { type GhMentionSurface } from "@/src/lib/github-mention"
-import { bodyMentionsBot, getMentionTriggers, isArcGithubLogin, stripQuotesAndCode } from "@/src/lib/mention"
+import {
+  bodyMentionsBot,
+  getMentionTriggers,
+  isArcGithubLogin,
+  stripMentionFromBody,
+  stripQuotesAndCode,
+} from "@/src/lib/mention"
+import { parseLearningsCommand, resolveLearningsMode } from "@/src/features/learnings"
+import { handleGithubMentionLearningsCommand, learningCommandDedupeKey } from "@/src/lib/github-mention-learnings"
+import { captureGithubMentionQaLearning } from "@/src/lib/github-mention-auto-learnings"
 import { parseSlashCommand, renderSlashCommandAck, isAuthorAllowedForSlashCommand } from "@/src/lib/slash-commands"
 import { shouldQueueReviewThreadReply } from "@/src/lib/review-thread-reply"
 import { postSlashCommandEyesAck } from "@/src/lib/slash-command-eyes-ack"
@@ -391,6 +400,153 @@ export async function dispatchDismissedReviewMemoryCapture(args: {
         prNumber,
         commentId: review.id,
         signal_source: "review-dismissed-stale",
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
+  }
+}
+
+/**
+ * Upper bound on the comment text handed to the learnings extractor from an
+ * Issue comment. Mirrors `LIMITS.questionChars` on the PR mention path
+ * (github-mention.ts) so an oversized Issue body can't send an unbounded
+ * payload to the model.
+ */
+const ISSUE_LEARNING_QUESTION_CHARS = 4_000
+
+/**
+ * Learnings capture from a genuine (non-PR) GitHub **Issue** comment.
+ *
+ * `issue_comment` fires for both PR conversation comments and real Issue
+ * comments; the PR branch routes @sigilix-addressed comments through
+ * `queueGithubMention` → `handleGithubMention`, which runs the SAME Learnings
+ * handling (`handleGithubMentionLearningsCommand` for explicit
+ * remember/forget/list, and the QA auto-learning extractor for instructive
+ * corrections). Genuine Issue comments were previously dropped at the webhook,
+ * so an identical `@sigilix remember …` (or an instructive correction) in an
+ * Issue thread never reached capture. This closes that gap by routing the
+ * Issue-comment case to the SAME repo-scope capture path — capture-only, never
+ * suppressing findings, and gated identically to the PR path:
+ *
+ *   - `OPENCLAW_LEARNINGS_MODE` (off/shadow/on) — ships DARK; `off` is a no-op.
+ *   - `hasRepoWriteAccess` — only a repo-write user can teach (enforced inside
+ *     both `handleGithubMentionLearningsCommand` and
+ *     `captureGithubMentionQaLearning`).
+ *   - `subjectId` is STRICTLY `repo.id` from the trusted webhook payload
+ *     (cross-tenant safety) — never parsed from message content.
+ *   - fail-soft / never-throw (best-effort in `ctx.waitUntil`), plus the same
+ *     KV dedupe the PR path uses.
+ *
+ * Non-@mention Issue comments are a no-op (behavior unchanged).
+ */
+export async function dispatchIssueCommentLearningsCapture(args: {
+  env: Env
+  owner: string
+  repo: string
+  issueNumber: number
+  installationId: number
+  comment: { id: number; body: string; authorLogin: string }
+  /** GitHub's immutable repository id from the webhook payload. Required —
+   *  it is the learnings `subjectId` (repo scope). Absent/spoofed → skip. */
+  repoId?: number
+}): Promise<void> {
+  const { env, owner, repo, issueNumber, installationId, comment, repoId } = args
+  try {
+    // Mode gate first — cheapest short-circuit; ships DARK until `shadow`/`on`.
+    if (resolveLearningsMode(env.OPENCLAW_LEARNINGS_MODE) === "off") return
+
+    // Only @sigilix-addressed comments teach. A plain Issue comment is a no-op
+    // (no behavior change for non-mention traffic).
+    const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
+    if (!bodyMentionsBot(comment.body, triggers)) return
+
+    // Loop-safety: never learn from Sigilix's own comments.
+    if (isArcGithubLogin(comment.authorLogin)) return
+
+    // Cross-tenant safety: the learnings subject is STRICTLY the immutable
+    // repo id from the trusted payload, never anything from the message body.
+    const subjectRepoId = validGithubRepoId(repoId)
+    if (subjectRepoId === undefined) {
+      console.log(
+        JSON.stringify({
+          event: "issue-comment-learning-skipped",
+          reason: "missing_repo_id",
+          owner,
+          repo,
+          issueNumber,
+          commentId: comment.id,
+        }),
+      )
+      return
+    }
+    const subjectId = String(subjectRepoId)
+
+    if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) return
+    const token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId,
+    })
+    const client = new GitHubClient({ token })
+
+    // Cap the extracted text to the same bound the PR mention path uses
+    // (github-mention.ts `LIMITS.questionChars`) so an oversized Issue comment
+    // doesn't send an unbounded payload to the extractor model.
+    const question = stripMentionFromBody(comment.body, triggers).slice(0, ISSUE_LEARNING_QUESTION_CHARS)
+    if (!question) return
+
+    const sourceComment = { author: comment.authorLogin }
+    const command = parseLearningsCommand(question)
+    if (command !== null) {
+      // Explicit remember/forget/list — same handler + KV dedupe the PR path
+      // uses. `surface: "issue"` posts the confirmation via createIssueComment.
+      const dedupeKey = learningCommandDedupeKey(comment.id)
+      if (await env.OPENCLAW_STATE.get(dedupeKey)) return
+      await handleGithubMentionLearningsCommand({
+        client,
+        env,
+        owner,
+        repo,
+        prNumber: issueNumber,
+        surface: "issue",
+        commentId: comment.id,
+        sourceComment,
+        subjectId,
+        command,
+        dedupeKey,
+      })
+      return
+    }
+
+    // Non-command @mention (e.g. an instructive correction): same QA
+    // auto-learning extractor the PR answer flow uses. The extractor's quality
+    // gate rejects acks/questions, so only genuinely instructive text becomes a
+    // learning. Capture-only — no reply is posted on the Issue surface.
+    //
+    // `prNumber` is intentionally OMITTED: an Issue is not a PR, so a standing
+    // instruction from an Issue thread must not be anchored to a PR lifecycle.
+    // Leaving it undefined makes `classifyLearningMemory` record it as a durable
+    // preference rather than PR-scoped `ephemeral_project`.
+    await captureGithubMentionQaLearning({
+      client,
+      env,
+      owner,
+      repo,
+      surface: "issue",
+      commentId: comment.id,
+      sourceComment,
+      question,
+      ...(repoId !== undefined ? { repoId } : {}),
+    })
+  } catch (err) {
+    console.log(
+      JSON.stringify({
+        event: "issue-comment-learnings-capture-dispatch-failed",
+        owner,
+        repo,
+        issueNumber,
+        commentId: comment.id,
         err: err instanceof Error ? err.message : String(err),
       }),
     )

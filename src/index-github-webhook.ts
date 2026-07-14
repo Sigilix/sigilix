@@ -41,6 +41,7 @@ import {
   dispatchReviewMemoryCapture,
   dispatchTopLevelReviewMemoryCapture,
   dispatchDismissedReviewMemoryCapture,
+  dispatchIssueCommentLearningsCapture,
 } from "@/src/index-internals"
 import {
   handleReviewThreadAutoApproveWebhook,
@@ -770,6 +771,45 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
       return new Response("skip issue_comment action\n", { status: 200 })
     }
     if (!payload.issue?.pull_request) {
+      // Genuine (non-PR) Issue comment. The full @-mention answer pipeline
+      // assumes a PR (diff/thread fanout), so we DON'T route these through
+      // `queueGithubMention`. But an @sigilix `remember/forget/list` — or an
+      // instructive correction — in a real Issue thread should still reach the
+      // SAME repo-scope Learnings capture the PR path uses. Fire it best-effort
+      // in the background (fail-soft, gated on OPENCLAW_LEARNINGS_MODE and
+      // repo-write access) and keep the response byte-identical. Non-@mention
+      // Issue comments are a no-op inside the dispatcher.
+      const issueLearningComment = payload.comment
+      const issueLearningNumber = payload.issue?.number
+      if (
+        issueLearningComment &&
+        typeof issueLearningComment.id === "number" &&
+        typeof issueLearningComment.body === "string" &&
+        typeof issueLearningComment.user?.login === "string" &&
+        typeof issueLearningNumber === "number"
+      ) {
+        const issueLearningRepoId =
+          typeof payload.repository?.id === "number" &&
+          Number.isInteger(payload.repository.id) &&
+          payload.repository.id > 0
+            ? payload.repository.id
+            : undefined
+        ctx.waitUntil(
+          dispatchIssueCommentLearningsCapture({
+            env,
+            owner,
+            repo,
+            issueNumber: issueLearningNumber,
+            installationId,
+            comment: {
+              id: issueLearningComment.id,
+              body: issueLearningComment.body,
+              authorLogin: issueLearningComment.user.login,
+            },
+            ...(issueLearningRepoId !== undefined ? { repoId: issueLearningRepoId } : {}),
+          }),
+        )
+      }
       return new Response("skip non-PR issue_comment\n", { status: 200 })
     }
     maybeScheduleAutoApproveFromIssueComment({ env, ctx, payload, owner, repo, installationId })

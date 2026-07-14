@@ -38,6 +38,10 @@ vi.mock("@/src/features/tenancy", () => ({
 }))
 vi.mock("@/src/features/learnings", () => ({
   captureInstructiveLearning: vi.fn(async () => undefined),
+  // Org-teach mode gate resolvers — return "off" so the authz path stays dark
+  // (byte-identical routing for this Linear-config suite).
+  resolveLearningsMode: vi.fn(() => "off"),
+  resolveOrgMemoryCaptureMode: vi.fn(() => "off"),
 }))
 vi.mock("@/src/lib/slack/slack-memory", () => ({
   recallSlackMemory: vi.fn(async () => []),

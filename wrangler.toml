@@ -1193,6 +1193,12 @@ SIGILIX_REVIEW_MULTIBATCH_MODE = "on"
 # the exact installation/repository tuple while leaving model prompts unchanged.
 SIGILIX_REPOSITORY_CONTEXT_REVIEW_MODE = "shadow"
 
+# Canonical repository descriptions for Slack Q&A. Shadow reads the exact
+# installation + channel-authorized immutable repository ids, renders the bounded
+# prompt block, and emits content-free telemetry while returning zero prompt bytes.
+# Flip to "on" only after timeout/error telemetry and adversarial scope checks pass.
+SIGILIX_REPOSITORY_CONTEXT_SLACK_MODE = "shadow"
+
 # Giant-PR total-context ceiling (estimated INPUT tokens across the whole review).
 # Recall-safe cost cap on the SIG-418 multi-batch spillover above: the posted
 # batch[0] (risk-ordered, full context) is ALWAYS reviewed, and spillover batches

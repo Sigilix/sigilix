@@ -32,7 +32,7 @@ import { createAgentTools } from "./agent-tools"
 import { makeKvTelemetrySink } from "./agent-telemetry-kv"
 import { AGENT_SYSTEM_PROMPT } from "@/src/prompts/agent-system"
 import { parseBranchNamespace } from "./index-branch"
-import { captureInstructiveLearning } from "@/src/features/learnings"
+import { captureInstructiveLearning, resolveLearningsMode, resolveOrgMemoryCaptureMode } from "@/src/features/learnings"
 import {
   codebaseContextEnabled,
   codebaseToolsEnabled,
@@ -43,6 +43,7 @@ import {
   type LinearTenantContext,
 } from "@/src/features/linear-integration"
 import { resolveBindingRepoScope } from "@/src/lib/cross-repo-context"
+import { isLinearOrgTeacher } from "@/src/lib/mention-reply-org-teach"
 import { resolveTenantLinearRepoScope, type LinearAgentRepoScope } from "@/src/lib/mention-reply-repo-scope"
 import {
   addLinearCitationMetadata,
@@ -589,17 +590,42 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
         ? { ok: false as const }
         : resolveInstallation(teamRepo.owner, teamRepo.repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
     if (inst.ok) {
-      await captureInstructiveLearning({
-        env,
-        scope: "org",
-        subjectId: String(inst.installationId),
-        surface: "chat",
-        sourceKind: "chat",
-        message: question,
-        dedupeId: `linear:${commentId}`,
-        actor: askerHandle,
-        telemetry: { surface_detail: "linear", team_key: teamKey },
-      }).catch(() => {})
+      // ORG-TEACH AUTHZ: only a Linear workspace admin may write an org learning
+      // (it shapes every teammate's reviews). Non-admins already got their normal
+      // reply above — we only skip the capture. FAIL-CLOSED: if admin status
+      // can't be determined we skip AND log a distinct deny so an over-denial
+      // (dropped a real admin) is distinguishable from a correct denial (a
+      // non-admin). The check runs only when capture would proceed past its mode
+      // gates, so with learnings capture OFF (the default) it does no extra work.
+      const orgTeachActive =
+        resolveLearningsMode(env.OPENCLAW_LEARNINGS_MODE) !== "off" && resolveOrgMemoryCaptureMode(env) !== "off"
+      if (orgTeachActive) {
+        const authz = isLinearOrgTeacher(data.user)
+        if (authz.authorized) {
+          await captureInstructiveLearning({
+            env,
+            scope: "org",
+            subjectId: String(inst.installationId),
+            surface: "chat",
+            sourceKind: "chat",
+            message: question,
+            dedupeId: `linear:${commentId}`,
+            actor: askerHandle,
+            telemetry: { surface_detail: "linear", team_key: teamKey },
+          }).catch(() => {})
+        } else {
+          console.log(
+            JSON.stringify({
+              event: "org-teach-authz-denied",
+              surface: "linear",
+              reason: authz.reason,
+              actor: askerHandle,
+              subject_id: String(inst.installationId),
+              team_key: teamKey,
+            }),
+          )
+        }
+      }
     }
   }
 }

@@ -2,7 +2,7 @@
 // Follows TDD: failing tests written first, then implementation.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { capAndRedactThread, fetchSlackThread, postSlackMessage } from "@/src/lib/slack/slack-api"
+import { capAndRedactThread, fetchSlackThread, isSlackOrgTeacher, postSlackMessage } from "@/src/lib/slack/slack-api"
 
 // ---------------------------------------------------------------------------
 // Fetch mock helpers
@@ -252,5 +252,65 @@ describe("capAndRedactThread", () => {
     const result = capAndRedactThread(messages, 10000)
     expect(result).toContain("[redacted: contained a secret]")
     expect(result).not.toContain(secret)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// isSlackOrgTeacher — org-teach authorization (fail-closed)
+// ---------------------------------------------------------------------------
+
+describe("isSlackOrgTeacher", () => {
+  it("authorizes a workspace admin", async () => {
+    mockFetch.mockResolvedValueOnce(makeFetchResponse({ ok: true, user: { is_admin: true } }))
+    const res = await isSlackOrgTeacher({ botToken: "xoxb-t", userId: "U1" })
+    expect(res).toEqual({ authorized: true, reason: "admin" })
+    // Hits users.info with the user id and the bot bearer token.
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain("/users.info")
+    expect(url).toContain("user=U1")
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer xoxb-t")
+  })
+
+  it("authorizes an owner / primary owner", async () => {
+    mockFetch.mockResolvedValueOnce(makeFetchResponse({ ok: true, user: { is_owner: true } }))
+    expect(await isSlackOrgTeacher({ botToken: "xoxb-t", userId: "U1" })).toEqual({ authorized: true, reason: "admin" })
+    mockFetch.mockResolvedValueOnce(makeFetchResponse({ ok: true, user: { is_primary_owner: true } }))
+    expect(await isSlackOrgTeacher({ botToken: "xoxb-t", userId: "U1" })).toEqual({ authorized: true, reason: "admin" })
+  })
+
+  it("denies a non-admin member (reason: not-admin)", async () => {
+    mockFetch.mockResolvedValueOnce(makeFetchResponse({ ok: true, user: { is_admin: false } }))
+    expect(await isSlackOrgTeacher({ botToken: "xoxb-t", userId: "U1" })).toEqual({
+      authorized: false,
+      reason: "not-admin",
+    })
+  })
+
+  it("FAIL-CLOSED on a Slack API error, surfacing the error code (e.g. missing_scope)", async () => {
+    mockFetch.mockResolvedValueOnce(makeFetchResponse({ ok: false, error: "missing_scope" }))
+    expect(await isSlackOrgTeacher({ botToken: "xoxb-t", userId: "U1" })).toEqual({
+      authorized: false,
+      reason: "api-missing_scope",
+    })
+  })
+
+  it("FAIL-CLOSED on a network error (reason: lookup-error)", async () => {
+    mockFetch.mockRejectedValueOnce(new Error("boom"))
+    expect(await isSlackOrgTeacher({ botToken: "xoxb-t", userId: "U1" })).toEqual({
+      authorized: false,
+      reason: "lookup-error",
+    })
+  })
+
+  it("FAIL-CLOSED without a bot token or user id (no network call)", async () => {
+    expect(await isSlackOrgTeacher({ botToken: null, userId: "U1" })).toEqual({
+      authorized: false,
+      reason: "no-bot-token",
+    })
+    expect(await isSlackOrgTeacher({ botToken: "xoxb-t", userId: "" })).toEqual({
+      authorized: false,
+      reason: "no-user-id",
+    })
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 })

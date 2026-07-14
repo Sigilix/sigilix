@@ -4,7 +4,7 @@ export type LearningScope = "repo" | "org" | "project"
 export type LearningPolarity = "suppress" | "require" | "context"
 export type LearningsMode = "off" | "shadow" | "on"
 
-export type LearningSourceKind = "inline-reply" | "top-level" | "qa" | "command" | "chat"
+export type LearningSourceKind = "inline-reply" | "top-level" | "qa" | "command" | "chat" | "portal"
 
 /**
  * The 4-tier memory taxonomy (Phase-1a of the memory-moat / dynamic-memory arc).

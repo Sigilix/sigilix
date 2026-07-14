@@ -22,7 +22,7 @@ import {
   readRepositoryContextForScopedRepositories,
 } from "@/src/features/repository-context"
 import { recallSlackMemory, captureSlackMemory } from "@/src/lib/slack/slack-memory"
-import { captureInstructiveLearning } from "@/src/features/learnings"
+import { maybeCaptureSlackOrgTeach } from "./slack-agent-org-teach"
 import {
   applySkillGuidance,
   renderSkillProvenanceNote,
@@ -109,6 +109,13 @@ export interface SlackMentionContext {
   threadText: string
   /** The ask with the @-mention stripped. */
   mentionText: string
+  /**
+   * The resolved Slack bot token for this workspace. Used ONLY to check whether
+   * the messaging user is a workspace admin/owner before an ORG-scope learning
+   * is captured (see the org-teach authz gate in `runQa`). Absent → fail-closed
+   * (no capture). Never logged.
+   */
+  botToken?: string | null
 }
 
 export interface SlackAgentResult {
@@ -339,17 +346,24 @@ async function runQa(env: Env, ctx: SlackMentionContext, memScope: SlackMemorySc
   // back through the one learnings store. Quality-gated by extractLearning on the
   // "chat" surface — ordinary questions/chatter never pass. Ships dark behind
   // OPENCLAW_LEARNINGS_MODE + OPENCLAW_ORG_MEMORY_CAPTURE. Best-effort, non-fatal.
-  await captureInstructiveLearning({
-    env,
-    scope: "org",
-    subjectId: String(ctx.scope.installationId),
-    surface: "chat",
-    sourceKind: "chat",
-    message: ctx.mentionText,
-    dedupeId: `slack:${ctx.channelId}:${ctx.threadTs}:${ctx.slackUserId}`,
-    actor: `slack:${ctx.slackUserId}`,
-    telemetry: { surface_detail: "slack", team_id: ctx.scope.teamId },
-  }).catch(() => {})
+  //
+  // ORG-TEACH AUTHZ: an org learning shapes EVERY teammate's reviews, so only a
+  // Slack workspace admin/owner may write one (mirrors the GitHub path's
+  // hasRepoWriteAccess gate). Non-admins still get their normal Q&A above — we
+  // only skip the capture. FAIL-CLOSED: if admin status can't be determined we
+  // skip AND log a distinct deny so an over-denial (dropped a real admin) is
+  // distinguishable from a correct denial (a non-admin). The admin check runs
+  // only when capture would proceed past its mode gates, so with learnings
+  // capture OFF (the default) there is no `users.info` call at all.
+  await maybeCaptureSlackOrgTeach(env, {
+    botToken: ctx.botToken,
+    slackUserId: ctx.slackUserId,
+    installationId: ctx.scope.installationId,
+    channelId: ctx.channelId,
+    threadTs: ctx.threadTs,
+    mentionText: ctx.mentionText,
+    teamId: ctx.scope.teamId,
+  })
 
   return { reply, action: offer ? { kind: "implement-offer" } : { kind: "qa" } }
 }

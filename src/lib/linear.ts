@@ -276,7 +276,14 @@ export interface LinearIssue {
 export interface LinearCommentWithIssue {
   id: string
   body: string
-  user: { name: string | null; displayName: string | null } | null
+  /**
+   * `admin` is Linear's workspace-admin flag on the comment author. It gates the
+   * org-teach authz check in mention-reply.ts (only a workspace admin may write
+   * an ORG-scope learning). Optional/nullable: an older query, a guest, or a
+   * token that can't read the field leaves it absent → treated as NOT-admin
+   * (fail-closed) by `isLinearOrgTeacher`.
+   */
+  user: { name: string | null; displayName: string | null; admin?: boolean | null } | null
   /** SIG-225 follow-up: parent comment id when this comment is a
    *  thread reply, null on top-level comments. Threaded by Linear
    *  via `parent: Comment` (we project to id-only here since the
@@ -355,6 +362,7 @@ export class LinearClient {
           user {
             name
             displayName
+            admin
           }
           parent {
             id

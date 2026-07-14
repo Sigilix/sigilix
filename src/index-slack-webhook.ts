@@ -205,6 +205,9 @@ async function runDeferredWork(
     threadTs,
     threadText,
     mentionText,
+    // Passed through ONLY for the org-teach admin check (users.info) before an
+    // ORG-scope learning is captured. Never logged.
+    botToken,
   })
 
   // ── Post / record (on) or just log (shadow) ──────────────────────────────────

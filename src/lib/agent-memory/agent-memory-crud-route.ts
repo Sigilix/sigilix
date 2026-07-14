@@ -30,12 +30,14 @@ import type { Env } from "@/src/shared/types/env"
 import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
 import { requireApiTenant } from "@/src/lib/api-key-resolver"
 import { decryptAccessToken } from "@/src/lib/auth-session"
-import type { AgentMemoryRecord } from "./types"
-import { json } from "./agent-memory-route"
+import { readBodyCapped } from "@/src/shared/util/read-body-capped"
+import type { AgentMemoryKind, AgentMemoryRecord } from "./types"
+import { json, MAX_BODY_BYTES, storeMemoryFact } from "./agent-memory-route"
 import {
   canonicalTenantId,
   personalMemoryUserId,
   resolveApiPersonalMemoryUserId,
+  PERSONAL_CONVENTION_REPO_ID,
 } from "./agent-memory-personal-subject"
 import { deleteRecordAndPointer, findRecordByIdUnderPrefix, listRecords } from "./storage"
 import { deleteMemoryVector } from "./retrieval"
@@ -91,13 +93,17 @@ interface UserInstallationsResponse {
 /**
  * Every installation id the session's GitHub user-to-server token can see, via
  * `GET /user/installations` (the same call the setup wizard + workspace-prs page
- * use). Soft-fails to [] on any GitHub error — a resolution failure just means the
- * portal shows no memories, never an error (mirrors workspace-prs-route.ts's
- * fetchUserInstallationIds).
+ * use). Returns `null` when it could NOT enumerate at all (a GitHub error before
+ * any id was seen) — distinct from `[]` (enumerated, genuinely none). Read paths
+ * collapse both to "no memories"; the write path (create) uses the distinction to
+ * return a retryable 503 on a transient GitHub outage rather than silently
+ * claiming the user has no installation. A partial enumeration (some ids, later
+ * page errored) still returns the ids collected — the user demonstrably has them.
  */
-async function fetchUserInstallationIds(accessToken: string): Promise<number[]> {
+async function fetchUserInstallationIds(accessToken: string): Promise<number[] | null> {
   const ids: number[] = []
   let seen = 0
+  let sawError = false
   for (let page = 1; page <= MAX_INSTALLATION_PAGES; page++) {
     let res: Response
     try {
@@ -105,13 +111,18 @@ async function fetchUserInstallationIds(accessToken: string): Promise<number[]> 
         headers: githubHeaders(accessToken),
       })
     } catch {
+      sawError = true
       break
     }
-    if (!res.ok) break
+    if (!res.ok) {
+      sawError = true
+      break
+    }
     let body: UserInstallationsResponse
     try {
       body = (await res.json()) as UserInstallationsResponse
     } catch {
+      sawError = true
       break
     }
     const installs = Array.isArray(body.installations) ? body.installations : []
@@ -122,21 +133,29 @@ async function fetchUserInstallationIds(accessToken: string): Promise<number[]> 
     const total = typeof body.total_count === "number" ? body.total_count : seen
     if (installs.length === 0 || seen >= total) break
   }
-  return ids
+  // Total failure (couldn't enumerate anything) → null; otherwise the ids seen.
+  return sawError && ids.length === 0 ? null : ids
 }
+
+/** Discriminated result of a session→installation resolution. `unavailable`
+ *  means we could not resolve (missing key / decrypt failure / GitHub outage) —
+ *  as opposed to `ok` with an empty list, which means the user genuinely owns no
+ *  installation. Read paths treat both the same (empty scope); the write path
+ *  distinguishes them (503 retryable vs 409 no-installation). */
+type SessionInstallationsResult = { status: "ok"; ids: number[] } | { status: "unavailable" }
 
 /**
  * Resolve a portal browser session to the installation ids it owns, so its scope
- * lands on the SAME `agent-memory:inst:<id>:` namespace the CLI wrote to. SOFT: a
- * missing session-encryption key, an access-token decrypt failure, or any GitHub
- * error resolves to [] (telemetered) — a logged-in user we can't map to an
- * installation simply has no memories to show, which must never surface as a 500
- * on this fail-soft management surface.
+ * lands on the SAME `agent-memory:inst:<id>:` namespace the CLI wrote to. Returns
+ * `unavailable` (never throws) on a missing session-encryption key, an
+ * access-token decrypt failure, or a GitHub enumeration that could not complete at
+ * all (telemetered) — the caller decides whether that degrades to an empty scope
+ * (read) or a retryable error (write).
  */
-async function resolveSessionInstallationIds(env: Env, session: AuthedSession): Promise<number[]> {
+async function resolveSessionInstallationIds(env: Env, session: AuthedSession): Promise<SessionInstallationsResult> {
   if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) {
     emitTelemetry("agent-memory-session-scope-unavailable", { reason: "missing-encryption-key" })
-    return []
+    return { status: "unavailable" }
   }
   let accessToken: string
   try {
@@ -151,9 +170,14 @@ async function resolveSessionInstallationIds(env: Env, session: AuthedSession): 
       reason: "decrypt-failed",
       err: err instanceof Error ? err.message : String(err),
     })
-    return []
+    return { status: "unavailable" }
   }
-  return fetchUserInstallationIds(accessToken)
+  const ids = await fetchUserInstallationIds(accessToken)
+  if (ids === null) {
+    emitTelemetry("agent-memory-session-scope-unavailable", { reason: "github-enumeration-failed" })
+    return { status: "unavailable" }
+  }
+  return { status: "ok", ids }
 }
 
 /**
@@ -202,7 +226,10 @@ async function resolveMemoryScope(request: Request, env: Env, ctx?: ExecutionCon
   if (session) {
     const stableUserId = await resolveSessionStableUserId(env, session)
     if (!stableUserId) return { response: json({ error: "memory_identity_unavailable" }, 403) }
-    const installationIds = await resolveSessionInstallationIds(env, session)
+    // READ fail-soft: an unresolved installation set degrades to an empty scope
+    // (200 with no memories), never an error — the management surface's contract.
+    const resolved = await resolveSessionInstallationIds(env, session)
+    const installationIds = resolved.status === "ok" ? resolved.ids : []
     const personalUserIds = installationIds.map((installationId) => personalMemoryUserId(installationId, stableUserId))
     return {
       scope: {
@@ -368,4 +395,128 @@ export async function handleMemoryDeleteRoute(
   await deleteMemoryVector(env, record.id)
 
   return json({ ok: true, deleted: true }, 200)
+}
+
+// ─── POST /v1/memory — create a personal convention ──────────
+
+/** The `kind`s a personal convention may carry. A convention is a durable
+ *  self-preference, so only `preference` (default) and `decision` are allowed —
+ *  both are plain free-text `AgentMemoryRecord` kinds that carry NO learnings
+ *  `polarity` (the record shape has no such field), so a convention can only ADD
+ *  non-conflicting context and can never reach `decideLearningSuppressions`. The
+ *  dead_end/correction/task_state kinds are agent-authored and out of scope here. */
+const CONVENTION_KINDS: ReadonlyArray<AgentMemoryKind> = ["preference", "decision"]
+
+/** Char cap on one convention's content (matches the embedder's window). Longer
+ *  than a sentence is almost certainly a paste, not a convention. */
+const MAX_CONVENTION_CHARS = 4_000
+
+interface CreateBody {
+  content: string
+  kind: AgentMemoryKind
+}
+
+/**
+ * Parse the create body. ONLY `content` (required) + optional `kind` are read —
+ * `repoId` is forced to the sentinel and `userId` is derived from the trusted
+ * session, so neither is ever taken from the body (the seat-isolation invariant).
+ */
+function parseCreateBody(raw: unknown): CreateBody | string {
+  if (typeof raw !== "object" || raw === null) return "body must be a JSON object"
+  const b = raw as Record<string, unknown>
+  if (typeof b.content !== "string" || b.content.trim() === "") return "content (non-empty string) is required"
+  if (b.content.length > MAX_CONVENTION_CHARS) return `content exceeds ${MAX_CONVENTION_CHARS} chars`
+  let kind: AgentMemoryKind = "preference"
+  if (b.kind !== undefined) {
+    if (typeof b.kind !== "string" || !(CONVENTION_KINDS as readonly string[]).includes(b.kind)) {
+      return `kind must be one of: ${CONVENTION_KINDS.join(", ")}`
+    }
+    kind = b.kind as AgentMemoryKind
+  }
+  return { content: b.content, kind }
+}
+
+/** One created convention in the response (per installation the caller owns). */
+interface CreatedConvention {
+  id: string
+  installationId: number
+  deduped: boolean
+  stored: boolean
+}
+
+/**
+ * POST /v1/memory — the SESSION-authed create path for a signed-in user's OWN
+ * repo-agnostic personal conventions (the "My conventions" bucket). The api-key
+ * create path stays PUT /v1/memory; this is portal-only.
+ *
+ * The record is written under the reserved sentinel repoId
+ * ({@link PERSONAL_CONVENTION_REPO_ID}) via the same {@link storeMemoryFact}
+ * primitive the CLI write uses — a free-text `preference`/`decision` record that
+ * carries NO learnings polarity, so it can only add context, never suppress or
+ * require a finding.
+ *
+ * SEAT ISOLATION: the owning `userId` is derived ENTIRELY from the trusted session
+ * (`resolveSessionStableUserId` × each installation the session's GitHub token
+ * owns) — never from the body. A caller can therefore only ever write under its
+ * OWN `inst:<installationId>:user:<stableUserId>` prefix. The convention is
+ * fanned out across ALL the caller's installations (mirroring how GET/DELETE union
+ * those same prefixes) so it applies to every one of the user's own sessions.
+ *
+ * 503 until keyed OR when the installation set can't be resolved (retryable); 401
+ * without a session (the api-key create path is PUT); 403 when the session has no
+ * resolvable stable identity; 400/413 on a bad/oversized body; 409 when the
+ * session genuinely owns no installation (nowhere personal to store it); 500 only
+ * on an unexpected write throw. Success: 201
+ * `{ ok: true, count, created: [{ id, installationId, deduped, stored }] }`.
+ */
+export async function handleMemoryCreateRoute(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+  if (!env.OPENCLAW_SIGILIX_API_KEY && !env.SIGILIX_PLATFORM_DB) {
+    return json({ error: "memory_endpoint_not_configured" }, 503)
+  }
+
+  // SESSION-ONLY: the portal browser cookie. An api key must use PUT /v1/memory.
+  const session = await requireSession(request, env, ctx)
+  if (!session) return json({ error: "unauthorized" }, 401)
+  const stableUserId = await resolveSessionStableUserId(env, session)
+  if (!stableUserId) return json({ error: "memory_identity_unavailable" }, 403)
+
+  let raw: unknown
+  try {
+    const capped = await readBodyCapped(request, MAX_BODY_BYTES)
+    if (capped === null)
+      return json({ error: "payload_too_large", detail: `body exceeds ${MAX_BODY_BYTES} bytes` }, 413)
+    raw = JSON.parse(capped)
+  } catch {
+    return json({ error: "invalid_json" }, 400)
+  }
+  const parsed = parseCreateBody(raw)
+  if (typeof parsed === "string") return json({ error: "invalid_request", detail: parsed }, 400)
+
+  // Every installation the trusted session owns — the SAME set GET/DELETE union.
+  // WRITE (not read): distinguish a genuine empty set (409, nowhere to store it)
+  // from a resolution failure (503, retryable) so a transient GitHub outage never
+  // silently drops the write behind a misleading "no installation".
+  const resolved = await resolveSessionInstallationIds(env, session)
+  if (resolved.status === "unavailable") return json({ error: "memory_scope_unavailable" }, 503)
+  if (resolved.ids.length === 0) return json({ error: "memory_no_installation" }, 409)
+
+  const created: CreatedConvention[] = []
+  try {
+    for (const installationId of resolved.ids) {
+      // Owner derived from trusted identity ONLY — never the body. repoId is the
+      // repo-agnostic sentinel; the body cannot influence either.
+      const userId = personalMemoryUserId(installationId, stableUserId)
+      const result = await storeMemoryFact(env, {
+        userId,
+        repoId: PERSONAL_CONVENTION_REPO_ID,
+        kind: parsed.kind,
+        content: parsed.content,
+      })
+      created.push({ id: result.id, installationId, deduped: result.deduped, stored: result.stored })
+    }
+  } catch (err) {
+    return json({ error: "memory_write_failed", detail: err instanceof Error ? err.message : String(err) }, 500)
+  }
+
+  return json({ ok: true, count: created.length, created }, 201)
 }

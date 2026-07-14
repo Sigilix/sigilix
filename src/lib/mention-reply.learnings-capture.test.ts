@@ -67,11 +67,14 @@ function makeEnv(): { env: Env; store: Map<string, string> } {
   return { env, store }
 }
 
-function seedComment(body: string): void {
+// `admin` gates the org-teach authz check: only a Linear workspace admin may
+// write an org learning. Default `true` (admin) keeps the capture test green;
+// `false` / `undefined` drive the non-admin / fail-closed cases.
+function seedComment(body: string, admin: boolean | null | undefined = true): void {
   getCommentWithIssueMock.mockResolvedValue({
     id: "comment-1",
     body,
-    user: { name: "daniel", displayName: "daniel" },
+    user: { name: "daniel", displayName: "daniel", admin },
     parent: null,
     issue: {
       id: "issue-1",
@@ -100,9 +103,9 @@ afterEach(() => {
 })
 
 describe("handleMention — unified learnings capture", () => {
-  it("captures a human CORRECTION as an org-scope learning keyed to the team's installation", async () => {
+  it("captures an ADMIN's correction as an org-scope learning keyed to the team's installation", async () => {
     extractLearningMock.mockResolvedValueOnce({ rule: "always name hooks with a use prefix", polarity: "require" })
-    seedComment("@sigilix that's wrong — we always name hooks with a use prefix")
+    seedComment("@sigilix that's wrong — we always name hooks with a use prefix", true)
     const { env, store } = makeEnv()
 
     await handleMention("comment-1", env)
@@ -114,6 +117,40 @@ describe("handleMention — unified learnings capture", () => {
     expect(orgStore.subjectId).toBe("111")
     expect(orgStore.entries[0].rule).toBe("always name hooks with a use prefix")
     expect(orgStore.entries[0].source.kind).toBe("chat")
+  })
+
+  it("ORG-TEACH AUTHZ — a NON-ADMIN's correction is NOT captured, and the reply still posts", async () => {
+    seedComment("@sigilix that's wrong — we always name hooks with a use prefix", false)
+    const { env, store } = makeEnv()
+
+    await handleMention("comment-1", env)
+
+    // No org learning; reply still posted.
+    expect(Array.from(store.keys()).filter((k) => k.startsWith("learnings:"))).toHaveLength(0)
+    expect(createCommentMock).toHaveBeenCalled()
+    // The authz gate short-circuits before the extractor is consulted.
+    expect(extractLearningMock).not.toHaveBeenCalled()
+  })
+
+  it("ORG-TEACH AUTHZ — FAIL-CLOSED: an undetermined admin status does NOT capture and logs a distinct deny", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    // `admin` null → cannot determine (older query / guest / unreadable field) →
+    // fail-closed. (null, unlike undefined, does not trip seedComment's default.)
+    seedComment("@sigilix that's wrong — we always name hooks with a use prefix", null)
+    const { env, store } = makeEnv()
+
+    await handleMention("comment-1", env)
+
+    expect(Array.from(store.keys()).filter((k) => k.startsWith("learnings:"))).toHaveLength(0)
+    const denyLine = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .find((s) => s.includes("org-teach-authz-denied"))
+    expect(denyLine).toBeDefined()
+    const deny = JSON.parse(denyLine!)
+    expect(deny.surface).toBe("linear")
+    expect(deny.reason).toBe("unknown")
+    expect(deny.subject_id).toBe("111")
+    logSpy.mockRestore()
   })
 
   it("does not capture a broker-bound legacy correction without exact tenant proof", async () => {

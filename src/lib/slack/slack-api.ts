@@ -90,6 +90,66 @@ export async function fetchSlackThread(args: {
 }
 
 // ---------------------------------------------------------------------------
+// isSlackOrgTeacher — org-teach authorization
+// ---------------------------------------------------------------------------
+
+/**
+ * Result of an org-teach authorization check: whether the actor may write an
+ * ORG-scope learning (which shapes every teammate's PR reviews), plus a stable
+ * `reason` so an over-denial ("couldn't determine" — API error / missing scope)
+ * is distinguishable in the logs from a correct denial ("not-admin").
+ */
+export interface OrgTeachAuthz {
+  authorized: boolean
+  reason: string
+}
+
+/**
+ * FAIL-CLOSED workspace-admin check for the Slack surface. An ORG-scope learning
+ * shapes every teammate's reviews, so only a Slack workspace admin/owner is
+ * authorized to teach one; everyone else still gets their normal Q&A, we just do
+ * not capture their message.
+ *
+ * Uses Slack's `users.info` (requires the `users:read` scope). Any error,
+ * missing scope, malformed response, or absent admin field resolves to NOT
+ * authorized (never throws), so a failure can only REDUCE capture. The `reason`
+ * distinguishes a genuine "not-admin" denial from a "couldn't determine" drop so
+ * over-denial is auditable.
+ */
+export async function isSlackOrgTeacher(args: {
+  botToken: string | null | undefined
+  userId: string | null | undefined
+}): Promise<OrgTeachAuthz> {
+  const { botToken, userId } = args
+  if (!botToken) return { authorized: false, reason: "no-bot-token" }
+  if (!userId) return { authorized: false, reason: "no-user-id" }
+  try {
+    const url = new URL(`${SLACK_API}/users.info`)
+    url.searchParams.set("user", userId)
+    // Bounded: this call sits on the reply-blocking path, so a hung users.info
+    // must not stall the answer. A timeout aborts → caught below → fail-closed.
+    const resp = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${botToken}` },
+      signal: AbortSignal.timeout(5000),
+    })
+    const json = (await resp.json()) as {
+      ok?: unknown
+      error?: unknown
+      user?: { is_admin?: unknown; is_owner?: unknown; is_primary_owner?: unknown }
+    }
+    if (!json.ok || !json.user) {
+      const err = typeof json.error === "string" && json.error.length > 0 ? `api-${json.error}` : "api-error"
+      return { authorized: false, reason: err }
+    }
+    const u = json.user
+    const isAdmin = u.is_admin === true || u.is_owner === true || u.is_primary_owner === true
+    return isAdmin ? { authorized: true, reason: "admin" } : { authorized: false, reason: "not-admin" }
+  } catch {
+    return { authorized: false, reason: "lookup-error" }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // capAndRedactThread
 // ---------------------------------------------------------------------------
 

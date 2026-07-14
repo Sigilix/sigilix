@@ -102,6 +102,18 @@ vi.mock("@/src/lib/github-mention", () => ({
 const { createAgentToolsMock } = vi.hoisted(() => ({
   createAgentToolsMock: vi.fn((_args: unknown) => []),
 }))
+// Org-teach authz gate — mock the Slack workspace-admin check so the learnings
+// tests drive admin / non-admin / fail-closed without a live users.info call.
+// Default: authorized (admin), so the capture test below stays byte-identical.
+const { isSlackOrgTeacherMock } = vi.hoisted(() => ({
+  isSlackOrgTeacherMock: vi.fn(
+    async () => ({ authorized: true, reason: "admin" }) as { authorized: boolean; reason: string },
+  ),
+}))
+vi.mock("@/src/lib/slack/slack-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/src/lib/slack/slack-api")>()
+  return { ...actual, isSlackOrgTeacher: isSlackOrgTeacherMock }
+})
 vi.mock("@/src/lib/agent-tools", () => ({
   createAgentTools: createAgentToolsMock,
 }))
@@ -321,6 +333,8 @@ beforeEach(() => {
   getImplementOfferMock.mockResolvedValue(null)
   setImplementOfferMock.mockResolvedValue(undefined)
   clearImplementOfferMock.mockResolvedValue(undefined)
+  // Default: the actor is a workspace admin (org-teach authorized).
+  isSlackOrgTeacherMock.mockResolvedValue({ authorized: true, reason: "admin" })
 })
 
 describe("runSlackAgent — qa path", () => {
@@ -1159,5 +1173,43 @@ describe("runSlackAgent — unified learnings capture", () => {
     await runSlackAgent(env, makeCtx({ mentionText: "how does the auth flow work?" }))
 
     expect(Array.from(store.keys()).filter((k) => k.startsWith("learnings:"))).toHaveLength(0)
+  })
+
+  it("ORG-TEACH AUTHZ — a NON-ADMIN's instructive message is NOT captured, but the reply still returns", async () => {
+    isSlackOrgTeacherMock.mockResolvedValueOnce({ authorized: false, reason: "not-admin" })
+    // No extractor stub: the authz gate short-circuits BEFORE capture, so
+    // extractLearning is never reached (asserted below).
+    const { env, store } = makeLearningEnv()
+
+    const result = await runSlackAgent(env, makeCtx({ mentionText: "@sigilix from now on always use named exports" }))
+
+    // No org learning written.
+    expect(Array.from(store.keys()).filter((k) => k.startsWith("learnings:"))).toHaveLength(0)
+    // The normal Q&A reply is unchanged.
+    expect(result.action.kind).toBe("qa")
+    expect(result.reply).toContain("The auth flow uses JWT tokens.")
+    // The extractor is never even consulted — the gate short-circuits first.
+    expect(extractLearningMock).not.toHaveBeenCalled()
+  })
+
+  it("ORG-TEACH AUTHZ — FAIL-CLOSED: an undetermined admin status does NOT capture and logs a distinct deny", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    isSlackOrgTeacherMock.mockResolvedValueOnce({ authorized: false, reason: "lookup-error" })
+    const { env, store } = makeLearningEnv()
+
+    const result = await runSlackAgent(env, makeCtx({ mentionText: "@sigilix from now on always use named exports" }))
+
+    expect(Array.from(store.keys()).filter((k) => k.startsWith("learnings:"))).toHaveLength(0)
+    expect(result.action.kind).toBe("qa")
+
+    const denyLine = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .find((s) => s.includes("org-teach-authz-denied"))
+    expect(denyLine).toBeDefined()
+    const deny = JSON.parse(denyLine!)
+    expect(deny.surface).toBe("slack")
+    expect(deny.reason).toBe("lookup-error")
+    expect(deny.subject_id).toBe("111")
+    logSpy.mockRestore()
   })
 })

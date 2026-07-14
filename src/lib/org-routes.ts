@@ -12,6 +12,7 @@
 //   GET  /v1/org/:installationId/repository-context     → repository-context-route.ts
 //   PUT  /v1/org/:installationId/repository-context     → repository-context-route.ts
 //   GET/POST/DELETE /v1/org/:installationId/learnings[/:id] → org-learnings-route.ts
+//   GET/POST/DELETE /v1/org/:installationId/repos/:repoId/learnings[/:id] → repo-learnings-route.ts
 //
 // Both are portal-facing (a DIFFERENT ORIGIN — app.sigilix.ai / localhost:3300
 // drives them over `fetch(…, { credentials: "include" })`), so this surface
@@ -24,6 +25,11 @@ import { handleGetDataConsent, handleSetDataConsent } from "@/src/lib/data-conse
 import { handleAdminOrgAccessRecoveryRoute } from "@/src/lib/admin-org-access-route"
 import { handleCreateAppMemory, handleDeleteAppMemory, handleListAppMemories } from "@/src/lib/app-memory-route"
 import { handleCreateOrgLearning, handleDeleteOrgLearning, handleListOrgLearnings } from "@/src/lib/org-learnings-route"
+import {
+  handleCreateRepoLearning,
+  handleDeleteRepoLearning,
+  handleListRepoLearnings,
+} from "@/src/lib/repo-learnings-route"
 import { handleOrgOverviewRoute } from "@/src/lib/org-overview-route"
 import { handleAddOrgMember, handleDeleteOrgMember, handleUpdateOrgMemberRole } from "@/src/lib/org-members-route"
 import { handleOrgSeatRoute } from "@/src/lib/org-seat-route"
@@ -47,6 +53,7 @@ const LINEAR_INSTALL_PATH_RE = /^\/v1\/org\/([^/]+)\/linear\/install$/
 const SLACK_CONFIG_PATH_RE = /^\/v1\/org\/([^/]+)\/slack-config$/
 const APP_MEMORY_PATH_RE = /^\/v1\/org\/([^/]+)\/apps\/([^/]+)\/memories(?:\/([^/]+))?$/
 const LEARNINGS_PATH_RE = /^\/v1\/org\/([^/]+)\/learnings(?:\/([^/]+))?$/
+const REPO_LEARNINGS_PATH_RE = /^\/v1\/org\/([^/]+)\/repos\/([^/]+)\/learnings(?:\/([^/]+))?$/
 const REPOSITORY_CONTEXT_PATH_RE = /^\/v1\/org\/([^/]+)\/repository-context$/
 
 /** True for a path this surface serves — overview, seat, data-consent, or review-config. */
@@ -63,6 +70,7 @@ function isOrgPath(pathname: string): boolean {
     SLACK_CONFIG_PATH_RE.test(pathname) ||
     APP_MEMORY_PATH_RE.test(pathname) ||
     LEARNINGS_PATH_RE.test(pathname) ||
+    REPO_LEARNINGS_PATH_RE.test(pathname) ||
     REPOSITORY_CONTEXT_PATH_RE.test(pathname)
   )
 }
@@ -181,6 +189,34 @@ export async function handleOrgRoutes(request: Request, env: Env, ctx: Execution
       return withPortalCors(
         request,
         await handleDeleteAppMemory(request, env, ctx, installationId, appId, memoryId),
+        env,
+      )
+    }
+  }
+  // sig-portal-memories: repo-scope "Codebase facts" — dev-writable (repo write
+  // access), writes to the `learnings:repo:*` KV store PR review + the CLI read
+  // for that repo — repo-learnings-route.ts. Matched BEFORE the org learnings
+  // block: this path is a strict sub-path (…/repos/:repoId/learnings).
+  const repoLearningsMatch = REPO_LEARNINGS_PATH_RE.exec(url.pathname)
+  if (repoLearningsMatch) {
+    const installationId = decodeInstallationId(repoLearningsMatch[1]!)
+    const repoId = decodeInstallationId(repoLearningsMatch[2]!)
+    let learningId: string | undefined
+    try {
+      learningId = repoLearningsMatch[3] === undefined ? undefined : decodeURIComponent(repoLearningsMatch[3])
+    } catch {
+      return withPortalCors(request, json({ error: "invalid learnings path" }, 400), env)
+    }
+    if (request.method === "GET" && learningId === undefined) {
+      return withPortalCors(request, await handleListRepoLearnings(request, env, ctx, installationId, repoId), env)
+    }
+    if (request.method === "POST" && learningId === undefined) {
+      return withPortalCors(request, await handleCreateRepoLearning(request, env, ctx, installationId, repoId), env)
+    }
+    if (request.method === "DELETE" && learningId !== undefined) {
+      return withPortalCors(
+        request,
+        await handleDeleteRepoLearning(request, env, ctx, installationId, repoId, learningId),
         env,
       )
     }

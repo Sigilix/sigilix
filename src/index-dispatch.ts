@@ -60,6 +60,7 @@ import { postReviewWorkBlocked } from "@/src/index-dispatch-post-review-work"
 import { runRateLimitGate } from "@/src/index-dispatch-rate-limit-gate"
 import { handleMcpMemoryExpireJob } from "@/src/do/mcp/mcp-memory-jobs"
 import { recoverOrgSeatBillingOperation } from "@/src/features/billing"
+import { makeGitHubRepositoryContextReviewIdentity } from "@/src/features/repository-context"
 /**
  * Post the slash-command ack comment for `cmd` on the given PR.
  * Used by pr-review-rerun and pr-improve queue handlers so the user
@@ -241,6 +242,8 @@ export async function dispatchJob(
       // one per-review shadow sample here (0 or 1 element); flushed to
       // GraphExpansionMetricsDO in the finally below.
       const graphExpansionMetricsSink: GraphExpansionSample[] = []
+      const repositoryContextIdentity =
+        job.repoId === undefined ? null : makeGitHubRepositoryContextReviewIdentity(job.installationId, job.repoId)
       const baseArgs = {
         scmProvider: "github" as const,
         owner: job.owner,
@@ -259,14 +262,9 @@ export async function dispatchJob(
         // ARC-251: thread the stale-head requeue depth into both review
         // pipelines (webhook omits → 0; requeues carry it so the cap holds).
         ...(job.staleHeadRequeueDepth !== undefined ? { staleHeadRequeueDepth: job.staleHeadRequeueDepth } : {}),
-        // SIG-247 Phase 1: thread the immutable repo.id into the
-        // review pipeline so the review-memory lookup hits BOTH the
-        // legacy and repo-id keyspaces. Webhook-driven jobs carry it
-        // when payload.repository.id is a positive integer; legacy
-        // queue messages and slash-command raw-sends omit it, in
-        // which case the ensemble falls back to a getRepository
-        // lookup at the lookup call site.
+        // SIG-247: immutable repo.id; legacy messages fall back to getRepository.
         ...(job.repoId !== undefined ? { repoId: job.repoId } : {}),
+        ...(repositoryContextIdentity !== null ? { repositoryContextIdentity } : {}),
         // VERIFIED unlock Phase 2: runner-receipt re-review → non-incremental (avoids SIG-459 empty-delta).
         ...(job.forceFullCoverage ? { forceFullCoverage: true } : {}),
       }

@@ -1180,6 +1180,10 @@ SIGILIX_DYNAMIC_DISPATCHER_MODE = "shadow"
 # (telemetry only, output unchanged) or "off" (inert).
 SIGILIX_REVIEW_MULTIBATCH_MODE = "on"
 
+# Canonical repository context for GitHub PR review. Shadow reads and measures
+# the exact installation/repository tuple while leaving model prompts unchanged.
+SIGILIX_REPOSITORY_CONTEXT_REVIEW_MODE = "shadow"
+
 # Giant-PR total-context ceiling (estimated INPUT tokens across the whole review).
 # Recall-safe cost cap on the SIG-418 multi-batch spillover above: the posted
 # batch[0] (risk-ordered, full context) is ALWAYS reviewed, and spillover batches

@@ -39,6 +39,7 @@ import type { ReviewOutputSurface } from "@/src/lib/pr-review-check-run"
 import type { MinSpecialistsEarlyExitMode } from "./policy"
 import type { IncrementalReviewMode } from "./incremental-coverage"
 import type { AdversarialFramingMode } from "@/src/lib/removed-guarding-tests"
+import type { RepositoryContextReviewMode } from "@/src/features/repository-context"
 
 /** Normalized `off | shadow | post` mode for an AST security scanner. Kept as a
  *  string to preserve the call sites' exact contract (`mode !== "post"`,
@@ -216,6 +217,8 @@ export interface EnsembleFeatureFlags {
    *  signal (incl. a GitHub file-metadata fetch for rename exclusion) and injects
    *  the enforce-gated logic + synth prompt blocks. */
   adversarialFramingMode: AdversarialFramingMode
+  /** Canonical repository-context review rollout. Unknown/unset values fail closed to `off`. */
+  repositoryContextReviewMode: RepositoryContextReviewMode
 }
 
 /**

@@ -44,6 +44,7 @@ import type { GraphRetrievalSample } from "@/src/do/graph-metrics"
 import type { GraphExpansionSample } from "@/src/do/graph-expansion-metrics"
 import type { ReviewStatusReporter } from "@/src/lib/pr-review-status-reporter"
 import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
+import type { RepositoryContextReviewIdentity } from "@/src/features/repository-context"
 // SIG-386 (PR1): the concrete `EnsembleResult = EnsembleResultBase<EnsembleTelemetry>`
 // binding moved here from the orchestrator to land that file at <=1k lines. This is
 // `EnsembleTelemetry`'s natural co-location (the binding is one of its two named
@@ -112,6 +113,8 @@ export interface EnsembleHandlerArgs {
    * the lookup falls back to legacy-only reads.
    */
   repoId?: number
+  /** Exact provider/scope/repository tuple for canonical repository-context reads. */
+  repositoryContextIdentity?: RepositoryContextReviewIdentity
   /**
    * VERIFIED unlock Phase 2: when true, force the review NON-INCREMENTAL
    * (full coverage of every changed file) regardless of

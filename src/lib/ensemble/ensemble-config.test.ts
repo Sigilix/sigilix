@@ -33,6 +33,7 @@ import { parseMinSpecialistsEarlyExitMode } from "@/src/lib/ensemble/domain/poli
 import { parseMultiBatchMode } from "@/src/lib/ensemble/domain/multibatch-budget"
 import { parseIncrementalReviewMode } from "@/src/lib/ensemble/domain/incremental-coverage"
 import { parseAdversarialFramingMode } from "@/src/lib/removed-guarding-tests"
+import { parseRepositoryContextReviewMode } from "@/src/features/repository-context"
 
 describe("SIG-318 parseEnsembleConfig — AST scan modes", () => {
   it("defaults every scanner to 'off' when the env var is absent", () => {
@@ -238,6 +239,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       OPENCLAW_INCREMENTAL_REVIEW_MODE: "Shadow",
       // SIG-452: adversarial-framing rollout flag (off|shadow|enforce).
       OPENCLAW_ADVERSARIAL_FRAMING_MODE: "Enforce",
+      OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE: "Shadow",
     }
     // The inline normalizer the AST-scan / asymmetry / toctou / synth-recovery
     // reads used: default "off", trim, lowercase.
@@ -284,6 +286,7 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       anchorPrecision: env.OPENCLAW_ANCHOR_PRECISION === "on",
       incrementalReviewMode: parseIncrementalReviewMode(env.OPENCLAW_INCREMENTAL_REVIEW_MODE),
       adversarialFramingMode: parseAdversarialFramingMode(env.OPENCLAW_ADVERSARIAL_FRAMING_MODE),
+      repositoryContextReviewMode: parseRepositoryContextReviewMode(env.OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE),
       recallRoles: new Set(
         [
           env.OPENCLAW_LOGIC_RECALL_MODE === "on" ? "logic" : null,
@@ -342,11 +345,27 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
       anchorPrecision: false,
       incrementalReviewMode: "off",
       adversarialFramingMode: "off",
+      repositoryContextReviewMode: "off",
       recallRoles: new Set(),
       // SIG-399: reasoning-process directive default off → empty set.
       reasoningPromptRoles: new Set(),
       // SIG-287: reasoning-on harness defaults to an empty map (off).
       reasoningByRole: new Map(),
+    })
+  })
+
+  it("parses the shadow-only repository-context review rollout fail-closed", () => {
+    expect(parseEnsembleConfig({ OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE: "  SHADOW  " }).flags).toMatchObject({
+      repositoryContextReviewMode: "shadow",
+    })
+    expect(parseEnsembleConfig({ OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE: "On" }).flags).toMatchObject({
+      repositoryContextReviewMode: "off",
+    })
+    expect(parseEnsembleConfig({ OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE: "enforce" }).flags).toMatchObject({
+      repositoryContextReviewMode: "off",
+    })
+    expect(parseEnsembleConfig({ OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE: "true" }).flags).toMatchObject({
+      repositoryContextReviewMode: "off",
     })
   })
 

@@ -283,6 +283,12 @@ describe("GitLab review provider isolation", () => {
   it("never reads colliding GitHub context while preserving the GitLab review path", async () => {
     const { client, submitReview } = makeGitLabClient()
     const statusReporter = { report: vi.fn(), flush: vi.fn(async () => undefined) }
+    const repositoryContextPrepare = vi.fn(() => {
+      throw new Error("GitLab must never read GitHub repository context")
+    })
+    const env = makeEnv()
+    env.OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE = "shadow"
+    env.SIGILIX_PLATFORM_DB = { prepare: repositoryContextPrepare } as unknown as D1Database
     const result = await handlePrReviewEnsemble({
       scmProvider: "gitlab",
       owner: "acme",
@@ -291,7 +297,8 @@ describe("GitLab review provider isolation", () => {
       headSha: HEAD_SHA,
       installationId: 0,
       repoId: 123,
-      env: makeEnv(),
+      env,
+      repositoryContextIdentity: { provider: "github", scopeId: "99", repositoryExternalId: "123" },
       githubClient: client,
       statusReporter,
     } as Parameters<typeof handlePrReviewEnsemble>[0] & { scmProvider: "gitlab" })
@@ -324,6 +331,7 @@ describe("GitLab review provider isolation", () => {
     expect(mockRecordRunnerEvidenceMetric).not.toHaveBeenCalled()
     expect(mockResolveDashboardConfigLayers).not.toHaveBeenCalled()
     expect(mockCollectPrReviewAppEvidence).not.toHaveBeenCalled()
+    expect(repositoryContextPrepare).not.toHaveBeenCalled()
     expect(statusReporter.report).not.toHaveBeenCalled()
     expect(statusReporter.flush).not.toHaveBeenCalled()
     expect(mockRunSarifEvidence).toHaveBeenCalled()

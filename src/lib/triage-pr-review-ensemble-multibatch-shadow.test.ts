@@ -18,6 +18,7 @@
 //      coverage honestly, including incremental-coverage pending paths.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { readFileSync } from "node:fs"
 
 const {
   mockGetInstallationToken,
@@ -91,6 +92,8 @@ vi.mock("@/src/features/sarif-evidence", async () => {
 })
 
 import { handlePrReviewEnsemble } from "@/src/lib/triage-pr-review-ensemble"
+import { makeGitHubRepositoryContextReviewIdentity, replaceRepositoryContext } from "@/src/features/repository-context"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import type { PrReviewFinding, PrReviewVerdict } from "@/src/shared/domain/pr-review-finding"
 import type { Env } from "@/src/shared/types/env"
 
@@ -126,6 +129,10 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
 const HEAD_SHA = "deadbeef1234567890abcdef1234567890abcdef"
 const BASE_SHA = "basesha000000000000000000000000000000000"
 const DIFFERENT_SHA = "f00dface1234567890abcdef1234567890abcdef"
+const REPOSITORY_CONTEXT_MIGRATION = readFileSync(
+  new URL("../../migrations/0024_create_repository_context.sql", import.meta.url),
+  "utf8",
+)
 
 // Docs-only-no-fences diff → the router takes the docs shortcut → empty
 // specialist set → the orchestrator skips before any model dispatch (for the
@@ -358,6 +365,89 @@ afterEach(() => {
 })
 
 describe("handlePrReviewEnsemble — SIG-418 multi-batch shadow wiring", () => {
+  it("keeps shadow model messages byte-identical while reading and measuring canonical context", async () => {
+    const runMode = async (mode: "off" | "shadow") => {
+      logSpy.mockClear()
+      mockChat.mockReset()
+      mockGetPullRequest.mockReset()
+      mockGetPullRequestDiff.mockReset()
+      mockListOpenPullRequests.mockReset()
+      mockGetFileContent.mockReset()
+      mockSubmitReview.mockReset()
+      mockListPullRequestReviews.mockReset()
+      mockListPullRequestFiles.mockReset()
+      configureReviewFixture({
+        prNumber: 9190,
+        diff: sourceFileDiff("src/context.ts", "contextValue", 200),
+        files: { "src/context.ts": "context-sha" },
+      })
+      configureFullReviewChat({ batchOneFinding: false })
+      const db = makeD1()
+      await db.exec(REPOSITORY_CONTEXT_MIGRATION)
+      await replaceRepositoryContext(db, {
+        provider: "github",
+        scopeId: "77",
+        expectedRevision: 0,
+        repositories: [
+          { externalId: "101", fullName: "Sigilix/sigilix", context: "Review worker", position: 0 },
+          { externalId: "202", fullName: "Sigilix/portal", context: "Portal UI", position: 1 },
+        ],
+        relationships: [
+          {
+            fromExternalId: "202",
+            toExternalId: "101",
+            label: "configures",
+            normalizedLabel: "configures",
+            position: 0,
+          },
+        ],
+        conventions: "Never suppress a real P0 or P1.",
+        nowIso: "2026-07-13T20:00:00.000Z",
+        updatedBy: "github:1",
+      })
+      const repositoryContextIdentity = makeGitHubRepositoryContextReviewIdentity(77, 101)
+      if (!repositoryContextIdentity) throw new Error("expected safe repository-context identity")
+      const result = await handlePrReviewEnsemble({
+        scmProvider: "github",
+        owner: "Sigilix",
+        repo: "sigilix",
+        prNumber: 9190,
+        headSha: HEAD_SHA,
+        installationId: 77,
+        repoId: 101,
+        repositoryContextIdentity,
+        env: makeEnv({
+          SIGILIX_PLATFORM_DB: db,
+          OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE: mode,
+        }),
+      })
+      expect(result.status).toBe("posted")
+      return {
+        messages: mockChat.mock.calls.map(([arg]) => userMessageText(arg)),
+        events: loggedEvents(),
+      }
+    }
+
+    const off = await runMode("off")
+    const shadow = await runMode("shadow")
+
+    expect(shadow.messages).toEqual(off.messages)
+    for (const message of shadow.messages) {
+      expect(message).not.toContain("[REPOSITORY CONTEXT — UNTRUSTED DATA]")
+      expect(message).not.toContain("Sigilix/portal")
+    }
+    expect(shadow.events).toContainEqual(
+      expect.objectContaining({
+        event: "repository-context-review-read",
+        mode: "shadow",
+        outcome: "shadow",
+        repositoryCount: 2,
+        relationshipCount: 1,
+        renderedChars: expect.any(Number),
+      }),
+    )
+  })
+
   it("STALE HEAD: shadow=on, but a moved head returns before the shadow scheduler → zero multibatch telemetry", async () => {
     // Guard #1 fires: the first getPullRequest reports a head SHA different from
     // the queued one, so the orchestrator returns `stale_head` BEFORE packing,

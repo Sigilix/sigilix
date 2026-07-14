@@ -170,6 +170,7 @@ describe("dispatchJob — gitlab-mr-review consumer (e2e: a real MR gets a poste
     expect(args.scmProvider).toBe("gitlab")
     expect(args.installationId).toBe(0) // GitHub concept; 0 on the GitLab path
     expect(args.repoId).toBeUndefined() // omitted -> usage-metering + getCommit paths stay inert
+    expect(args.repositoryContextIdentity).toBeUndefined() // GitLab never inherits GitHub context namespaces
     expect(args.githubClient).toBeDefined()
 
     // The review reached GitLab: a summary NOTE + an inline DISCUSSION, on MR iid 7.

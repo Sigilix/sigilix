@@ -23,6 +23,8 @@
     "dispatch-monitor": "tsx scripts/dispatch-monitor.ts",
     "fp-eval": "tsx scripts/fp-eval.ts",
     "logic-recall-eval": "vitest run e2e/logic-recall-eval.live.test.ts",
+    "pts-continuity-eval": "vitest run e2e/pts-continuity-eval.live.test.ts",
+    "pts-continuity-report": "tsx scripts/pts-continuity-report.ts",
     "security-overfire-eval": "vitest run e2e/security-overfire-eval.live.test.ts",
     "performance-overfire-eval": "vitest run e2e/performance-overfire-eval.live.test.ts",
     "tests-overfire-eval": "vitest run e2e/tests-overfire-eval.live.test.ts",

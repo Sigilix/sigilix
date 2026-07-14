@@ -13,7 +13,7 @@ import { sha256Hex } from "@/src/lib/auth-bearer"
 import { appendLearning } from "@/src/features/learnings"
 import type { LearningEntry } from "@/src/features/learnings"
 import { handleMemoryWriteRoute, handleMemoryQueryRoute, scopeMemoryUserId } from "./agent-memory-route"
-import { personalMemoryUserId } from "./agent-memory-personal-subject"
+import { personalMemoryUserId, PERSONAL_CONVENTION_REPO_ID } from "./agent-memory-personal-subject"
 import { LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { memoryNamespace } from "./retrieval"
 import type { Env } from "@/src/shared/types/env"
@@ -711,5 +711,185 @@ describe("POST /v1/memory/query — Seat∪Org memory layering (Phase 3)", () =>
       .map((c) => JSON.parse(c[0] as string))
       .find((e) => e.event === "cli-org-memory-truncated")
     expect(truncated).toMatchObject({ installationId: ORG_INSTALL_ID, kept: 20 })
+  })
+})
+
+// Personal conventions — the dual-namespace read-union deferred from #950:
+// POST /v1/memory/query additionally queries the caller's OWN sentinel bucket
+// (PERSONAL_CONVENTION_REPO_ID = "*", written by the portal's session-authed
+// POST /v1/memory) when OPENCLAW_SURFACE_MEMORY_APPLY is "on". Default (unset)
+// MUST stay byte-identical: no sentinel-namespace query at all.
+describe("POST /v1/memory/query — personal-convention union (seat ∪ conventions)", () => {
+  const INSTALL_ID = 42
+  const PERSONAL = personalMemoryUserId(INSTALL_ID, "user-1")
+  const SENTINEL_NS = memoryNamespace(PERSONAL, PERSONAL_CONVENTION_REPO_ID)
+
+  async function perTenantEnv(extra: Partial<Env> = {}): Promise<{ env: Env; token: string }> {
+    const tenantDb = makeD1()
+    await applyAuthMigrations(tenantDb)
+    await seedIdentity(tenantDb, "user-1", "1")
+    const token = "sigilix_live_cli_conventions"
+    await insertApiKey(tenantDb, {
+      id: "key-conv",
+      keyHash: await sha256Hex(token),
+      installationId: INSTALL_ID,
+      createdBy: "1",
+      nowIso: "2026-01-01T00:00:00Z",
+    })
+    return { env: unkeyedEnv({ SIGILIX_PLATFORM_DB: tenantDb, ...extra }), token }
+  }
+
+  const seatBody = { userId: "u1", repoId: "sigilix/boreas", kind: "decision" as const, content: "seat fact" }
+  // The sentinel write — the SAME (personal userId, "*") bucket the portal's
+  // session-authed create (#950) lands in (PUT derives the identical subject
+  // from the API key's creator).
+  const conventionBody = {
+    userId: "u1",
+    repoId: PERSONAL_CONVENTION_REPO_ID,
+    kind: "preference" as const,
+    content: "I prefer verbose commit messages",
+  }
+
+  it("flag OFF (default, unset) — a stored convention never surfaces and the sentinel namespace is never queried", async () => {
+    const { env, token } = await perTenantEnv()
+    await handleMemoryWriteRoute(writeReq(seatBody, token), env)
+    await handleMemoryWriteRoute(writeReq(conventionBody, token), env)
+
+    const res = await handleMemoryQueryRoute(queryReq({ ...seatBody, query: "seat" }, token), env)
+    expect(res.status).toBe(200)
+    const out = (await res.json()) as { results: Array<{ content: string }> }
+    expect(out.results.map((r) => r.content)).toEqual(["seat fact"])
+    // Byte-identical property: the ONLY vector query is the repo-scoped one.
+    const queriedNamespaces = idx.queryCalls.map((c) => c.namespace)
+    expect(queriedNamespaces).not.toContain(SENTINEL_NS)
+  })
+
+  it("flag ON — the convention surfaces UNIONED after the repo-scoped seat results, for ANY repo", async () => {
+    const { env, token } = await perTenantEnv({ OPENCLAW_SURFACE_MEMORY_APPLY: "on" })
+    await handleMemoryWriteRoute(writeReq(seatBody, token), env)
+    await handleMemoryWriteRoute(writeReq(conventionBody, token), env)
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+
+    // Queried under a DIFFERENT repo than the seat fact's — the convention is
+    // repo-agnostic, so it must surface regardless.
+    const res = await handleMemoryQueryRoute(
+      queryReq({ userId: "u1", repoId: "sigilix/other-repo", query: "conventions" }, token),
+      env,
+    )
+    expect(res.status).toBe(200)
+    const out = (await res.json()) as { results: Array<{ content: string; kind: string }> }
+    expect(out.results.map((r) => r.content)).toEqual(["I prefer verbose commit messages"])
+    expect(out.results[0]?.kind).toBe("preference")
+    expect(idx.queryCalls.map((c) => c.namespace)).toContain(SENTINEL_NS)
+
+    const union = logSpy.mock.calls
+      .map((c) => JSON.parse(c[0] as string))
+      .find((e) => e.event === "cli-convention-memory-union")
+    expect(union).toMatchObject({ installationId: INSTALL_ID, seatCount: 0, conventionCount: 1, added: 1 })
+  })
+
+  it("flag ON — seat results stay FIRST (the limit budget untouched), conventions appended", async () => {
+    const { env, token } = await perTenantEnv({ OPENCLAW_SURFACE_MEMORY_APPLY: "on" })
+    await handleMemoryWriteRoute(writeReq(seatBody, token), env)
+    await handleMemoryWriteRoute(writeReq(conventionBody, token), env)
+    vi.spyOn(console, "log").mockImplementation(() => undefined)
+
+    const res = await handleMemoryQueryRoute(queryReq({ ...seatBody, query: "seat" }, token), env)
+    const out = (await res.json()) as { results: Array<{ content: string }> }
+    expect(out.results.map((r) => r.content)).toEqual(["seat fact", "I prefer verbose commit messages"])
+  })
+
+  it("flag ON + org ON — an org guardrail stays inviolable OVER a convention: org first, a restating convention DROPPED, the rest labeled subordinate", async () => {
+    const { env, token } = await perTenantEnv({
+      OPENCLAW_SURFACE_MEMORY_APPLY: "on",
+      OPENCLAW_CLI_ORG_MEMORY: "on",
+    })
+    await handleMemoryWriteRoute(writeReq(conventionBody, token), env)
+    // A convention that RESTATES the org rule below — must be dropped, not doubled.
+    await handleMemoryWriteRoute(writeReq({ ...conventionBody, content: "always use @/ imports" }, token), env)
+    await appendLearning(env, "org", String(INSTALL_ID), {
+      id: "g1",
+      rule: "always use @/ imports",
+      polarity: "require",
+      category: null,
+      pathGlob: null,
+      scope: "org",
+      subjectId: String(INSTALL_ID),
+      source: { kind: "command", prNumber: 1, commentId: 1 },
+      createdTs: "2026-06-01T00:00:00.000Z",
+      appliedCount: 0,
+    } as LearningEntry)
+    vi.spyOn(console, "log").mockImplementation(() => undefined)
+
+    const res = await handleMemoryQueryRoute(
+      queryReq({ userId: "u1", repoId: "sigilix/other-repo", query: "imports" }, token),
+      env,
+    )
+    const out = (await res.json()) as { results: Array<{ id: string; content: string }> }
+    expect(out.results.length).toBe(2)
+    expect(out.results[0]?.id).toBe("org:g1")
+    expect(out.results[0]?.content).toBe("[org policy — inviolable] [required] always use @/ imports")
+    expect(out.results[1]?.content).toBe(
+      "[your preference — applies only where it does not conflict with org policy] I prefer verbose commit messages",
+    )
+    // The restating convention is gone entirely (org wins the content collision).
+    expect(out.results.filter((r) => r.content.includes("always use @/ imports")).length).toBe(1)
+  })
+
+  it("flag ON — SEAT ISOLATION: another user's convention never surfaces (the namespace is the boundary)", async () => {
+    const { env, token } = await perTenantEnv({ OPENCLAW_SURFACE_MEMORY_APPLY: "on" })
+    // Seed a PEER's sentinel-bucket convention directly (vector + KV record).
+    const peerId = personalMemoryUserId(INSTALL_ID, "user-2")
+    idx.vectors.push({
+      id: "mem_peer",
+      namespace: memoryNamespace(peerId, PERSONAL_CONVENTION_REPO_ID),
+      metadata: { kind: "preference", ts: "2026-06-01T00:00:00.000Z" },
+    })
+    await kv.put(
+      `agent-memory:${peerId}:${PERSONAL_CONVENTION_REPO_ID}:mem_peer`,
+      JSON.stringify({
+        schemaVersion: 1,
+        id: "mem_peer",
+        userId: peerId,
+        repoId: PERSONAL_CONVENTION_REPO_ID,
+        kind: "preference",
+        content: "peer convention",
+        ts: "2026-06-01T00:00:00.000Z",
+        hash: "h-peer",
+      }),
+    )
+    vi.spyOn(console, "log").mockImplementation(() => undefined)
+
+    const res = await handleMemoryQueryRoute(queryReq({ ...seatBody, query: "conventions" }, token), env)
+    const out = (await res.json()) as { results: Array<{ content: string }> }
+    expect(out.results.some((r) => r.content === "peer convention")).toBe(false)
+  })
+
+  it("flag ON + the sentinel vector leg failing — degrades to the repo-scoped seat results, never throws", async () => {
+    const { env, token } = await perTenantEnv({ OPENCLAW_SURFACE_MEMORY_APPLY: "on" })
+    await handleMemoryWriteRoute(writeReq(seatBody, token), env)
+    await handleMemoryWriteRoute(writeReq(conventionBody, token), env)
+    // Break ONLY the sentinel-namespace query (the repo-scoped leg keeps working).
+    const realIndex = idx.index as unknown as {
+      query: (v: number[], o: { topK?: number; namespace?: string }) => Promise<unknown>
+      upsert: (r: unknown[]) => Promise<unknown>
+    }
+    const brokenSentinel = {
+      upsert: realIndex.upsert.bind(realIndex),
+      query: async (v: number[], o: { topK?: number; namespace?: string }) => {
+        if (o.namespace === SENTINEL_NS) throw new Error("sentinel vectorize down")
+        return realIndex.query(v, o)
+      },
+    } as unknown as Env["OPENCLAW_AGENT_MEMORY_INDEX"]
+    const brokenEnv = {
+      ...(env as unknown as Record<string, unknown>),
+      OPENCLAW_AGENT_MEMORY_INDEX: brokenSentinel,
+    } as unknown as Env
+    vi.spyOn(console, "log").mockImplementation(() => undefined)
+
+    const res = await handleMemoryQueryRoute(queryReq({ ...seatBody, query: "seat" }, token), brokenEnv)
+    expect(res.status).toBe(200)
+    const out = (await res.json()) as { results: Array<{ content: string }> }
+    expect(out.results.map((r) => r.content)).toEqual(["seat fact"])
   })
 })

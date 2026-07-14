@@ -59,6 +59,7 @@ import { branchStateRepo } from "@/src/lib/index-branch"
 import { postReviewWorkBlocked } from "@/src/index-dispatch-post-review-work"
 import { runRateLimitGate } from "@/src/index-dispatch-rate-limit-gate"
 import { handleMcpMemoryExpireJob } from "@/src/do/mcp/mcp-memory-jobs"
+import { handleConsolidateClusterJob } from "@/src/lib/memory-consolidate-cluster"
 import { recoverOrgSeatBillingOperation } from "@/src/features/billing"
 import { makeGitHubRepositoryContextReviewIdentity } from "@/src/features/repository-context"
 /**
@@ -202,21 +203,13 @@ export async function dispatchJob(
         }
         return
       }
-      // ARC-289 diagnostic logging — emit on EVERY queue-handler entry
-      // into the pr-review case so we can correlate duplicate
-      // dispatches (PR #96 saw 2× ensemble runs against the same
-      // commit `8ad306a`, 51s apart, no commits between). The fields
-      // surface which dispatch path produced the message:
-      //   - `runId` present → DO-routed (the dedupe path)
-      //   - `runId` absent → user-triggered rerun or older queued message
-      //   - `staleHeadRequeueDepth > 0` → ARC-251 requeue
-      // If duplicates have a common (runId, headSha) tuple, hypothesis
-      // is queue redelivery (DO should have deduped); if distinct
-      // runIds, hypothesis is webhook double-fire OR warmup-induced
-      // re-review. The `queue.attempts` counter lives at the queue
-      // handler level (not dispatchJob's scope) so add it back here
-      // in a follow-up if duplicates persist after the obvious causes
-      // are ruled out.
+      // ARC-289 diagnostic logging — emit on EVERY queue-handler entry into the
+      // pr-review case so we can correlate duplicate dispatches (PR #96 saw 2×
+      // ensemble runs on the same commit, 51s apart). The fields surface the
+      // dispatch path: `runId` present → DO-routed (dedupe path); absent →
+      // user rerun or older queued message; `staleHeadRequeueDepth > 0` →
+      // ARC-251 requeue. Common (runId, headSha) ⇒ queue redelivery; distinct
+      // runIds ⇒ webhook double-fire or warmup re-review.
       console.log(
         JSON.stringify({
           event: "pr-review-dispatch-received",
@@ -987,6 +980,8 @@ export async function dispatchJob(
       // run the SAME SCM-agnostic ensemble GitHub uses (posting through the GitLab
       // client). Recall-safety is enforced inside (an errored run surfaces a note).
       return dispatchGitLabMrReview(job, env, backgroundWaitUntil)
+    case "consolidate-cluster": // Gardener P2: consolidate one cleared cluster (self-gates on OPENCLAW_MEMORY_CONSOLIDATE; fail-soft inside).
+      return handleConsolidateClusterJob(job, env)
     case "demo-review": // sig-public-demo (async): PUBLIC no-signup demo, run off-request. See demo-review-job.ts.
       return runDemoReviewJob(job, env)
     default: {

@@ -17,15 +17,37 @@ export { classifyLearningMemory } from "./domain/classify"
 export type { ClassifiedLearningMemory, ClassifyLearningMemoryInput } from "./domain/classify"
 export { parseLearningsCommand } from "./domain/command"
 export { EPHEMERAL_MEMORY_TYPES, MEMORY_DECAY_WINDOW_DAYS, isMemoryDecayEligible } from "./domain/decay"
+export {
+  CONSOLIDATE_MIN_CLUSTER_SIZE,
+  CONSOLIDATE_SIMILARITY_THRESHOLD,
+  canonicalPolarityAllowed,
+  chooseCanonicalType,
+  clusterBySimilarity,
+  clusterHasPolarityConflict,
+  cosine,
+  isDurableConsolidationCandidate,
+  resolveClusterConflict,
+} from "./domain/consolidate"
+export type { ClusterConflictResolution, ClusterOptions } from "./domain/consolidate"
+export { buildConsolidationPrompt, parseConsolidation } from "./domain/consolidate-prompt"
+export type { ConsolidationInput, ParsedConsolidation } from "./domain/consolidate-prompt"
+export { runConsolidation } from "./adapters/consolidator-model"
 export { buildExtractionPrompt, parseExtraction } from "./domain/extractor"
 export {
   resolveCliOrgMemoryMode,
   resolveLearningsMode,
+  resolveMemoryConsolidateMode,
   resolveMemoryDecayMode,
   resolveOrgMemoryApplyMode,
   resolveOrgMemoryCaptureMode,
 } from "./domain/mode"
-export type { CliOrgMemoryMode, MemoryDecayMode, OrgMemoryApplyMode, OrgMemoryCaptureMode } from "./domain/mode"
+export type {
+  CliOrgMemoryMode,
+  MemoryConsolidateMode,
+  MemoryDecayMode,
+  OrgMemoryApplyMode,
+  OrgMemoryCaptureMode,
+} from "./domain/mode"
 export {
   renderBoostedCategoriesForPrompt,
   renderConfirmReply,
@@ -34,6 +56,7 @@ export {
   renderOverviewFooter,
 } from "./domain/render"
 export {
+  MAX_LEARNINGS,
   computeLearningId,
   learningsArchiveKey,
   learningsKey,

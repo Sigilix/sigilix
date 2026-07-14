@@ -29,6 +29,7 @@ import {
   type DayCountRow,
 } from "@/src/lib/admin/admin-metrics-aggregate"
 import { DEFAULT_PRICING } from "@/src/shared/domain/model-pricing"
+import { loadMemoryGardenerDigest } from "@/src/lib/memory-gardener-digest"
 import type { Env } from "@/src/shared/types/env"
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -293,6 +294,12 @@ export async function handleAdminMetricsRoute(request: Request, env: Env): Promi
   // Monthly MRR − monthly-normalized estimated cost (same time basis).
   const grossUsd = grossMarginUsd(revenue.mrrUsd, estimatedMonthlyUsd)
 
+  // ── Memory Gardener digest (read-only) ──────────────────────
+  // The last decay + consolidation shadow/enforce output, so the founder can see
+  // reap/merge eligibility without `wrangler tail`. Fail-soft: absent/unreadable
+  // → null (never blocks the metrics response).
+  const memoryGardener = await loadMemoryGardenerDigest(env)
+
   return json(
     {
       generatedAt: new Date(nowMs).toISOString(),
@@ -324,6 +331,7 @@ export async function handleAdminMetricsRoute(request: Request, env: Env): Promi
       },
       revenue,
       margin: { grossUsd },
+      memoryGardener,
       gaps,
     },
     200,

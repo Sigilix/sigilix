@@ -3,6 +3,8 @@ import type { JobMessage } from "@/src/shared/types/job"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from "@/src/shared/adapters/model"
 import type { RepoIndexManifestV1, ReadResult as ManifestReadResult } from "@/src/lib/repo-index-manifest"
+import type { RepoActiveIndexMode, RepoActiveIndexSnapshotV1 } from "@/src/lib/repo-active-index"
+import { buildRepoActiveIndexDelta, decideIncrementalActiveIndex } from "@/src/lib/repo-active-index-delta"
 import { graphIndexEnabled } from "@/src/lib/graph-flags"
 import type { IndexTarget } from "@/src/lib/index-branch"
 import { readActiveRunId, shouldFinalize, writeActiveRun } from "@/src/lib/repo-index-active-run"
@@ -26,24 +28,13 @@ const MAX_INCREMENTAL_CHANGED_PATHS = 200
 const VECTORIZE_DELETE_BATCH = 100
 const REUSE_PROBE_CONCURRENCY = 8
 
-// SIG-422: change-triggered re-index reasons eligible for the incremental
-// path. `merged-pr` (enqueued on every PR merge for the default branch) and
-// `pull-request` arrive with no push `changedPaths`/`before`, so they recover
-// the delta via the Compare API below. `install` / `install-repos-added` /
-// `manual` are bootstrap / operator intent and stay on the full-tree path.
+// Change-triggered jobs may recover through Compare; bootstrap/operator jobs stay full-tree.
 const INCREMENTAL_REASONS: ReadonlySet<IndexRepoMessage["reason"]> = new Set(["push", "merged-pr", "pull-request"])
 
-// GitHub's Compare API returns the changed-file array only on the
-// comparison's first page and caps it at 300 entries for the whole
-// comparison. A length at the cap is treated as possibly-truncated, so the
-// recovery falls back to full rather than risk an incomplete delta.
+// Compare exposes files only on page one and caps the whole list at 300.
 const COMPARE_FILES_PAGE_CAP = 300
 
-// A no-paging compare (what `compareCommits` issues) returns at most the
-// first 250 commits, and the changed-file array reflects only those commits.
-// A comparison larger than this can therefore omit files changed in later
-// commits, so recovery falls back to full above the cap (or when the count
-// is unknown).
+// A no-paging compare covers only 250 commits; above/unknown can omit files.
 const COMPARE_COMMITS_NO_PAGING_CAP = 250
 
 type IndexRepoMessage = Extract<JobMessage, { type: "index-repo" }>
@@ -63,11 +54,11 @@ interface IncrementalArgs {
   astChunking: boolean
   existingManifest: ManifestReadResult
   chunkerVersion: number
+  activeIndexMode: RepoActiveIndexMode
 }
 
 export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Promise<boolean> {
-  // SIG-422: bootstrap / operator-intent reasons (install, manual, …) and
-  // bootstrap shards stay on the full-tree path.
+  // Bootstrap/operator jobs and bootstrap shards stay on the full-tree path.
   if (!INCREMENTAL_REASONS.has(args.job.reason) || args.job.shard !== undefined) {
     logIncrementalSkipped(args, "not-incremental-reason")
     return false
@@ -82,11 +73,26 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
     logIncrementalSkipped(args, "version-mismatch")
     return false
   }
-
-  // SIG-422: source the changed set from the cheap push payload when it's
-  // present AND the push chain is intact; otherwise recover it via the
-  // Compare API (merged-pr / pull-request, or a chain-drifted push). A null
-  // result means a recall-unsafe delta — fall back to the full-tree path.
+  const activeIndex = decideIncrementalActiveIndex({
+    mode: args.activeIndexMode,
+    isDefaultBranch: args.target.isDefault,
+    liveGithubRepoId: args.githubRepoId,
+    priorManifestGithubRepoId: prior.githubRepoId,
+    priorActiveIndex: prior.activeIndex,
+  })
+  if (activeIndex.kind === "full-fallback") {
+    console.warn(
+      JSON.stringify({
+        event: "index-incremental-active-index-fallback",
+        owner: args.owner,
+        repo: args.repo,
+        run_id: args.runId,
+        reason: activeIndex.reason,
+      }),
+    )
+    return false
+  }
+  // Recover through Compare when the push delta cannot prove a complete chain.
   const changed = await resolveIncrementalChanged(args, prior)
   if (changed === null) return false
 
@@ -115,7 +121,7 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
   }
 
   if (!changedTouchesPotentialIndex(changed)) {
-    return await handleNoopIncremental(args, prior, vectorsRead.vectors, graphRunId, changed)
+    return await handleNoopIncremental(args, prior, vectorsRead.vectors, graphRunId, changed, activeIndex)
   }
 
   const tree = await args.client.getRepoTree(args.owner, args.repo, args.treeSha)
@@ -173,15 +179,12 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
     runId: args.runId,
     files: reuse.filesToEmbed,
     astChunking: args.astChunking,
-    // SIG-423: the incremental path NEVER commits its graph version — it keeps
-    // the prior version active (manifest.graphRunId stays pinned to it). Graph
-    // rows written here under args.runId would be orphaned `pending` rows that
-    // no read path touches (all graph reads resolve `debugActiveVersion`) and
-    // the next full commit GCs. Skip writing them — pure rows-written savings,
-    // recall-neutral (the graph the reviewer reads is unchanged).
+    // Incremental refreshes preserve the prior active graph, so new graph rows
+    // would be orphaned under an uncommitted run.
     writeGraph: false,
   })
   const mergedIdsByPath = { ...reuse.reusedIdsByPath, ...idsByPath }
+  const nextActiveIndex = buildNextActiveIndex(args, activeIndex, changed, mergedIdsByPath)
 
   const newIds = idsFromByPath(mergedIdsByPath)
   const activeBeforeDelete = await readActiveRunId(args.env, args.owner, args.target.stateRepo)
@@ -246,27 +249,29 @@ export async function maybeHandleIncrementalPushIndex(args: IncrementalArgs): Pr
     return true
   }
 
-  await persistManifest({
-    env: args.env,
-    owner: args.owner,
-    repo: args.repo,
-    githubRepoId: args.githubRepoId,
-    stateRepo: args.target.stateRepo,
-    namespace: args.target.namespace,
-    branch: args.target.isDefault ? null : args.target.branch,
-    defaultBranch: args.target.defaultBranch,
-    headSha: args.headSha,
-    runId: args.runId,
-    graphRunId: graphRunId ?? undefined,
-    fileCount: indexableFiles.length,
-    chunkCount: vectorsResult.chunkCount,
-    shardCount: 1,
-    chunkerVersion: args.chunkerVersion,
-    // Carry the prior role forward so a push-delta refresh doesn't erase the
-    // additive metadata (this path does not re-classify). Undefined on legacy
-    // records is fine — the field is just omitted.
-    repoRole: prior.repoRole,
-  })
+  await persistIncrementalManifest(
+    {
+      env: args.env,
+      owner: args.owner,
+      repo: args.repo,
+      githubRepoId: args.githubRepoId,
+      stateRepo: args.target.stateRepo,
+      namespace: args.target.namespace,
+      branch: args.target.isDefault ? null : args.target.branch,
+      defaultBranch: args.target.defaultBranch,
+      headSha: args.headSha,
+      runId: args.runId,
+      graphRunId: graphRunId ?? undefined,
+      fileCount: indexableFiles.length,
+      chunkCount: vectorsResult.chunkCount,
+      shardCount: 1,
+      chunkerVersion: args.chunkerVersion,
+      activeIndex: nextActiveIndex,
+      // This delta path does not re-classify the prior role.
+      repoRole: prior.repoRole,
+    },
+    args.activeIndexMode,
+  )
   const activeAfterManifest = await readActiveRunId(args.env, args.owner, args.target.stateRepo)
   if (!shouldFinalize(activeAfterManifest, args.runId)) {
     console.warn(
@@ -322,7 +327,9 @@ async function handleNoopIncremental(
   existingVectors: RepoIndexVectorsV1,
   graphRunId: string | undefined,
   changed: { upsert: string[]; remove: string[] },
+  activeIndex: ReturnType<typeof decideIncrementalActiveIndex>,
 ): Promise<boolean> {
+  const nextActiveIndex = buildNextActiveIndex(args, activeIndex, changed, {})
   await writeActiveRun(args.env, args.owner, args.target.stateRepo, args.runId)
   const idsToReplace = idsForPaths(existingVectors, changed.remove)
   const vectorsResult = await writeIncrementalVectorIds({
@@ -352,25 +359,29 @@ async function handleNoopIncremental(
     return true
   }
 
-  await persistManifest({
-    env: args.env,
-    owner: args.owner,
-    repo: args.repo,
-    githubRepoId: args.githubRepoId,
-    stateRepo: args.target.stateRepo,
-    namespace: args.target.namespace,
-    branch: args.target.isDefault ? null : args.target.branch,
-    defaultBranch: args.target.defaultBranch,
-    headSha: args.headSha,
-    runId: args.runId,
-    graphRunId: graphRunId ?? undefined,
-    fileCount: prior.fileCount,
-    chunkCount: vectorsResult.chunkCount,
-    shardCount: 1,
-    chunkerVersion: args.chunkerVersion,
-    // Carry the prior role forward (the no-op push path does not re-classify).
-    repoRole: prior.repoRole,
-  })
+  await persistIncrementalManifest(
+    {
+      env: args.env,
+      owner: args.owner,
+      repo: args.repo,
+      githubRepoId: args.githubRepoId,
+      stateRepo: args.target.stateRepo,
+      namespace: args.target.namespace,
+      branch: args.target.isDefault ? null : args.target.branch,
+      defaultBranch: args.target.defaultBranch,
+      headSha: args.headSha,
+      runId: args.runId,
+      graphRunId: graphRunId ?? undefined,
+      fileCount: prior.fileCount,
+      chunkCount: vectorsResult.chunkCount,
+      shardCount: 1,
+      chunkerVersion: args.chunkerVersion,
+      activeIndex: nextActiveIndex,
+      // Carry the prior role forward (the no-op push path does not re-classify).
+      repoRole: prior.repoRole,
+    },
+    args.activeIndexMode,
+  )
   const activeAfterManifest = await readActiveRunId(args.env, args.owner, args.target.stateRepo)
   if (!shouldFinalize(activeAfterManifest, args.runId)) {
     console.warn(
@@ -418,37 +429,65 @@ async function handleNoopIncremental(
   return true
 }
 
+function buildNextActiveIndex(
+  args: IncrementalArgs,
+  decision: ReturnType<typeof decideIncrementalActiveIndex>,
+  changedPaths: { upsert: readonly string[]; remove: readonly string[] },
+  idsByPath: Readonly<Record<string, readonly string[]>>,
+): RepoActiveIndexSnapshotV1 | undefined {
+  const result = buildRepoActiveIndexDelta({ decision, changedPaths, idsByPath })
+  if (result.kind === "shadow-skip") {
+    console.warn(
+      JSON.stringify({
+        event: "index-incremental-active-index-shadow-skip",
+        owner: args.owner,
+        repo: args.repo,
+        run_id: args.runId,
+        reason: result.reason,
+      }),
+    )
+  }
+  return result.kind === "ready" ? result.snapshot : undefined
+}
+
+async function persistIncrementalManifest(
+  persistArgs: Parameters<typeof persistManifest>[0],
+  mode: RepoActiveIndexMode,
+): Promise<void> {
+  try {
+    await persistManifest(persistArgs)
+  } catch (err) {
+    const reason = shadowActiveIndexPrewriteFailure(err)
+    if (mode !== "shadow" || persistArgs.activeIndex === undefined || reason === null) throw err
+    console.warn(
+      JSON.stringify({
+        event: "index-incremental-active-index-shadow-skip",
+        owner: persistArgs.owner,
+        repo: persistArgs.repo,
+        run_id: persistArgs.runId,
+        reason,
+      }),
+    )
+    await persistManifest({ ...persistArgs, activeIndex: undefined })
+  }
+}
+
+function shadowActiveIndexPrewriteFailure(err: unknown): "active-index-validation" | "manifest-oversize" | null {
+  if (!(err instanceof Error)) return null
+  if (err.message.startsWith("active index requires")) return "active-index-validation"
+  if (err.message.startsWith("repo index manifest is too large")) return "manifest-oversize"
+  return null
+}
+
 type ChangedSet = { upsert: string[]; remove: string[] }
 
-/**
- * SIG-422: resolve the changed-file delta for an incremental re-index.
- *
- * Two sources, one downstream flow:
- *   - Cheap push fast-path: when the job carries a usable `changedPaths`
- *     payload AND the push chain is intact (`prior.headSha === job.before`)
- *     AND the resolved head is the pushed commit, trust it directly. The
- *     head-pinning (`resolveIndexHead`) normally makes `headSha === job.after`,
- *     so this holds and the `before → after` delta is applied at `after`.
- *   - Compare-recovery: otherwise (merged-pr / pull-request, which carry
- *     neither; a push whose chain drifted off the manifest head; a push whose
- *     `changedPaths` was dropped as too-large/truncated; OR a pinned push that
- *     fell back to the LIVE tip on a `getCommit` 404 so `headSha !== job.after`
- *     — applying the `before → after` delta at a different head would miss the
- *     `after → tip` commits) recover the delta from the GitHub Compare API
- *     between the manifest head and the resolved head.
- *
- * Returns the changed set, or null to signal a recall-unsafe situation the
- * caller must answer with a full-tree re-index.
- */
+/** Use a complete chain-intact push delta, else recover through Compare; null means full-tree. */
 async function resolveIncrementalChanged(
   args: IncrementalArgs,
   prior: RepoIndexManifestV1,
 ): Promise<ChangedSet | null> {
   const pushChanged = normalizeChangedPaths(args.job.changedPaths)
-  // The head-match guard rejects the fast-path only when `after` is present
-  // but the resolved head drifted off it (the `getCommit`-404 live-tip
-  // fallback) — legacy push messages without `after` keep the pre-SIG-422
-  // behavior and trust the chain-intact delta as before.
+  // A resolved head that drifted off a provided `after` cannot use that push delta.
   const headMatchesPushed = args.job.after === undefined || args.headSha === args.job.after
   if (pushChanged !== null && prior.headSha === args.job.before && headMatchesPushed) {
     return pushChanged
@@ -456,19 +495,7 @@ async function resolveIncrementalChanged(
   return await recoverChangedViaCompare(args, prior)
 }
 
-/**
- * SIG-422: recover the changed set via the Compare API when the push
- * fast-path can't supply it. Recall-safety is absolute — every branch that
- * can't prove a complete forward delta returns null (full fallback):
- *   - status must be `ahead` or `identical` (base is an ancestor of head);
- *     `diverged` / `behind` / unknown / a failed call mean a rewrite or
- *     force-push where a delta would be unsafe.
- *   - an unknown per-file status, a file array at the 300-entry page cap
- *     (possibly truncated), or a mapped change count over the cap all force
- *     a full fallback.
- * An empty net delta is NOT a fallback: the caller's noop path advances the
- * manifest head to re-establish the push chain for the next push.
- */
+/** Recover only a provably complete forward Compare delta; otherwise return null for full-tree. */
 async function recoverChangedViaCompare(args: IncrementalArgs, prior: RepoIndexManifestV1): Promise<ChangedSet | null> {
   const trigger = compareTrigger(args.job)
 
@@ -486,9 +513,7 @@ async function recoverChangedViaCompare(args: IncrementalArgs, prior: RepoIndexM
   if (compare.status !== "ahead" && compare.status !== "identical") {
     return logCompareFallbackFull(args, prior, trigger, "diverged", { compare_status: compare.status })
   }
-  // A comparison spanning more than the no-paging commit cap (or one whose
-  // commit count we couldn't read) can omit files changed in the dropped
-  // commits, so the `files` delta may be incomplete — fall back to full.
+  // Unknown/over-cap commit spans may omit files, so they require a full index.
   if (compare.totalCommits === null || compare.totalCommits > COMPARE_COMMITS_NO_PAGING_CAP) {
     return logCompareFallbackFull(args, prior, trigger, "too-many-commits", { total_commits: compare.totalCommits })
   }
@@ -524,19 +549,7 @@ async function recoverChangedViaCompare(args: IncrementalArgs, prior: RepoIndexM
 
 type CompareTrigger = "merged-pr" | "pull-request" | "push-drift" | "large-push" | "unknown"
 
-/**
- * SIG-422: which change-trigger routed this job to compare-recovery — so a
- * recovered/fallback log shows the cause:
- *   - push, no `changedPaths` (dropped as too-large/truncated) → `large-push`
- *   - push, `changedPaths` present but chain drifted / head off `after`
- *     → `push-drift`
- *   - `pull-request` re-index (no push payload) → `pull-request`
- *   - `merged-pr` re-index (no push payload) → `merged-pr`
- *
- * Only the three `INCREMENTAL_REASONS` reach here. Each is matched explicitly
- * so a future reason added to that set surfaces as an `unknown` label in
- * telemetry rather than being silently mislabeled `merged-pr`.
- */
+/** Label the trigger that routed this job through Compare recovery. */
 function compareTrigger(job: IndexRepoMessage): CompareTrigger {
   switch (job.reason) {
     case "push":
@@ -550,11 +563,7 @@ function compareTrigger(job: IndexRepoMessage): CompareTrigger {
   }
 }
 
-/**
- * SIG-422: map a Compare API `files[]` array into upsert/remove path sets.
- * Returns null on ANY unrecognized file status — conservative, so a file is
- * never left stale because we didn't understand its change type.
- */
+/** Map Compare files conservatively; an unknown status requires full-tree fallback. */
 function mapCompareFiles(
   files: ReadonlyArray<{ status: string; filename: string; previous_filename: string | null }>,
 ): { upsert: string[]; remove: string[] } | null {
@@ -588,10 +597,7 @@ function logCompareFallbackFull(
   args: IncrementalArgs,
   prior: RepoIndexManifestV1,
   trigger: CompareTrigger,
-  // The fallback CAUSE (why the compare delta was rejected). Kept distinct
-  // from `trigger` (which change-event routed the job to compare) so the log
-  // carries both axes — e.g. a `merged-pr` (trigger) that fell back because
-  // the comparison `diverged` (reason).
+  // Keep the Compare rejection cause distinct from the trigger.
   reason: "diverged" | "too-many" | "too-many-commits" | "unknown-status" | "compare-failed",
   extra: Record<string, unknown>,
 ): null {
@@ -701,8 +707,7 @@ async function splitReusedFiles(input: SplitReusedFilesArgs): Promise<{
     }
     return { file, reuseIds: null }
   })
-  // mapWithConcurrency preserves input order; a rejected probe falls back to
-  // embedding the file at the same index so index freshness wins over reuse.
+  // A rejected probe embeds the same-index file; freshness wins over reuse.
   for (let i = 0; i < results.length; i++) {
     const result = results[i]
     const file = input.files[i]!
@@ -762,22 +767,12 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
 function normalizeChangedPaths(value: IndexRepoMessage["changedPaths"]): ChangedSet | null {
   if (value === undefined) return null
   const changed = normalizeChangeSet(value.upsert, value.remove)
-  // The push fast-path treats an empty changed set as "nothing to do" and
-  // declines incremental entirely (the freshness check already covered the
-  // no-op). The compare path keeps an empty set so its noop branch can
-  // advance the manifest head and re-establish the push chain.
+  // Push rejects an empty delta; Compare preserves it so noop can advance the chain.
   if (changed === null || changed.upsert.length + changed.remove.length === 0) return null
   return changed
 }
 
-/**
- * SIG-422: shared upsert/remove normalization — clean (drop empty / NUL),
- * dedupe, drop any path that is both upserted and removed in favor of the
- * upsert, sort for stable ordering, and enforce the incremental size cap.
- * Returns null only when the deduped count exceeds the cap (too large to be
- * cheaper incremental); an empty set is returned as-is for callers that
- * need to distinguish it.
- */
+/** Normalize a stable, disjoint delta; null means its deduped size exceeds the cap. */
 function normalizeChangeSet(upsertPaths: ReadonlyArray<string>, removePaths: ReadonlyArray<string>): ChangedSet | null {
   const upsert = new Set(cleanPaths(upsertPaths))
   const remove = new Set(cleanPaths(removePaths))

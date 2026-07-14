@@ -1298,8 +1298,8 @@ export interface Env extends AwsBedrockEnv {
   // actually gate an un-entitled installation. Resolved by resolveEntitlementsMode
   // (@/features/entitlements); ships dark.
   OPENCLAW_ENTITLEMENTS_MODE?: string
-  // SIG-343 platform DB; optional so an unprovisioned/unmigrated deploy stays metering-off (dark).
-  SIGILIX_PLATFORM_DB?: D1Database
+  SIGILIX_PLATFORM_DB?: D1Database // Optional; unprovisioned deploys stay metering-off.
+  OPENCLAW_REPO_ACTIVE_INDEX_MODE?: string // off | shadow | on; unknown/unset → off.
   OPENCLAW_REPOSITORY_CONTEXT_API?: string // Exact "on" exposes the canonical org repository-context API.
   OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE?: string // off | shadow; unknown/unset (including on) → off.
   OPENCLAW_REPOSITORY_CONTEXT_SLACK_MODE?: string // off | shadow | on; unknown/unset → off.

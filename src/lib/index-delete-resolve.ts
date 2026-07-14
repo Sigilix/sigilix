@@ -83,6 +83,12 @@ export interface DeleteRepoIndexArgs {
   owner: string
   repo: string
   reason: DeleteReason
+  /** Lifecycle callers that already performed installation-scoped D1 cleanup must not repeat a global repo-id delete. */
+  skipActiveIndexCleanup?: boolean
+  /** Exact installation scope for a repositories_removed cleanup. */
+  activeIndexInstallationId?: number
+  /** Trusted payload repo id; owner-safe manifest id is the fallback when omitted. */
+  activeIndexGithubRepoId?: number
 }
 
 /**

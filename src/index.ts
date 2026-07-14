@@ -77,6 +77,7 @@ import { handleAdminLinearRetrievalProbeRoute } from "@/src/lib/admin-linear-ret
 import { handleAdminAgentRunRoute, handleAdminAgentStatusRoute } from "@/src/lib/agent-runner/admin-agent-run-route"
 import { tryHandleAgentMcpMachineRoute } from "@/src/lib/agent-runner/mcp-capability-route"
 import { runIndexReconciliation } from "@/src/lib/index-reconciliation"
+import { sweepExpiredRepoActiveIndexRuns } from "@/src/lib/repo-active-index"
 import { runMemoryDecayPass } from "@/src/lib/memory-decay"
 import { runMemoryConsolidatePass } from "@/src/lib/memory-consolidate"
 import { handleReviewStatusRoute } from "@/src/do/status-route"
@@ -829,8 +830,13 @@ export default {
     // the reconciliation tick.
     ctx.waitUntil(runMemoryDecayPass(env).catch((err) => logTickError("memory-decay-tick-error", err)))
     ctx.waitUntil(runMemoryConsolidatePass(env).catch((err) => logTickError("memory-consolidate-tick-error", err)))
-    // Billing recovery is independent of the indexer gate below.
-    ctx.waitUntil(enqueueDueOrgSeatBillingOperations(env))
+    ctx.waitUntil(enqueueDueOrgSeatBillingOperations(env)) // independent of the indexer gate
+    if (env.SIGILIX_PLATFORM_DB)
+      ctx.waitUntil(
+        sweepExpiredRepoActiveIndexRuns({ db: env.SIGILIX_PLATFORM_DB }).catch((err) =>
+          logTickError("repo-active-index-sweep-error", err),
+        ),
+      )
     // CodeRabbit C1: gate the auto-fire on OPENCLAW_INDEXER_ENABLED. The
     // manual routes (index-repo / index-backfill / index-reconcile) stay
     // ungated — those are operator-triggered and the operator already

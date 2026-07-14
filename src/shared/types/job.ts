@@ -446,6 +446,10 @@ export type JobMessage =
         /** Removed paths whose prior vectors should be deleted. */
         remove: string[]
       }
+      /** Repository active-index rollout mode pinned by the bootstrap for this chain. */
+      activeIndexMode?: "off" | "shadow" | "on"
+      /** D1 session bookmark from the preceding active-index slice. */
+      activeIndexBookmark?: string
       shard?: {
         /** Inclusive lower bound into the filtered indexable-file list. */
         lo: number

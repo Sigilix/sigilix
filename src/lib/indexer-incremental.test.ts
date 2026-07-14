@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const {
@@ -92,15 +93,23 @@ import { collectPushChangedPaths } from "@/src/lib/index-producer"
 import { activeRunKey } from "@/src/lib/repo-index-active-run"
 import { repoIndexManifestKey, type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
 import { repoIndexVectorsKey, type RepoIndexVectorsV1 } from "@/src/lib/repo-index-vectors"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { handlePushEvent } from "@/src/index-internals"
 import { EMBEDDING_DIMENSIONS } from "@/src/shared/adapters/model"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
 import {
   makeEnv as makeEnvShared,
+  seedActiveIndexedRepo,
   seedIndexedRepo,
   pushJobWithChangedPaths,
+  TEST_GITHUB_REPO_ID,
 } from "@/src/lib/indexer-incremental.test-helpers"
+
+const ACTIVE_INDEX_MIGRATION = readFileSync(
+  new URL("../../migrations/0025_create_repo_active_index_stage.sql", import.meta.url),
+  "utf8",
+)
 
 function makeEnv(opts: { getImpl?: (key: string, store: Map<string, string>) => Promise<string | null> } = {}): {
   env: ReturnType<typeof makeEnvShared>["env"]
@@ -113,9 +122,15 @@ function makeEnv(opts: { getImpl?: (key: string, store: Map<string, string>) => 
   )
 }
 
+async function enableActiveIndex(env: Env, mode: "shadow" | "on"): Promise<void> {
+  env.OPENCLAW_REPO_ACTIVE_INDEX_MODE = mode
+  env.SIGILIX_PLATFORM_DB = makeD1()
+  await env.SIGILIX_PLATFORM_DB.exec(ACTIVE_INDEX_MIGRATION)
+}
+
 beforeEach(() => {
   mockGetInstallationToken.mockClear()
-  mockGetRepository.mockReset().mockResolvedValue({ default_branch: "main" })
+  mockGetRepository.mockReset().mockResolvedValue({ id: TEST_GITHUB_REPO_ID, default_branch: "main" })
   mockGetBranch.mockReset().mockResolvedValue({ headSha: "c".repeat(40), treeSha: "d".repeat(40) })
   // SIG-422: a chain-intact push pins the head to `after` via getCommit. The
   // default echoes the requested SHA with the live tree, so the existing
@@ -774,5 +789,157 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
     const deletedIds = mockVectorizeDeleteByIds.mock.calls.flatMap((call) => call[0] as string[])
     expect(deletedIds).not.toContain("old-changed-id")
     expect(deletedIds).toContain("old-deleted-id")
+  })
+
+  it("publishes an exact on-mode active snapshot from the incremental delta", async () => {
+    const { env, kv } = makeEnv()
+    await enableActiveIndex(env, "on")
+    seedActiveIndexedRepo(kv, "on")
+    const historical = JSON.parse(kv.get(repoIndexVectorsKey("Sigilix", "sigilix")) as string) as RepoIndexVectorsV1
+    historical.byPath["src/stale-ledger-only.ts"] = ["stale-ledger-id"]
+    kv.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(historical))
+
+    await handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })
+
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    const vectors = JSON.parse(kv.get(repoIndexVectorsKey("Sigilix", "sigilix")) as string) as RepoIndexVectorsV1
+    expect(manifest.activeIndex).toEqual({
+      version: 1,
+      githubRepoId: TEST_GITHUB_REPO_ID,
+      builtMode: "on",
+      byPath: {
+        "src/changed.ts": vectors.byPath["src/changed.ts"],
+        "src/unchanged.ts": ["3".repeat(48)],
+      },
+    })
+    expect(manifest.activeIndex?.byPath).not.toHaveProperty("src/deleted.ts")
+    expect(manifest.activeIndex?.byPath).not.toHaveProperty("src/stale-ledger-only.ts")
+  })
+
+  it("keeps shadow no-op membership closed over the prior active snapshot", async () => {
+    const { env, kv } = makeEnv()
+    await enableActiveIndex(env, "shadow")
+    seedActiveIndexedRepo(kv, "shadow")
+    const historical = JSON.parse(kv.get(repoIndexVectorsKey("Sigilix", "sigilix")) as string) as RepoIndexVectorsV1
+    historical.byPath["src/stale-ledger-only.ts"] = ["stale-ledger-id"]
+    kv.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(historical))
+
+    await handleIndexRepoJob({
+      job: {
+        ...pushJobWithChangedPaths(),
+        changedPaths: { upsert: ["package-lock.json"], remove: ["assets/logo.png"] },
+      },
+      env,
+    })
+
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(manifest.activeIndex?.builtMode).toBe("shadow")
+    expect(manifest.activeIndex?.byPath).toEqual({
+      "src/changed.ts": ["1".repeat(48)],
+      "src/deleted.ts": ["2".repeat(48)],
+      "src/unchanged.ts": ["3".repeat(48)],
+    })
+    expect(manifest.activeIndex?.byPath).not.toHaveProperty("src/stale-ledger-only.ts")
+  })
+
+  it("publishes the legacy manifest when a shadow snapshot exceeds the pre-write size cap", async () => {
+    const { env, kv } = makeEnv()
+    await enableActiveIndex(env, "shadow")
+    seedActiveIndexedRepo(kv, "shadow", {
+      byPath: { ["x".repeat(10 * 1024 * 1024)]: ["1".repeat(48)] },
+    })
+
+    await handleIndexRepoJob({
+      job: {
+        ...pushJobWithChangedPaths(),
+        changedPaths: { upsert: ["package-lock.json"], remove: [] },
+      },
+      env,
+    })
+
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(manifest.headSha).toBe("c".repeat(40))
+    expect(manifest.activeIndex).toBeUndefined()
+  })
+
+  it("keeps an oversized on snapshot strict", async () => {
+    const { env, kv } = makeEnv()
+    await enableActiveIndex(env, "on")
+    seedActiveIndexedRepo(kv, "on", {
+      byPath: { ["x".repeat(10 * 1024 * 1024)]: ["1".repeat(48)] },
+    })
+
+    await expect(
+      handleIndexRepoJob({
+        job: {
+          ...pushJobWithChangedPaths(),
+          changedPaths: { upsert: ["package-lock.json"], remove: [] },
+        },
+        env,
+      }),
+    ).rejects.toThrow(/repo index manifest is too large/)
+
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(manifest.headSha).toBe("a".repeat(40))
+    expect(manifest.activeIndex?.builtMode).toBe("on")
+  })
+
+  it("does not retry shadow manifest publication after a KV failure", async () => {
+    const { env, kv } = makeEnv()
+    await enableActiveIndex(env, "shadow")
+    seedActiveIndexedRepo(kv, "shadow")
+    const originalPut = env.OPENCLAW_STATE.put.bind(env.OPENCLAW_STATE)
+    let manifestWrites = 0
+    env.OPENCLAW_STATE.put = vi.fn(async (key: string, value: string, options?: unknown) => {
+      if (key === repoIndexManifestKey("Sigilix", "sigilix")) {
+        manifestWrites += 1
+        throw new Error("kv down")
+      }
+      return originalPut(key, value, options as never)
+    }) as Env["OPENCLAW_STATE"]["put"]
+
+    await expect(
+      handleIndexRepoJob({
+        job: {
+          ...pushJobWithChangedPaths(),
+          changedPaths: { upsert: ["package-lock.json"], remove: [] },
+        },
+        env,
+      }),
+    ).rejects.toThrow("kv down")
+
+    expect(manifestWrites).toBe(1)
+    const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(manifest.headSha).toBe("a".repeat(40))
+  })
+
+  it("falls back to a full index when on mode sees a shadow-built snapshot", async () => {
+    const { env, kv } = makeEnv()
+    await enableActiveIndex(env, "on")
+    seedActiveIndexedRepo(kv, "shadow")
+
+    await handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })
+
+    expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "c".repeat(40))
+  })
+
+  it.each(["legacy", "malformed"])("falls back to a full index for a %s prior active snapshot", async (kind) => {
+    const { env, kv } = makeEnv()
+    await enableActiveIndex(env, "on")
+    if (kind === "legacy") {
+      seedIndexedRepo(kv, { githubRepoId: TEST_GITHUB_REPO_ID })
+    } else {
+      seedActiveIndexedRepo(kv, "on")
+      const manifest = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+      manifest.activeIndex = {
+        ...manifest.activeIndex!,
+        byPath: { "src/changed.ts": ["not-a-content-addressed-id"] },
+      }
+      kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
+    }
+
+    await handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })
+
+    expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "c".repeat(40))
   })
 })

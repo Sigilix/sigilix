@@ -121,7 +121,7 @@ function makeEnv(opts: { getImpl?: (key: string, store: Map<string, string>) => 
 
 beforeEach(() => {
   mockGetInstallationToken.mockClear()
-  mockGetRepository.mockReset().mockResolvedValue({ default_branch: "main" })
+  mockGetRepository.mockReset().mockResolvedValue({ default_branch: "main", id: 808247824 })
   mockGetBranch.mockReset().mockResolvedValue({ headSha: "c".repeat(40), treeSha: "d".repeat(40) })
   // SIG-422: `getCommit` resolves a pinned push `after` to its tree. Default
   // echoes the requested SHA as headSha with the same tree the live branch +

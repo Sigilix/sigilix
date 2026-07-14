@@ -56,6 +56,7 @@ export function makeEnv(
     kv?: Env["OPENCLAW_STATE"]
     deleteByIdsImpl?: (ids: string[]) => Promise<unknown>
     graphDeleteImpl?: (namespace: string) => Promise<void>
+    platformDb?: D1Database
   } = {},
 ): { env: Env; deletedBatches: string[][]; graphDeletedNamespaces: string[] } {
   const kv = opts.kv ?? makeKvStub().kv
@@ -100,6 +101,7 @@ export function makeEnv(
         }),
     },
     REPO_GRAPH_DO: repoGraphDO,
+    SIGILIX_PLATFORM_DB: opts.platformDb,
   } as unknown as Env
   return { env, deletedBatches, graphDeletedNamespaces }
 }

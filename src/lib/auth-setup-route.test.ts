@@ -438,7 +438,7 @@ describe("handleSetupRoute (GET /setup)", () => {
       expect(await res.text()).toContain("sigilix_live_")
     })
 
-    it("set: 302s to `${OPENCLAW_PORTAL_URL}/setup?installed=1` instead of rendering the key page", async () => {
+    it("set: redirects the exact authorized installation to Portal setup without rendering the key page", async () => {
       stubUserInstallations([42])
       const state = await mintState(111)
       const portalEnv = { ...env, OPENCLAW_PORTAL_URL: "https://app.sigilix.ai" }
@@ -447,7 +447,7 @@ describe("handleSetupRoute (GET /setup)", () => {
         portalEnv,
       )
       expect(res.status).toBe(302)
-      expect(res.headers.get("location")).toBe("https://app.sigilix.ai/setup?installed=1")
+      expect(res.headers.get("location")).toBe("https://app.sigilix.ai/setup?installed=1&installation_id=42")
       // Never the key in the URL.
       expect(res.headers.get("location")).not.toContain("sigilix_live_")
       const body = await res.text()

@@ -184,9 +184,14 @@ export async function handleSetupRoute(request: Request, env: Env, ctx?: Executi
   // OPENCLAW_PORTAL_URL is unset this branch is inert and behavior is
   // byte-identical to before (renders the plaintext-key page).
   if (env.OPENCLAW_PORTAL_URL) {
+    // The installation id is a non-secret selector hint, never an authorization
+    // claim. Portal API reads/writes must still session-authorize this exact
+    // installation independently; editing or replaying this URL grants nothing.
     return new Response(null, {
       status: 302,
-      headers: { location: `${env.OPENCLAW_PORTAL_URL}/setup?installed=1` },
+      headers: {
+        location: `${env.OPENCLAW_PORTAL_URL}/setup?installed=1&installation_id=${encodeURIComponent(String(installationId))}`,
+      },
     })
   }
 

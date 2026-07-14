@@ -1612,10 +1612,12 @@ SIGILIX_LINEAR_REDIRECT_ORIGIN = "https://api.sigilix.ai"
 #                                 login callback's default success destination
 #                                 becomes `${OPENCLAW_PORTAL_URL}/setup` instead
 #                                 of /auth/welcome, and GET /setup 302s to
-#                                 `${OPENCLAW_PORTAL_URL}/setup?installed=1`
+#                                 `${OPENCLAW_PORTAL_URL}/setup?installed=1&installation_id=N`
 #                                 instead of rendering the plaintext-key page
 #                                 (the portal mints its own key via POST
-#                                 /v1/keys). e.g. https://app.sigilix.ai
+#                                 /v1/keys). N is a non-secret selector only;
+#                                 every Portal API call re-authorizes that exact
+#                                 installation. e.g. https://app.sigilix.ai
 #
 # GitHub App callback URL (required for OAuth): set on the App settings page →
 # Identifying and authorizing users → User authorization callback URL:

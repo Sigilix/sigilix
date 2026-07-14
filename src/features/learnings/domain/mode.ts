@@ -139,3 +139,30 @@ export function resolveCliOrgMemoryMode(env: Pick<Env, "OPENCLAW_CLI_ORG_MEMORY"
   if (v === "shadow") return "shadow"
   return "off"
 }
+
+/**
+ * Surface memory apply — Slack + Linear ANSWER read side rollout gate.
+ *
+ * Two-state, off-by-default (the two-state off/on shape of
+ * `resolveOrgMemoryCaptureMode`, NOT the three-state apply gates — a surface
+ * answer either injects the org∪repo learnings or it does not; there is no
+ * shadow "bake the signal" state to log for a chat answer). A DIFFERENT call
+ * site from the PR-review apply gate (`resolveOrgMemoryApplyMode`) and the CLI
+ * read gate (`resolveCliOrgMemoryMode`), so it gets its own independent flag:
+ *   - `"off"` — (default / unset / any other value) the Slack Q&A and Linear
+ *               mention-reply answer prompts are byte-identical to before this
+ *               slice: no `learnings:org:*` / `learnings:repo:*` read, no
+ *               prompt injection.
+ *   - `"on"`  — the answer prompt carries the repo ∪ org learnings (deduped by
+ *               id, a repo copy winning a collision) with ORG guardrails labeled
+ *               higher-precedence than repo facts. SEAT/personal memory is never
+ *               applied here — shared channels read org + repo scope only.
+ *
+ * Pure: the only import is the `Env` TYPE (type-only, zero runtime cost).
+ */
+export type SurfaceMemoryApplyMode = "off" | "on"
+
+export function resolveSurfaceMemoryApplyMode(env: Pick<Env, "OPENCLAW_SURFACE_MEMORY_APPLY">): SurfaceMemoryApplyMode {
+  const v = env.OPENCLAW_SURFACE_MEMORY_APPLY?.trim().toLowerCase()
+  return v === "on" ? "on" : "off"
+}

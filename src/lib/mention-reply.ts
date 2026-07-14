@@ -1,11 +1,7 @@
-// Pipeline for replying to @-mentions on Linear comments.
-// Mirrors triage.ts shape: fetch context → retrieve codebase chunks →
-// build prompt → call Ollama → parse → post reply.
-//
-// Dedupe: each reply gets a marker that includes the source comment ID so
-// re-firing the same Comment.create webhook (Linear retries on 5xx) doesn't
-// produce a second reply. KV is the fast path; the comment-body marker
-// scan is the fallback for cold-cache scenarios.
+// Pipeline for replying to @-mentions on Linear comments. Mirrors triage.ts:
+// fetch context → retrieve chunks → build prompt → call model → parse → reply.
+// Dedupe: a KV marker keyed to the source comment id (fast path) plus a
+// comment-body marker scan fallback stop a re-fired webhook double-replying.
 
 import { generate } from "@/src/shared/adapters/model"
 import { buildLinearClient } from "./linear"
@@ -33,6 +29,7 @@ import { makeKvTelemetrySink } from "./agent-telemetry-kv"
 import { AGENT_SYSTEM_PROMPT } from "@/src/prompts/agent-system"
 import { parseBranchNamespace } from "./index-branch"
 import { captureInstructiveLearning, resolveLearningsMode, resolveOrgMemoryCaptureMode } from "@/src/features/learnings"
+import { renderLinearSurfaceMemory } from "./mention-reply-surface-memory"
 import {
   codebaseContextEnabled,
   codebaseToolsEnabled,
@@ -415,6 +412,8 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
       : []
   log("retrieval-done", { chunks: chunks.length, namespace: retrievalTeamKey })
 
+  // Surface memory apply — ORG∪REPO learnings block for the answer prompt (see helper).
+  const surfaceMemory = await renderLinearSurfaceMemory({ env, teamRepo, tenant })
   const askerHandle = data.user?.displayName ?? data.user?.name ?? "there"
   const prompt = buildPrompt({
     issueIdentifier: data.issue.identifier,
@@ -433,6 +432,7 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
     ),
     linkedPrs,
     linkedPrFailures,
+    teamMemory: surfaceMemory,
   })
 
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
@@ -453,7 +453,7 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
       env,
       surface: "linear-mention",
       commentId: data.id,
-      systemPrompt: AGENT_SYSTEM_PROMPT,
+      systemPrompt: surfaceMemory ? `${AGENT_SYSTEM_PROMPT}\n\n${surfaceMemory}` : AGENT_SYSTEM_PROMPT,
       initialUserMessage: buildAgentInitialUserMessage({
         issueIdentifier: data.issue.identifier,
         issueTitle: data.issue.title,
@@ -654,6 +654,7 @@ interface PromptCtx {
   codebaseChunks: string | null
   linkedPrs: PrContext[]
   linkedPrFailures: LinkedPrFailure[]
+  teamMemory: string
 }
 
 function buildPrompt(ctx: PromptCtx): string {
@@ -667,10 +668,11 @@ function buildPrompt(ctx: PromptCtx): string {
     })
     .join("\n\n---\n\n")
 
-  const sections = [
-    "[SYSTEM INSTRUCTIONS]",
-    MENTION_REPLY_PROMPT.trim(),
-    "",
+  // Surface memory apply — team/repo guidance high (after system instructions).
+  const memory = ctx.teamMemory ? ["[TEAM & REPOSITORY MEMORY — apply this guidance]", ctx.teamMemory, ""] : []
+  const sections = ["[SYSTEM INSTRUCTIONS]", MENTION_REPLY_PROMPT.trim(), "", ...memory]
+
+  sections.push(
     "[SURFACE]",
     "Type: issue_comment",
     `Identifier: ${ctx.issueIdentifier}`,
@@ -684,7 +686,7 @@ function buildPrompt(ctx: PromptCtx): string {
     "[QUESTION]",
     ctx.question,
     "",
-  ]
+  )
 
   if (recent) {
     sections.push("[RECENT THREAD CONTEXT — chronological]", recent, "")

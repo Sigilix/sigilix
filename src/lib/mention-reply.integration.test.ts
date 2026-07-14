@@ -38,7 +38,17 @@ vi.mock("@/src/lib/linear", () => ({
   })),
 }))
 
+const { lookupRepoByFullNameMock } = vi.hoisted(() => ({
+  lookupRepoByFullNameMock: vi.fn(async () => null as { repoId: number; installationId: number } | null),
+}))
+vi.mock("@/src/features/tenancy", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/src/features/tenancy")>()
+  return { ...actual, lookupRepoByFullName: lookupRepoByFullNameMock }
+})
+
 import { handleMention } from "@/src/lib/mention-reply"
+import { appendLearning } from "@/src/features/learnings/adapters/store"
+import type { LearningEntry } from "@/src/features/learnings/domain/types"
 import { buildLinearClient } from "@/src/lib/linear"
 import type { Env } from "@/src/shared/types/env"
 
@@ -98,6 +108,8 @@ beforeEach(() => {
   mockRetrieveChunks.mockReset()
   mockGetCommentWithIssue.mockReset()
   mockCreateComment.mockReset()
+  lookupRepoByFullNameMock.mockReset()
+  lookupRepoByFullNameMock.mockResolvedValue(null)
 })
 
 afterEach(() => {
@@ -286,5 +298,137 @@ describe("handleMention — tenant-scoped unified Linear auth", () => {
     await expect(handleMention("comment-missing-tenant", env)).rejects.toThrow(/explicit dogfood tenant token/)
     expect(humanKeyRead).toBe(false)
     expect(idFromName).not.toHaveBeenCalled()
+  })
+})
+
+// ─── Surface memory apply (OPENCLAW_SURFACE_MEMORY_APPLY) ──────────────────────
+//
+// The Linear mention-reply answer must APPLY the org∪repo learnings: an org
+// guardrail + a repo fact both land in the answer's system prompt, gated dark
+// behind the flag. Runs the agentic path (systemPrompt = messages[0]).
+describe("handleMention — surface memory apply (org∪repo learnings in the answer prompt)", () => {
+  const TS_MS = Date.parse("2026-06-15T12:00:00.000Z")
+  const INSTALL_ID = 555
+  const REPO_ID = 900
+
+  function memEntry(id: string, over: Partial<LearningEntry>): LearningEntry {
+    return {
+      id,
+      rule: `rule-${id}`,
+      polarity: "context",
+      category: "style",
+      pathGlob: null,
+      scope: "repo",
+      subjectId: String(REPO_ID),
+      source: { kind: "chat" },
+      createdTs: new Date(TS_MS).toISOString(),
+      appliedCount: 0,
+      ...over,
+    }
+  }
+
+  const ORG_POLICY = memEntry("orgP", {
+    rule: "ORG GUARDRAIL: always require a rollback plan.",
+    scope: "org",
+    subjectId: String(INSTALL_ID),
+    type: "durable_preference",
+    polarity: "require",
+  })
+  const REPO_FACT = memEntry("repoF", {
+    rule: "REPO FACT: auth lives in src/auth/session.ts.",
+    scope: "repo",
+    subjectId: String(REPO_ID),
+    type: "architectural_fact",
+    polarity: "context",
+  })
+
+  function seedComment(): void {
+    mockGetCommentWithIssue.mockResolvedValue({
+      id: "comment-mem",
+      body: "@sigilix where does auth live?",
+      user: { name: "daniel", displayName: "daniel" },
+      parent: null,
+      issue: {
+        id: "issue-mem",
+        identifier: "SIG-900",
+        title: "Auth question",
+        description: "asking about auth",
+        team: { id: "team-1", key: "SIG" },
+        comments: { nodes: [] },
+      },
+    })
+    mockCreateComment.mockResolvedValue("reply-mem")
+    mockRetrieveChunks.mockResolvedValue([])
+    // Single-turn: the model returns a final answer immediately (no tool calls).
+    mockChat.mockResolvedValue({
+      message: {
+        role: "assistant",
+        content: JSON.stringify({ answer: "Auth is in src/auth/session.ts.", confidence: 5, abstain: false }),
+      },
+      hasToolCalls: false,
+    })
+  }
+
+  function systemPrompt(): string {
+    const firstChat = mockChat.mock.calls[0]?.[0] as { messages: Array<{ role: string; content: string }> }
+    return firstChat.messages[0]!.content
+  }
+
+  it("flag ON — org guardrail + repo fact appear in the answer system prompt, org labeled above", async () => {
+    seedComment()
+    lookupRepoByFullNameMock.mockResolvedValue({ repoId: REPO_ID, installationId: INSTALL_ID })
+    const { env } = makeEnv()
+    env.OPENCLAW_GITHUB_INSTALLATION_MAP = JSON.stringify({ "Sigilix/sigilix": INSTALL_ID })
+    env.OPENCLAW_SURFACE_MEMORY_APPLY = "on"
+    await appendLearning(env, "org", String(INSTALL_ID), ORG_POLICY, TS_MS)
+    await appendLearning(env, "repo", String(REPO_ID), REPO_FACT, TS_MS)
+
+    await handleMention("comment-mem", env)
+
+    const sys = systemPrompt()
+    expect(sys).toContain(ORG_POLICY.rule)
+    expect(sys).toContain(REPO_FACT.rule)
+    expect(sys).toContain("[org policy — must follow]")
+    expect(sys.indexOf(ORG_POLICY.rule)).toBeLessThan(sys.indexOf(REPO_FACT.rule))
+  })
+
+  it("flag OFF (default) — NO memory is injected (true no-op) and no repo lookup happens", async () => {
+    seedComment()
+    lookupRepoByFullNameMock.mockResolvedValue({ repoId: REPO_ID, installationId: INSTALL_ID })
+    const { env } = makeEnv()
+    env.OPENCLAW_GITHUB_INSTALLATION_MAP = JSON.stringify({ "Sigilix/sigilix": INSTALL_ID })
+    // flag unset
+    await appendLearning(env, "org", String(INSTALL_ID), ORG_POLICY, TS_MS)
+    await appendLearning(env, "repo", String(REPO_ID), REPO_FACT, TS_MS)
+
+    await handleMention("comment-mem", env)
+
+    const sys = systemPrompt()
+    expect(sys).not.toContain(ORG_POLICY.rule)
+    expect(sys).not.toContain(REPO_FACT.rule)
+    expect(sys).not.toContain("Team & repository guidance")
+    // Off is a true no-op — the numeric-repoId lookup never runs.
+    expect(lookupRepoByFullNameMock).not.toHaveBeenCalled()
+  })
+
+  it("fail-soft — a learnings-store fault still posts the answer (no memory injected)", async () => {
+    seedComment()
+    lookupRepoByFullNameMock.mockResolvedValue({ repoId: REPO_ID, installationId: INSTALL_ID })
+    const { env } = makeEnv()
+    env.OPENCLAW_GITHUB_INSTALLATION_MAP = JSON.stringify({ "Sigilix/sigilix": INSTALL_ID })
+    env.OPENCLAW_SURFACE_MEMORY_APPLY = "on"
+    // Wrap OPENCLAW_STATE so get throws only for learnings:* keys.
+    const realGet = env.OPENCLAW_STATE.get.bind(env.OPENCLAW_STATE)
+    env.OPENCLAW_STATE.get = (async (key: string): Promise<string | null> => {
+      if (key.startsWith("learnings:")) throw new Error("kv exploded")
+      return realGet(key)
+    }) as KVNamespace["get"]
+
+    await handleMention("comment-mem", env)
+
+    // The reply is still posted…
+    expect(mockCreateComment).toHaveBeenCalled()
+    // …and no memory block is injected.
+    expect(systemPrompt()).not.toContain("Team & repository guidance")
   })
 })

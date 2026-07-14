@@ -147,6 +147,8 @@ vi.mock("@/src/features/learnings/adapters/extractor-model", () => ({
 
 import { runSlackAgent } from "@/src/lib/slack/slack-agent"
 import { learningsKey } from "@/src/features/learnings/domain/store-ops"
+import { appendLearning } from "@/src/features/learnings/adapters/store"
+import type { LearningEntry } from "@/src/features/learnings/domain/types"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
@@ -1211,5 +1213,123 @@ describe("runSlackAgent — unified learnings capture", () => {
     expect(deny.reason).toBe("lookup-error")
     expect(deny.subject_id).toBe("111")
     logSpy.mockRestore()
+  })
+})
+
+// ─── Surface memory apply (OPENCLAW_SURFACE_MEMORY_APPLY) ──────────────────────
+//
+// The Slack Q&A answer must APPLY the org∪repo learnings: an org guardrail and a
+// repo fact both land in the agent-loop system prompt, gated dark behind the flag.
+describe("runSlackAgent — surface memory apply (org∪repo learnings in the QA prompt)", () => {
+  const TS_MS = Date.parse("2026-06-15T12:00:00.000Z")
+
+  function memEntry(id: string, over: Partial<LearningEntry>): LearningEntry {
+    return {
+      id,
+      rule: `rule-${id}`,
+      polarity: "context",
+      category: "style",
+      pathGlob: null,
+      scope: "repo",
+      subjectId: "101",
+      source: { kind: "chat" },
+      createdTs: new Date(TS_MS).toISOString(),
+      appliedCount: 0,
+      ...over,
+    }
+  }
+
+  const ORG_POLICY = memEntry("orgP", {
+    rule: "ORG GUARDRAIL: always require a rollback plan.",
+    scope: "org",
+    subjectId: "111",
+    type: "durable_preference",
+    polarity: "require",
+  })
+  const REPO_FACT = memEntry("repoF", {
+    rule: "REPO FACT: auth lives in src/auth/session.ts.",
+    scope: "repo",
+    subjectId: "101",
+    type: "architectural_fact",
+    polarity: "context",
+  })
+
+  function makeMemEnv(): { env: Env; store: Map<string, string> } {
+    const store = new Map<string, string>()
+    const kv = {
+      get: async (key: string): Promise<string | null> => store.get(key) ?? null,
+      put: async (key: string, value: string): Promise<void> => {
+        store.set(key, value)
+      },
+      delete: async (key: string): Promise<void> => {
+        store.delete(key)
+      },
+      list: async () => ({ keys: [], list_complete: true }),
+    } as unknown as KVNamespace
+    const env = makeEnv()
+    env.OPENCLAW_STATE = kv
+    return { env, store }
+  }
+
+  function systemPromptFromLoop(): string {
+    const loopArgs = runAgentLoopMock.mock.calls[0]![0] as { systemPrompt: string }
+    return loopArgs.systemPrompt
+  }
+
+  it("flag ON — the org guardrail + repo fact both appear in the QA system prompt, org labeled above", async () => {
+    const { env } = makeMemEnv()
+    env.OPENCLAW_SURFACE_MEMORY_APPLY = "on"
+    await appendLearning(env, "org", "111", ORG_POLICY, TS_MS)
+    await appendLearning(env, "repo", "101", REPO_FACT, TS_MS)
+
+    await runSlackAgent(env, makeCtx({ mentionText: "how does the auth flow work?" }))
+
+    const sys = systemPromptFromLoop()
+    expect(sys).toContain(ORG_POLICY.rule)
+    expect(sys).toContain(REPO_FACT.rule)
+    expect(sys).toContain("[org policy — must follow]")
+    expect(sys.indexOf(ORG_POLICY.rule)).toBeLessThan(sys.indexOf(REPO_FACT.rule))
+  })
+
+  it("flag OFF (default) — NO memory is injected (true no-op)", async () => {
+    const { env } = makeMemEnv()
+    // flag unset
+    await appendLearning(env, "org", "111", ORG_POLICY, TS_MS)
+    await appendLearning(env, "repo", "101", REPO_FACT, TS_MS)
+
+    await runSlackAgent(env, makeCtx({ mentionText: "how does the auth flow work?" }))
+
+    const sys = systemPromptFromLoop()
+    expect(sys).not.toContain(ORG_POLICY.rule)
+    expect(sys).not.toContain(REPO_FACT.rule)
+    expect(sys).not.toContain("Team & repository guidance")
+  })
+
+  it("fail-soft — a learnings-store fault still returns the answer (no memory injected)", async () => {
+    const { env, store } = makeMemEnv()
+    env.OPENCLAW_SURFACE_MEMORY_APPLY = "on"
+    // A KV whose get throws ONLY for learnings:* keys; everything else is normal.
+    const throwingKv = {
+      get: async (key: string): Promise<string | null> => {
+        if (key.startsWith("learnings:")) throw new Error("kv exploded")
+        return store.get(key) ?? null
+      },
+      put: async (key: string, value: string): Promise<void> => {
+        store.set(key, value)
+      },
+      delete: async (key: string): Promise<void> => {
+        store.delete(key)
+      },
+      list: async () => ({ keys: [], list_complete: true }),
+    } as unknown as KVNamespace
+    env.OPENCLAW_STATE = throwingKv
+
+    const result = await runSlackAgent(env, makeCtx({ mentionText: "how does the auth flow work?" }))
+
+    // The answer is still produced.
+    expect(result.action.kind).toBe("qa")
+    expect(result.reply).toContain("The auth flow uses JWT tokens.")
+    // …with no memory block injected.
+    expect(systemPromptFromLoop()).not.toContain("Team & repository guidance")
   })
 })

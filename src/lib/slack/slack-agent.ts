@@ -16,6 +16,7 @@ import { dispatchTicketImplementation } from "@/src/lib/linear-agent-run"
 import { resolveLinearAgentRunMode } from "@/src/lib/agent-runner/mode"
 import { triageIssue } from "@/src/lib/triage"
 import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
+import { renderSurfaceMemoryForPrompt } from "@/src/features/learnings"
 import {
   makeGitHubRepositoryContextScopedIdentity,
   parseRepositoryContextScopedMode,
@@ -264,14 +265,23 @@ async function runQa(env: Env, ctx: SlackMentionContext, memScope: SlackMemorySc
 
   // These reads are independent. Keep the optional repository-context D1 deadline
   // off the serial Slack latency path; every optional leg fails soft on its own.
-  const [recalled, tools, repositoryContext, skillContext] = await Promise.all([
+  // The last leg is surface memory apply — the ORG∪REPO learnings injected into
+  // the system prompt (installationId + numeric repoId from the trusted scope,
+  // never message content); "" = off/no-op, SEAT memory never read here.
+  const [recalled, tools, repositoryContext, skillContext, memoryGuidance] = await Promise.all([
     recallSlackMemory(env, memScope, ctx.mentionText),
     buildSlackAgentTools(env, ctx),
     loadSlackRepositoryContext(env, ctx),
     loadAgentSkillContext(env, ctx.scope.installationId, ctx.mentionText, commentId),
+    renderSurfaceMemoryForPrompt({
+      env,
+      installationId: ctx.scope.installationId,
+      repoId: ctx.scope.repos[0]?.githubRepoId ?? null,
+    }),
   ])
 
   const initialUserMessage = buildInitialUserMessage(ctx, recalled, repositoryContext)
+  const baseSystem = applySkillGuidance({ system: AGENT_SYSTEM_PROMPT, user: "" }, skillContext).system
 
   const loopResult = await runAgentLoop({
     model,
@@ -279,7 +289,7 @@ async function runQa(env: Env, ctx: SlackMentionContext, memScope: SlackMemorySc
     env,
     surface: "slack-mention",
     commentId,
-    systemPrompt: applySkillGuidance({ system: AGENT_SYSTEM_PROMPT, user: "" }, skillContext).system,
+    systemPrompt: memoryGuidance ? `${baseSystem}\n\n${memoryGuidance}` : baseSystem,
     initialUserMessage,
     tools,
     finalAnswerSchema: GITHUB_MENTION_SCHEMA as unknown as Record<string, unknown>,

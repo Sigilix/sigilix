@@ -1,37 +1,84 @@
-// SIG-196: unit tests for resolveSlackScope — DB-first channel→repo scope resolver
-// with the SIGILIX_SLACK_SCOPE_MAP env map as the fallback path.
-// Env-path scope-safety rule: an owner/repo is accepted ONLY if
-// OPENCLAW_GITHUB_INSTALLATION_MAP has an EXACT "owner/repo" key. Owner-only
-// entries do NOT authorize a repo. Fail-closed.
-
 import { readFileSync } from "node:fs"
-import { describe, expect, it } from "vitest"
-import { resolveSlackScope } from "@/src/lib/slack/slack-scope"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import type { Env } from "@/src/shared/types/env"
 
-const INSTALL = JSON.stringify({ "sigilix/sigilix": "111", acme: "222" })
+const { getInstallationTokenMock, listGithubAppInstallationReposMock } = vi.hoisted(() => ({
+  getInstallationTokenMock: vi.fn(),
+  listGithubAppInstallationReposMock: vi.fn(),
+}))
+
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
+  getInstallationToken: getInstallationTokenMock,
+}))
+
+vi.mock("@/src/lib/github-user-repo-scope", () => ({
+  listGithubAppInstallationRepos: listGithubAppInstallationReposMock,
+}))
+
+import { resolveSlackScope } from "@/src/lib/slack/slack-scope"
 
 const BASE_SQL = readFileSync(new URL("../../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
 const SLACK_SQL = readFileSync(
   new URL("../../../migrations/0019_create_slack_channel_repo.sql", import.meta.url),
   "utf8",
 )
+const NOW = "2026-07-13T00:00:00.000Z"
 
-const NOW = "2026-07-11T00:00:00.000Z"
+interface LiveRepo {
+  repoId: number
+  owner: string
+  repo: string
+}
 
-/** D1 with migration 0019 applied and one workspace (team TDB → installation 42)
- *  plus `repo` rows for installation 42 (acme/api 101, acme/web 102). */
+const liveByInstallation = new Map<number, LiveRepo[]>()
+
+function makeKv(): KVNamespace {
+  return {
+    get: vi.fn(async () => null),
+    put: vi.fn(async () => undefined),
+    delete: vi.fn(async () => undefined),
+    list: vi.fn(async () => ({ keys: [], list_complete: true })),
+  } as unknown as KVNamespace
+}
+
+function makeEnv(
+  args: {
+    db?: D1Database
+    scopeMap?: string
+    installationMap?: string
+  } = {},
+): Env {
+  return {
+    OPENCLAW_STATE: makeKv(),
+    GITHUB_APP_ID: "1",
+    GITHUB_PRIVATE_KEY: "test-private-key",
+    SIGILIX_SLACK_SCOPE_MAP: args.scopeMap ?? "{}",
+    OPENCLAW_GITHUB_INSTALLATION_MAP: args.installationMap ?? "{}",
+    ...(args.db ? { SIGILIX_PLATFORM_DB: args.db } : {}),
+  } as unknown as Env
+}
+
+function allowLive(installationId: number, repos: LiveRepo[]): void {
+  liveByInstallation.set(installationId, repos)
+}
+
 async function makeSlackDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(BASE_SQL)
   await db.exec(SLACK_SQL)
-  await db
-    .prepare(
-      "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
-        " VALUES (42, 'acme', 'Organization', ?, ?)",
-    )
-    .bind(NOW, NOW)
-    .run()
+  for (const [installationId, login] of [
+    [42, "acme"],
+    [77, "globex"],
+  ] as const) {
+    await db
+      .prepare(
+        "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
+          " VALUES (?, ?, 'Organization', ?, ?)",
+      )
+      .bind(installationId, login, NOW, NOW)
+      .run()
+  }
   await db
     .prepare(
       "INSERT INTO slack_workspace (team_id, installation_id, installed_by, installed_at, updated_at)" +
@@ -40,11 +87,15 @@ async function makeSlackDb(): Promise<D1Database> {
     .bind(NOW, NOW)
     .run()
   await db
-    .prepare("INSERT INTO repo (repo_id, installation_id, full_name, updated_at) VALUES (101, 42, 'acme/api', ?)")
+    .prepare("INSERT INTO repo (repo_id, installation_id, full_name, updated_at) VALUES (101, 42, 'acme/stale', ?)")
     .bind(NOW)
     .run()
   await db
-    .prepare("INSERT INTO repo (repo_id, installation_id, full_name, updated_at) VALUES (102, 42, 'acme/web', ?)")
+    .prepare("INSERT INTO repo (repo_id, installation_id, full_name, updated_at) VALUES (102, 42, 'acme/removed', ?)")
+    .bind(NOW)
+    .run()
+  await db
+    .prepare("INSERT INTO repo (repo_id, installation_id, full_name, updated_at) VALUES (202, 77, 'globex/web', ?)")
     .bind(NOW)
     .run()
   return db
@@ -52,192 +103,288 @@ async function makeSlackDb(): Promise<D1Database> {
 
 async function bindChannel(
   db: D1Database,
-  channelId: string,
-  opts: { useAllRepos?: boolean; repos?: Array<[number, string]> },
+  args: {
+    channelId: string
+    bindingInstallationId?: number
+    useAllRepos?: boolean
+    repos?: Array<{ repoId: number; fullName: string; installationId?: number }>
+  },
 ): Promise<void> {
+  const bindingInstallationId = args.bindingInstallationId ?? 42
   await db
     .prepare(
-      "INSERT INTO slack_channel_binding (team_id, channel_id, installation_id, use_all_repos, created_at, updated_at)" +
-        " VALUES ('TDB', ?, 42, ?, ?, ?)",
+      "INSERT INTO slack_channel_binding" +
+        " (team_id, channel_id, installation_id, use_all_repos, created_at, updated_at)" +
+        " VALUES ('TDB', ?, ?, ?, ?, ?)",
     )
-    .bind(channelId, opts.useAllRepos ? 1 : 0, NOW, NOW)
+    .bind(args.channelId, bindingInstallationId, args.useAllRepos ? 1 : 0, NOW, NOW)
     .run()
-  for (const [repoId, fullName] of opts.repos ?? []) {
+  for (const repo of args.repos ?? []) {
     await db
       .prepare(
         "INSERT INTO slack_channel_repo" +
           " (team_id, channel_id, installation_id, github_repo_id, github_repo_full_name, created_at, updated_at)" +
-          " VALUES ('TDB', ?, 42, ?, ?, ?, ?)",
+          " VALUES ('TDB', ?, ?, ?, ?, ?, ?)",
       )
-      .bind(channelId, repoId, fullName, NOW, NOW)
+      .bind(args.channelId, repo.installationId ?? bindingInstallationId, repo.repoId, repo.fullName, NOW, NOW)
       .run()
   }
 }
 
-describe("resolveSlackScope — D1 binding path", () => {
-  it("resolves a DB-bound channel (explicit repo set, installation id from the binding)", async () => {
+function authorityEvents(logSpy: ReturnType<typeof vi.spyOn>): Array<Record<string, unknown>> {
+  return logSpy.mock.calls.flatMap((call) => {
+    if (typeof call[0] !== "string") return []
+    try {
+      const parsed = JSON.parse(call[0]) as unknown
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? [parsed as Record<string, unknown>] : []
+    } catch {
+      return []
+    }
+  })
+}
+
+beforeEach(() => {
+  liveByInstallation.clear()
+  getInstallationTokenMock.mockReset().mockImplementation(async (args: { installationId: number }) => {
+    return "token-" + String(args.installationId)
+  })
+  listGithubAppInstallationReposMock.mockReset().mockImplementation(async (_token: string, installationId: number) => ({
+    ok: true,
+    repos: (liveByInstallation.get(installationId) ?? []).map((repo) => ({ installationId, ...repo })),
+  }))
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+describe("resolveSlackScope exact D1 authority", () => {
+  it("reconciles an explicit binding by immutable repo id and emits the current GitHub name", async () => {
     const db = await makeSlackDb()
-    await bindChannel(db, "CDB1", { repos: [[101, "acme/api"]] })
-    const r = await resolveSlackScope(
-      { SIGILIX_SLACK_SCOPE_MAP: "{}", OPENCLAW_GITHUB_INSTALLATION_MAP: "{}", SIGILIX_PLATFORM_DB: db },
-      { teamId: "TDB", channelId: "CDB1" },
-    )
-    expect(r).toEqual({
+    await bindChannel(db, {
+      channelId: "CRENAME1",
+      repos: [{ repoId: 101, fullName: "acme/old-name" }],
+    })
+    allowLive(42, [{ repoId: 101, owner: "acme", repo: "api-renamed" }])
+
+    await expect(resolveSlackScope(makeEnv({ db }), { teamId: "TDB", channelId: "CRENAME1" })).resolves.toEqual({
       ok: true,
       scope: {
         teamId: "TDB",
-        channelId: "CDB1",
-        repos: [{ owner: "acme", repo: "api", installationId: 42 }],
+        channelId: "CRENAME1",
+        installationId: 42,
+        repos: [{ githubRepoId: 101, owner: "acme", repo: "api-renamed" }],
         linearTeam: null,
       },
     })
+    expect(getInstallationTokenMock).toHaveBeenCalledWith(expect.objectContaining({ installationId: 42 }))
+    expect(listGithubAppInstallationReposMock).toHaveBeenCalledWith("token-42", 42)
   })
-  it("expands useAllRepos from the installation's repo table", async () => {
+
+  it("expands use-all from the complete live App list, never the stale D1 repo table", async () => {
     const db = await makeSlackDb()
-    await bindChannel(db, "CALL1", { useAllRepos: true })
-    const r = await resolveSlackScope(
-      { SIGILIX_SLACK_SCOPE_MAP: "{}", OPENCLAW_GITHUB_INSTALLATION_MAP: "{}", SIGILIX_PLATFORM_DB: db },
-      { teamId: "TDB", channelId: "CALL1" },
-    )
-    expect(r.ok && r.scope.repos).toEqual([
-      { owner: "acme", repo: "api", installationId: 42 },
-      { owner: "acme", repo: "web", installationId: 42 },
+    await bindChannel(db, { channelId: "CALL1", useAllRepos: true })
+    allowLive(42, [
+      { repoId: 101, owner: "acme", repo: "api-renamed" },
+      { repoId: 103, owner: "acme", repo: "new-service" },
     ])
-  })
-  it("a DB binding is AUTHORITATIVE — it wins over an env entry for the same channel", async () => {
-    const db = await makeSlackDb()
-    await bindChannel(db, "CBOTH", { repos: [[102, "acme/web"]] })
-    const map = JSON.stringify({ "TDB:CBOTH": { repos: ["sigilix/sigilix"] } })
-    const r = await resolveSlackScope(
-      { SIGILIX_SLACK_SCOPE_MAP: map, OPENCLAW_GITHUB_INSTALLATION_MAP: INSTALL, SIGILIX_PLATFORM_DB: db },
-      { teamId: "TDB", channelId: "CBOTH" },
-    )
-    expect(r.ok && r.scope.repos).toEqual([{ owner: "acme", repo: "web", installationId: 42 }])
-  })
-  it("a DB binding with no resolvable repos fails closed (no env fallthrough)", async () => {
-    const db = await makeSlackDb()
-    await bindChannel(db, "CEMPT", { repos: [] })
-    const map = JSON.stringify({ "TDB:CEMPT": { repos: ["sigilix/sigilix"] } })
-    const r = await resolveSlackScope(
-      { SIGILIX_SLACK_SCOPE_MAP: map, OPENCLAW_GITHUB_INSTALLATION_MAP: INSTALL, SIGILIX_PLATFORM_DB: db },
-      { teamId: "TDB", channelId: "CEMPT" },
-    )
-    expect(r).toEqual({ ok: false, reason: "no-installation" })
-  })
-  it("falls back to the env map when the channel has no DB binding (founder's beta channel)", async () => {
-    const db = await makeSlackDb()
-    const map = JSON.stringify({ "T0AFVBGRDRD:C0BEL8ZAARE": { repos: ["sigilix/sigilix"] } })
-    const r = await resolveSlackScope(
-      { SIGILIX_SLACK_SCOPE_MAP: map, OPENCLAW_GITHUB_INSTALLATION_MAP: INSTALL, SIGILIX_PLATFORM_DB: db },
-      { teamId: "T0AFVBGRDRD", channelId: "C0BEL8ZAARE" },
-    )
-    expect(r).toEqual({
+
+    const result = await resolveSlackScope(makeEnv({ db }), { teamId: "TDB", channelId: "CALL1" })
+    expect(result).toEqual({
       ok: true,
       scope: {
-        teamId: "T0AFVBGRDRD",
-        channelId: "C0BEL8ZAARE",
-        repos: [{ owner: "sigilix", repo: "sigilix", installationId: 111 }],
+        teamId: "TDB",
+        channelId: "CALL1",
+        installationId: 42,
+        repos: [
+          { githubRepoId: 101, owner: "acme", repo: "api-renamed" },
+          { githubRepoId: 103, owner: "acme", repo: "new-service" },
+        ],
         linearTeam: null,
       },
     })
   })
-  it("falls back to the env map when migration 0019 hasn't been applied (table missing)", async () => {
-    const db = makeD1() // no migrations at all — the DB query throws → env fallback
-    const map = JSON.stringify({ "T1:C1": { repos: ["sigilix/sigilix"] } })
-    const r = await resolveSlackScope(
-      { SIGILIX_SLACK_SCOPE_MAP: map, OPENCLAW_GITHUB_INSTALLATION_MAP: INSTALL, SIGILIX_PLATFORM_DB: db },
-      { teamId: "T1", channelId: "C1" },
-    )
-    expect(r.ok && r.scope.repos).toEqual([{ owner: "sigilix", repo: "sigilix", installationId: 111 }])
-  })
-  it("still returns no-config for a channel unmapped in BOTH the DB and the env map", async () => {
+
+  it("denies a removed explicit repo and never falls through to an env mapping for that channel", async () => {
     const db = await makeSlackDb()
-    const r = await resolveSlackScope(
-      { SIGILIX_SLACK_SCOPE_MAP: "{}", OPENCLAW_GITHUB_INSTALLATION_MAP: INSTALL, SIGILIX_PLATFORM_DB: db },
-      { teamId: "T9", channelId: "C9" },
-    )
-    expect(r).toEqual({ ok: false, reason: "no-config" })
+    await bindChannel(db, {
+      channelId: "CREMOVED1",
+      repos: [{ repoId: 101, fullName: "acme/api" }],
+    })
+    allowLive(42, [{ repoId: 102, owner: "acme", repo: "other" }])
+    allowLive(111, [{ repoId: 901, owner: "legacy", repo: "repo" }])
+    const scopeMap = JSON.stringify({ "TDB:CREMOVED1": { repos: ["legacy/repo"] } })
+    const installationMap = JSON.stringify({ "legacy/repo": "111" })
+
+    await expect(
+      resolveSlackScope(makeEnv({ db, scopeMap, installationMap }), {
+        teamId: "TDB",
+        channelId: "CREMOVED1",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "no-installation" })
+    expect(getInstallationTokenMock).toHaveBeenCalledTimes(1)
+    expect(getInstallationTokenMock).toHaveBeenCalledWith(expect.objectContaining({ installationId: 42 }))
+  })
+
+  it("treats a workspace/binding installation mismatch as authoritative invalid D1", async () => {
+    const db = await makeSlackDb()
+    await bindChannel(db, {
+      channelId: "CWRONG1",
+      bindingInstallationId: 77,
+      repos: [{ repoId: 202, fullName: "globex/web", installationId: 77 }],
+    })
+    const scopeMap = JSON.stringify({ "TDB:CWRONG1": { repos: ["legacy/repo"] } })
+    const installationMap = JSON.stringify({ "legacy/repo": "111" })
+
+    await expect(
+      resolveSlackScope(makeEnv({ db, scopeMap, installationMap }), { teamId: "TDB", channelId: "CWRONG1" }),
+    ).resolves.toEqual({ ok: false, reason: "invalid-binding" })
+    expect(getInstallationTokenMock).not.toHaveBeenCalled()
+    expect(listGithubAppInstallationReposMock).not.toHaveBeenCalled()
+  })
+
+  it("treats an explicit-row/binding installation mismatch as authoritative invalid D1", async () => {
+    const db = await makeSlackDb()
+    await bindChannel(db, {
+      channelId: "CWRONG2",
+      repos: [{ repoId: 202, fullName: "globex/web", installationId: 77 }],
+    })
+    const scopeMap = JSON.stringify({ "TDB:CWRONG2": { repos: ["legacy/repo"] } })
+    const installationMap = JSON.stringify({ "legacy/repo": "111" })
+
+    await expect(
+      resolveSlackScope(makeEnv({ db, scopeMap, installationMap }), { teamId: "TDB", channelId: "CWRONG2" }),
+    ).resolves.toEqual({ ok: false, reason: "invalid-binding" })
+    expect(getInstallationTokenMock).not.toHaveBeenCalled()
+  })
+
+  it("fails closed when a bound D1 cannot be queried and never uses the env fallback", async () => {
+    const db = makeD1()
+    const scopeMap = JSON.stringify({ "TDB:CFAIL1": { repos: ["legacy/repo"] } })
+    const installationMap = JSON.stringify({ "legacy/repo": "111" })
+
+    await expect(
+      resolveSlackScope(makeEnv({ db, scopeMap, installationMap }), { teamId: "TDB", channelId: "CFAIL1" }),
+    ).resolves.toEqual({ ok: false, reason: "scope-unavailable" })
+    expect(getInstallationTokenMock).not.toHaveBeenCalled()
+  })
+
+  it("fails closed when the complete live App repository lookup is unavailable", async () => {
+    const db = await makeSlackDb()
+    await bindChannel(db, {
+      channelId: "CTIMEOUT1",
+      repos: [{ repoId: 101, fullName: "acme/api" }],
+    })
+    listGithubAppInstallationReposMock.mockResolvedValueOnce({ ok: false, reason: "timeout" })
+
+    await expect(resolveSlackScope(makeEnv({ db }), { teamId: "TDB", channelId: "CTIMEOUT1" })).resolves.toEqual({
+      ok: false,
+      reason: "scope-unavailable",
+    })
   })
 })
 
-describe("resolveSlackScope — env fallback path (no DB bound)", () => {
-  it("resolves an exact-match repo", async () => {
-    const map = JSON.stringify({ "T1:C1": { repos: ["sigilix/sigilix"], linearTeam: "uuid-1" } })
-    const r = await resolveSlackScope(
-      { SIGILIX_SLACK_SCOPE_MAP: map, OPENCLAW_GITHUB_INSTALLATION_MAP: INSTALL },
-      { teamId: "T1", channelId: "C1" },
-    )
-    expect(r).toEqual({
+describe("resolveSlackScope legacy authority", () => {
+  const LEGACY_SCOPE = JSON.stringify({ "TLEGACY:CLEGACY": { repos: ["sigilix/sigilix"] } })
+  const LEGACY_INSTALLATIONS = JSON.stringify({ "sigilix/sigilix": "111" })
+
+  it("uses the legacy map when D1 is unbound, reconciles live ids, and logs that authority decision", async () => {
+    allowLive(111, [{ repoId: 901, owner: "Sigilix", repo: "sigilix" }])
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+
+    await expect(
+      resolveSlackScope(makeEnv({ scopeMap: LEGACY_SCOPE, installationMap: LEGACY_INSTALLATIONS }), {
+        teamId: "TLEGACY",
+        channelId: "CLEGACY",
+      }),
+    ).resolves.toEqual({
       ok: true,
       scope: {
-        teamId: "T1",
-        channelId: "C1",
-        repos: [{ owner: "sigilix", repo: "sigilix", installationId: 111 }],
-        linearTeam: "uuid-1",
+        teamId: "TLEGACY",
+        channelId: "CLEGACY",
+        installationId: 111,
+        repos: [{ githubRepoId: 901, owner: "Sigilix", repo: "sigilix" }],
+        linearTeam: null,
       },
     })
-  })
-  it("DROPS a repo that only has an owner-only install entry (no owner fallback)", async () => {
-    const map = JSON.stringify({ "T1:C1": { repos: ["acme/widgets"] } }) // map only has "acme" owner-level
-    expect(
-      await resolveSlackScope(
-        { SIGILIX_SLACK_SCOPE_MAP: map, OPENCLAW_GITHUB_INSTALLATION_MAP: INSTALL },
-        { teamId: "T1", channelId: "C1" },
-      ),
-    ).toEqual({ ok: false, reason: "no-installation" })
-  })
-  it("DROPS a repo with no install entry but keeps the exact one", async () => {
-    const map = JSON.stringify({ "T1:C1": { repos: ["sigilix/sigilix", "evil/repo"] } })
-    const r = await resolveSlackScope(
-      { SIGILIX_SLACK_SCOPE_MAP: map, OPENCLAW_GITHUB_INSTALLATION_MAP: INSTALL },
-      { teamId: "T1", channelId: "C1" },
+    expect(authorityEvents(logSpy)).toContainEqual(
+      expect.objectContaining({
+        event: "slack-scope-authority",
+        authority: "legacy-env",
+        dbState: "unbound",
+        teamId: "TLEGACY",
+        channelId: "CLEGACY",
+      }),
     )
-    expect(r.ok && r.scope.repos.map((x) => x.repo)).toEqual(["sigilix"])
   })
-  it("denies an unconfigured channel", async () => {
-    expect(
-      await resolveSlackScope(
-        { SIGILIX_SLACK_SCOPE_MAP: "{}", OPENCLAW_GITHUB_INSTALLATION_MAP: INSTALL },
-        { teamId: "T9", channelId: "C9" },
-      ),
-    ).toEqual({ ok: false, reason: "no-config" })
+
+  it("uses the legacy map after a healthy absent D1 lookup and logs that authority decision", async () => {
+    const db = await makeSlackDb()
+    allowLive(111, [{ repoId: 901, owner: "sigilix", repo: "sigilix" }])
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+
+    const result = await resolveSlackScope(
+      makeEnv({ db, scopeMap: LEGACY_SCOPE, installationMap: LEGACY_INSTALLATIONS }),
+      { teamId: "TLEGACY", channelId: "CLEGACY" },
+    )
+    expect(result.ok && result.scope.installationId).toBe(111)
+    expect(authorityEvents(logSpy)).toContainEqual(
+      expect.objectContaining({
+        event: "slack-scope-authority",
+        authority: "legacy-env",
+        dbState: "absent",
+      }),
+    )
   })
-  it("fails closed on malformed scope JSON", async () => {
-    expect(
-      (
-        await resolveSlackScope(
-          { SIGILIX_SLACK_SCOPE_MAP: "{nope", OPENCLAW_GITHUB_INSTALLATION_MAP: INSTALL },
-          { teamId: "T1", channelId: "C1" },
-        )
-      ).ok,
-    ).toBe(false)
-  })
-  it("DROPS a repo whose installation id is '0' → no-installation", async () => {
-    const install = JSON.stringify({ "sigilix/sigilix": "0" })
-    const map = JSON.stringify({ "T1:C1": { repos: ["sigilix/sigilix"] } })
-    expect(
-      await resolveSlackScope(
-        { SIGILIX_SLACK_SCOPE_MAP: map, OPENCLAW_GITHUB_INSTALLATION_MAP: install },
-        { teamId: "T1", channelId: "C1" },
-      ),
-    ).toEqual({ ok: false, reason: "no-installation" })
-  })
-  it("returns parse-error (not throw) when repos is not an array", async () => {
-    const map = JSON.stringify({ "T1:C1": { repos: 42 } })
+
+  it("rejects a legacy channel whose repos resolve to different installations before live lookup", async () => {
+    const scopeMap = JSON.stringify({ "TLEGACY:CLEGACY": { repos: ["acme/api", "globex/web"] } })
+    const installationMap = JSON.stringify({ "acme/api": "42", "globex/web": "77" })
+
     await expect(
-      resolveSlackScope(
-        { SIGILIX_SLACK_SCOPE_MAP: map, OPENCLAW_GITHUB_INSTALLATION_MAP: INSTALL },
-        { teamId: "T1", channelId: "C1" },
-      ),
-    ).resolves.toEqual({ ok: false, reason: "parse-error" })
+      resolveSlackScope(makeEnv({ scopeMap, installationMap }), {
+        teamId: "TLEGACY",
+        channelId: "CLEGACY",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "no-installation" })
+    expect(getInstallationTokenMock).not.toHaveBeenCalled()
+    expect(listGithubAppInstallationReposMock).not.toHaveBeenCalled()
   })
-  it("fails closed → no-installation when OPENCLAW_GITHUB_INSTALLATION_MAP is malformed JSON", async () => {
-    const map = JSON.stringify({ "T1:C1": { repos: ["sigilix/sigilix"] } })
-    expect(
-      await resolveSlackScope(
-        { SIGILIX_SLACK_SCOPE_MAP: map, OPENCLAW_GITHUB_INSTALLATION_MAP: "{nope" },
-        { teamId: "T1", channelId: "C1" },
-      ),
-    ).toEqual({ ok: false, reason: "no-installation" })
+
+  it.each(["1.5", String(Number.MAX_SAFE_INTEGER + 1), true, [111], { id: 111 }])(
+    "rejects malformed or unsafe legacy installation id %# before live lookup",
+    async (installationId) => {
+      const installationMap = JSON.stringify({ "sigilix/sigilix": installationId })
+      await expect(
+        resolveSlackScope(makeEnv({ scopeMap: LEGACY_SCOPE, installationMap }), {
+          teamId: "TLEGACY",
+          channelId: "CLEGACY",
+        }),
+      ).resolves.toEqual({ ok: false, reason: "no-installation" })
+      expect(getInstallationTokenMock).not.toHaveBeenCalled()
+    },
+  )
+
+  it("fails closed when live reconciliation removes the legacy repo", async () => {
+    allowLive(111, [{ repoId: 902, owner: "sigilix", repo: "other" }])
+    await expect(
+      resolveSlackScope(makeEnv({ scopeMap: LEGACY_SCOPE, installationMap: LEGACY_INSTALLATIONS }), {
+        teamId: "TLEGACY",
+        channelId: "CLEGACY",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "no-installation" })
+  })
+
+  it("retains closed parsing and no-config failures", async () => {
+    await expect(
+      resolveSlackScope(makeEnv({ scopeMap: "{nope", installationMap: LEGACY_INSTALLATIONS }), {
+        teamId: "TLEGACY",
+        channelId: "CLEGACY",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "parse-error" })
+    await expect(resolveSlackScope(makeEnv(), { teamId: "TLEGACY", channelId: "CLEGACY" })).resolves.toEqual({
+      ok: false,
+      reason: "no-config",
+    })
   })
 })

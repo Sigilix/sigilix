@@ -56,8 +56,8 @@ Surfaces only ever branch on `decision.blocked` (true only in `enforce` + not en
 ## Where each surface maps its installation → plan
 
 - CI-triage — the PR's `installationId` (`handleCiTriage`, `src/lib/triage-ci.ts`).
-- Slack — the mentioned team's mapped repo installation
-  (`scope.repos[0].installationId`, `src/index-slack-webhook.ts`).
+- Slack — the mentioned team's exact authorized installation
+  (`scope.installationId`, `src/index-slack-webhook.ts`).
 - Linear agent — the issue's team → repo → installation (`runLinearAgentRun`,
   `src/lib/linear-agent-run.ts`).
 - Linear triage — the PR's installation (`handleLinearTriageCommand`,

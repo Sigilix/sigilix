@@ -45,14 +45,25 @@ export interface PrContext {
   mergedAt: string | null
 }
 
-export interface FetchPrContextArgs {
+export interface FetchPrContextFromEnvArgs {
   owner: string
   repo: string
   number: number
   env: Env
 }
 
-export async function fetchPullRequestContext(args: FetchPrContextArgs): Promise<PrFetchResult> {
+export interface FetchPrContextWithClientArgs {
+  owner: string
+  repo: string
+  number: number
+  client: GitHubClient
+}
+
+/** Resolve an installation from the operator map for the Linear linked-PR
+ * path, then delegate to the client-bound fetcher. Tenant-scoped callers must
+ * use `fetchPullRequestContextWithClient` so this mutable map cannot replace
+ * an already-authorized installation client. */
+export async function fetchPullRequestContextFromEnv(args: FetchPrContextFromEnvArgs): Promise<PrFetchResult> {
   const { owner, repo, number, env } = args
 
   const lookup = resolveInstallation(owner, repo, env.OPENCLAW_GITHUB_INSTALLATION_MAP)
@@ -80,6 +91,15 @@ export async function fetchPullRequestContext(args: FetchPrContextArgs): Promise
     })
     return { ok: false, reason: "error" }
   }
+
+  return fetchPullRequestContextWithClient({ owner, repo, number, client })
+}
+
+/** Fetch PR context using exactly the caller-supplied GitHub client. The
+ * client is the authorization boundary: this function does not inspect env,
+ * resolve an installation, mint a token, or construct a replacement client. */
+export async function fetchPullRequestContextWithClient(args: FetchPrContextWithClientArgs): Promise<PrFetchResult> {
+  const { owner, repo, number, client } = args
 
   // Meta is the only fatal call — without title/body we abort entirely.
   let meta: PullRequestMeta

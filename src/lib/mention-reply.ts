@@ -25,7 +25,7 @@ import {
   parseTeamGithubRepo,
   resolveInstallation,
 } from "@/src/shared/adapters/github/github-installation"
-import { fetchPullRequestContext, type PrContext } from "./github-pr-context"
+import { fetchPullRequestContextFromEnv, type PrContext } from "./github-pr-context"
 import { escapeXmlAttribute, escapeXmlText } from "@/src/shared/util/xml-escape"
 import { runAgentLoop } from "./agent-loop"
 import { createAgentTools } from "./agent-tools"
@@ -858,7 +858,7 @@ async function fetchLinkedPrs(refs: PrRef[], env: Env): Promise<LinkedPrFetchRes
   const pairs = await Promise.all(
     refs.map(async (r) => ({
       ref: r,
-      result: await fetchPullRequestContext({
+      result: await fetchPullRequestContextFromEnv({
         owner: r.owner,
         repo: r.repo,
         number: r.number,

@@ -76,7 +76,8 @@ function makeCtx(mentionText: string): SlackMentionContext {
     scope: {
       teamId: "T001",
       channelId: "C001",
-      repos: [{ owner: "sigilix", repo: "sigilix", installationId: 111 }],
+      installationId: 111,
+      repos: [{ githubRepoId: 101, owner: "sigilix", repo: "sigilix" }],
       linearTeam: "team-uuid-1",
     },
     slackUserId: "U001",
@@ -214,7 +215,7 @@ describe("runSlackAgent tenant Linear policy", () => {
     expect(dispatchMock).not.toHaveBeenCalled()
   })
 
-  it("widens the Q&A retrieve-tool repo scope to the Linear team's full configured set", async () => {
+  it("keeps the Q&A retrieve-tool repo scope pinned to the Slack channel allowlist", async () => {
     const db = await makeLinearDb()
     const nowIso = "2026-07-10T00:00:00.000Z"
     await db
@@ -286,10 +287,8 @@ describe("runSlackAgent tenant Linear policy", () => {
     expect(toolsMock).toHaveBeenCalled()
     const github = (toolsMock.mock.calls[0]![0] as { github: { allowedRepos: Array<{ owner: string; repo: string }> } })
       .github
-    // Channel scope (sigilix/sigilix) is widened with the Linear team's sibling (sigilix/web).
-    expect(github.allowedRepos).toEqual([
-      { owner: "sigilix", repo: "sigilix" },
-      { owner: "sigilix", repo: "web" },
-    ])
+    // Linear configuration includes sigilix/web, but it must not widen the
+    // Slack channel's exact repository authorization.
+    expect(github.allowedRepos).toEqual([{ owner: "sigilix", repo: "sigilix" }])
   })
 })

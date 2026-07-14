@@ -154,7 +154,8 @@ function scopeOk() {
     scope: {
       teamId: TEAM_ID,
       channelId: CHANNEL_ID,
-      repos: [{ owner: "sigilix", repo: "sigilix", installationId: 111 }],
+      installationId: 111,
+      repos: [{ githubRepoId: 101, owner: "sigilix", repo: "sigilix" }],
       linearTeam: null,
     },
   })

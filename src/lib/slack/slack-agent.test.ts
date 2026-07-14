@@ -178,7 +178,8 @@ function makeCtx(overrides: Partial<SlackMentionContext> = {}): SlackMentionCont
     scope: {
       teamId: "T001",
       channelId: "C001",
-      repos: [{ owner: "sigilix", repo: "sigilix", installationId: 111 }],
+      installationId: 111,
+      repos: [{ githubRepoId: 101, owner: "sigilix", repo: "sigilix" }],
       linearTeam: "team-uuid-1",
     },
     slackUserId: "U001",
@@ -267,7 +268,8 @@ describe("runSlackAgent — qa path", () => {
       scope: {
         teamId: "T001",
         channelId: "C001",
-        repos: [{ owner: "sigilix", repo: "sigilix", installationId: 111 }],
+        installationId: 111,
+        repos: [{ githubRepoId: 101, owner: "sigilix", repo: "sigilix" }],
         linearTeam: null,
       },
     })
@@ -416,7 +418,8 @@ describe("runSlackAgent — implement path (SIG-545 B3b)", () => {
       scope: {
         teamId: "T001",
         channelId: "C001",
-        repos: [{ owner: "sigilix", repo: "sigilix", installationId: 111 }],
+        installationId: 111,
+        repos: [{ githubRepoId: 101, owner: "sigilix", repo: "sigilix" }],
         linearTeam: null,
       },
     })
@@ -448,7 +451,8 @@ describe("runSlackAgent — null linearTeam", () => {
       scope: {
         teamId: "T001",
         channelId: "C001",
-        repos: [{ owner: "sigilix", repo: "sigilix", installationId: 111 }],
+        installationId: 111,
+        repos: [{ githubRepoId: 101, owner: "sigilix", repo: "sigilix" }],
         linearTeam: null,
       },
     })
@@ -468,6 +472,7 @@ describe("runSlackAgent — invariant guard (empty repos)", () => {
       scope: {
         teamId: "T001",
         channelId: "C001",
+        installationId: 111,
         repos: [], // violates the scope-resolver contract
         linearTeam: null,
       },
@@ -645,7 +650,8 @@ describe("runSlackAgent — B3c confirm", () => {
       scope: {
         teamId: "T001",
         channelId: "C001",
-        repos: [{ owner: "sigilix", repo: "sigilix", installationId: 111 }],
+        installationId: 111,
+        repos: [{ githubRepoId: 101, owner: "sigilix", repo: "sigilix" }],
         linearTeam: null,
       },
     })

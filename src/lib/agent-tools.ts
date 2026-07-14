@@ -20,7 +20,7 @@
 //   - AbortError from the loop's wall-clock signal is re-thrown so the
 //     loop's catch can map it to `wall_clock_exceeded`.
 
-import { fetchPullRequestContext } from "./github-pr-context"
+import { fetchPullRequestContextWithClient } from "./github-pr-context"
 import { encodeBranchName, parseBranchNamespace } from "./index-branch"
 import { indexNamespace } from "./repo-index-manifest"
 import { retrieveChunks, type RetrievedChunk } from "./retrieval"
@@ -39,8 +39,8 @@ const READ_FILE_LOOP_BUDGET_KEY = "read_file_lines:bytes_used"
 export interface AgentToolsContext {
   env: Env
   surface: "linear-mention" | "github-mention" | "slack-mention"
-  /** GitHub-only: present when surface = "github-mention", or when the
-   *  Linear team-repo mapping resolves a repo for the asker's team.
+  /** Present when a surface already holds an installation-scoped GitHub
+   *  client and repository allowlist (GitHub, configured Linear, or Slack).
    *  Drives `allowedRepo` enforcement on `fetch_pr` / `read_file_lines`. */
   github?: {
     githubClient: GitHubClient
@@ -79,7 +79,7 @@ export interface AgentTool {
 export function createAgentTools(ctx: AgentToolsContext): AgentTool[] {
   const tools: AgentTool[] = [makeRetrieveCodebase(ctx)]
   if (ctx.github) {
-    tools.push(makeFetchPr(ctx, ctx.github))
+    tools.push(makeFetchPr(ctx.github))
     tools.push(makeReadFileLines(ctx, ctx.github))
   }
   return tools
@@ -345,7 +345,7 @@ async function resolveBranchNamespace(
 
 // ───────────────────────────────────────────────────────────── fetch_pr
 
-function makeFetchPr(ctx: AgentToolsContext, gh: NonNullable<AgentToolsContext["github"]>): AgentTool {
+function makeFetchPr(gh: NonNullable<AgentToolsContext["github"]>): AgentTool {
   return {
     name: "fetch_pr",
     description:
@@ -381,15 +381,15 @@ function makeFetchPr(ctx: AgentToolsContext, gh: NonNullable<AgentToolsContext["
         }
       }
 
-      // Phase 1's fetchPullRequestContext returns its own structured
+      // The scoped-client fetcher returns its own structured
       // PrFetchResult ({ok, context} | {ok:false, reason}). Pass it
       // through verbatim — both shapes are recoverable from the
       // model's perspective.
-      const result = await fetchPullRequestContext({
+      const result = await fetchPullRequestContextWithClient({
         owner,
         repo,
         number,
-        env: ctx.env,
+        client: gh.githubClient,
       })
       if (!result.ok) {
         return { ok: false, error: `fetch_pr failed: ${result.reason}` }

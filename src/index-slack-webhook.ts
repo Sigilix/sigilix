@@ -161,9 +161,8 @@ async function runDeferredWork(
   // mapped installation (scope isolation — never another team's). If not entitled,
   // reply with a brief upsell rather than silently ignoring or answering.
   // off/shadow are non-blocking; only enforce blocks.
-  const slackInstallationId = scopeResult.scope.repos[0]?.installationId ?? 0
   const slackEntitlement = await resolveEntitlement(env, {
-    installationId: slackInstallationId,
+    installationId: scopeResult.scope.installationId,
     feature: "slack",
   })
   if (slackEntitlement.blocked) {

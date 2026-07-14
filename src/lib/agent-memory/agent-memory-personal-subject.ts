@@ -23,8 +23,10 @@ export function canonicalTenantId(value: string): string {
  *  - the portal-chat seat read (agent-memory-chat-surface.ts) walks that SAME
  *    prefix, so a convention applies to the user's chat regardless of repo.
  *  - the CLI POST /v1/memory/query is repo-scoped by Vectorize NAMESPACE
- *    (`<userId>/<repoId>`), so a sentinel record does NOT yet surface there — a
- *    dual-namespace read-union is a separate, larger change (its own PR).
+ *    (`<userId>/<repoId>`), so it ADDITIONALLY queries the sentinel namespace
+ *    (`<userId>/*`) and unions the hits into the seat results — gated on
+ *    OPENCLAW_SURFACE_MEMORY_APPLY (see agent-memory-convention-read.ts); with
+ *    the flag off (default) the sentinel namespace is never queried.
  */
 export const PERSONAL_CONVENTION_REPO_ID = "*"
 

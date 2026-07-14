@@ -24,6 +24,7 @@ import { ALL_AGENT_MEMORY_KINDS } from "./types"
 import { readHashId, readRecord, writeHashPointer, writeRecord } from "./storage"
 import { queryMemoryIds, upsertMemoryVector } from "./retrieval"
 import { loadOrgMemoryForCli, unionSeatAndOrgMemory } from "./agent-memory-org-union"
+import { loadPersonalConventionMemoryForCli, mergeSeatAndConventionMemory } from "./agent-memory-convention-read"
 import {
   canonicalTenantId,
   personalMemoryUserId,
@@ -289,6 +290,13 @@ async function respondWithManagedAppContext(args: {
  * to the seat-only response above; a failure anywhere in the org branch
  * degrades to the seat-only response, never throws.
  *
+ * Personal conventions (deferred from #950): when OPENCLAW_SURFACE_MEMORY_APPLY
+ * is "on", the caller's OWN repo-agnostic "My conventions" (the sentinel
+ * PERSONAL_CONVENTION_REPO_ID bucket) are additionally unioned into the seat
+ * results — the dual-namespace read that makes a portal-written convention
+ * surface in the CLI regardless of repo (see agent-memory-convention-read.ts).
+ * Default "off" performs no sentinel query — byte-identical to before.
+ *
  * A request may additionally opt into managed CLI app memories with
  * `includeManagedAppContext: true`. OPENCLAW_APP_MEMORY_CLI_MODE keeps this
  * dark by default; shadow performs the bounded D1 read but returns the exact
@@ -377,7 +385,47 @@ export async function handleMemoryQueryRoute(request: Request, env: Env): Promis
     }
 
     results.sort((a, b) => tsMs(b.ts) - tsMs(a.ts))
-    const seatResults = results.slice(0, limit)
+    let seatResults = results.slice(0, limit)
+
+    // Personal conventions — the dual-namespace read-union deferred from #950:
+    // the caller's OWN repo-agnostic "My conventions" (the sentinel
+    // PERSONAL_CONVENTION_REPO_ID bucket) unioned into the seat results, so a
+    // convention surfaces in the CLI regardless of repo. Gated on
+    // OPENCLAW_SURFACE_MEMORY_APPLY (the apply-everywhere flag): "off" (default)
+    // performs NO sentinel query — byte-identical to before. Additive only (the
+    // repo-scoped `limit` budget untouched); merged BEFORE the org union below so
+    // an org guardrail takes precedence over a convention exactly like over any
+    // other seat entry. Isolated in its own try/catch so a failure can never cost
+    // the caller its repo-scoped seat results.
+    const surfaceMode = resolveSurfaceMemoryApplyMode(env)
+    if (surfaceMode === "on") {
+      try {
+        const conventions = await loadPersonalConventionMemoryForCli(env, {
+          userId,
+          query: parsed.query,
+          topK,
+        })
+        if (conventions.truncated) {
+          emitTelemetry("cli-convention-memory-truncated", {
+            installationId: caller.installationId,
+            kept: conventions.entries.length,
+          })
+        }
+        const merged = mergeSeatAndConventionMemory(seatResults, conventions.entries)
+        emitTelemetry("cli-convention-memory-union", {
+          installationId: caller.installationId,
+          seatCount: seatResults.length,
+          conventionCount: conventions.entries.length,
+          added: merged.length - seatResults.length,
+        })
+        seatResults = merged
+      } catch (err) {
+        emitTelemetry("cli-convention-memory-union-failed", {
+          installationId: caller.installationId,
+          err: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
 
     // Seat∪Org memory layering — Phase 3. Isolated in its own try/catch so an
     // unexpected failure in the org branch can NEVER cost the caller its own
@@ -406,10 +454,9 @@ export async function handleMemoryQueryRoute(request: Request, env: Env): Promis
           })
         } else {
           // ON: seat ∪ org. Precedence is flag-gated on OPENCLAW_SURFACE_MEMORY_APPLY
-          // (the SAME flag #946/#947 reuse): off ⇒ seat-wins (seat first, byte-identical
-          // to before); on ⇒ org-precedence (org guardrails inviolable, a conflicting
-          // seat pref dropped).
-          const surfaceMode = resolveSurfaceMemoryApplyMode(env)
+          // (the SAME flag #946/#947 reuse, resolved once above): off ⇒ seat-wins (seat
+          // first, byte-identical to before); on ⇒ org-precedence (org guardrails
+          // inviolable, a conflicting seat pref — including a convention — dropped).
           legacyResults = unionSeatAndOrgMemory(seatResults, org.entries, surfaceMode)
           emitTelemetry("cli-org-memory-union", {
             installationId: caller.installationId,

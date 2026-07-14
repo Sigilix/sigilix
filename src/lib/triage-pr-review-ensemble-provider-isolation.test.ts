@@ -353,7 +353,7 @@ describe("GitLab review provider isolation", () => {
     expect(result.status).toBe("skipped")
     expect(result.telemetry).toMatchObject({ scmProvider: "github", installationId: 99, repoId: 123 })
     expect(mockRetrieveChunks).toHaveBeenCalled()
-    expect(mockResolveCrossRepoNamespaces).toHaveBeenCalled()
+    expect(mockResolveCrossRepoNamespaces).toHaveBeenCalledWith(env, 99, "acme", "api")
     expect(mockRetrieveMultiCorpus).toHaveBeenCalled()
     expect(mockLoadScopedRules).toHaveBeenCalled()
     expect(mockGraphContextFor).toHaveBeenCalled()

@@ -338,7 +338,7 @@ export async function listRepoFullNamesForInstallation(
   env: Pick<Env, "SIGILIX_PLATFORM_DB">,
   installationId: number,
 ): Promise<string[]> {
-  if (!env.SIGILIX_PLATFORM_DB || !Number.isInteger(installationId) || installationId <= 0) return []
+  if (!env.SIGILIX_PLATFORM_DB || !Number.isSafeInteger(installationId) || installationId <= 0) return []
   try {
     const { results } = await env.SIGILIX_PLATFORM_DB.prepare(
       "SELECT full_name FROM repo WHERE installation_id = ? ORDER BY lower(full_name), full_name",

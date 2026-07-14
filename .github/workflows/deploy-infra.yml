@@ -16,7 +16,11 @@ name: Deploy infra (container / DO / D1)
 # are untouched (those keep flowing through CF Workers Builds).
 #
 # REQUIRES two repo secrets (Settings -> Secrets and variables -> Actions):
-#   CLOUDFLARE_API_TOKEN  — Account: Workers Scripts:Edit + Cloudflare Containers:Edit + D1:Edit
+#   CLOUDFLARE_API_TOKEN  — Account: Workers Scripts:Edit + Cloudflare Containers:Edit +
+#                           D1:Edit + Account Settings:Read, User: User Details:Read.
+#                           (The container-image push calls /containers/me, which needs
+#                           User Details:Read — a token missing it 403s "Authentication
+#                           error" even with Containers:Edit. Learned the hard way, #953.)
 #   CLOUDFLARE_ACCOUNT_ID — 0de33b492cb79cc9815887aa17502be1
 # Until both exist the run FAILS LOUDLY (wrangler errors on a missing token) —
 # never a silent no-op.

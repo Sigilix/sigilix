@@ -3,7 +3,7 @@
 // Schema is owned by the migration; no ensureSchema here.
 // The shim's exec() applies the migration SQL before each test.
 
-import { describe, it, expect, beforeEach } from "vitest"
+import { describe, it, expect, beforeEach, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import {
@@ -89,6 +89,18 @@ describe("upsertTenantAndRepo", () => {
     await expect(listRepoFullNamesForInstallation(makeAbsentEnv(), 7)).resolves.toEqual([])
     await expect(listRepoFullNamesForInstallation(makeEnv(db), 0)).resolves.toEqual([])
     await expect(listRepoFullNamesForInstallation({ SIGILIX_PLATFORM_DB: makeBrokenDb() }, 7)).resolves.toEqual([])
+  })
+
+  it("rejects an unsafe installation id before touching D1", async () => {
+    const prepare = vi.fn(() => {
+      throw new Error("D1 must not be touched for an unsafe installation id")
+    })
+    const unsafeDb = { prepare } as unknown as D1Database
+
+    await expect(
+      listRepoFullNamesForInstallation({ SIGILIX_PLATFORM_DB: unsafeDb }, Number.MAX_SAFE_INTEGER + 1),
+    ).resolves.toEqual([])
+    expect(prepare).not.toHaveBeenCalled()
   })
 
   it("creates a tenant row and a repo row on first call", async () => {

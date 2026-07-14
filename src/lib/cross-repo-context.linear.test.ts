@@ -167,6 +167,88 @@ describe("resolveReviewCrossRepoNamespaces", () => {
     // configured=[] (infra unbound) → only auto-discovery siblings (acme/api, base excluded)
     expect(await resolveReviewCrossRepoNamespaces(env, 42, "acme", "infra")).toEqual(["acme/api"])
   })
+
+  it("never includes a same-owner manifest registered to another installation", async () => {
+    const db = await seed([101, 102])
+    await db
+      .prepare(
+        "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
+          " VALUES (99, 'acme', 'Organization', ?, ?)",
+      )
+      .bind(NOW, NOW)
+      .run()
+    await db
+      .prepare("INSERT INTO repo (repo_id, installation_id, full_name, updated_at) VALUES (991, 99, ?, ?)")
+      .bind("acme/private", NOW)
+      .run()
+
+    const out = await resolveReviewCrossRepoNamespaces(
+      {
+        SIGILIX_PLATFORM_DB: db,
+        OPENCLAW_STATE: makeState(["acme/api", "acme/web", "acme/private"]),
+        OPENCLAW_CROSS_REPO_CONTEXT: "on",
+      },
+      42,
+      "acme",
+      "api",
+    )
+
+    expect(out).toEqual(["acme/web"])
+    expect(out).not.toContain("acme/private")
+  })
+
+  it("keeps exact configured siblings when the automatic installation lookup fails", async () => {
+    const db = await seed([101, 102])
+    const autoReadBrokenDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property !== "prepare") return Reflect.get(target, property, receiver) as unknown
+        return (query: string) => {
+          if (query.startsWith("SELECT full_name FROM repo WHERE installation_id")) {
+            throw new Error("automatic installation lookup unavailable")
+          }
+          return target.prepare(query)
+        }
+      },
+    })
+
+    const out = await resolveReviewCrossRepoNamespaces(
+      {
+        SIGILIX_PLATFORM_DB: autoReadBrokenDb,
+        OPENCLAW_STATE: makeState(["acme/api", "acme/web", "acme/infra"]),
+        OPENCLAW_CROSS_REPO_CONTEXT: "on",
+      },
+      42,
+      "acme",
+      "api",
+    )
+
+    expect(out).toEqual(["acme/web"])
+  })
+
+  it("rejects an unsafe installation id before either resolution path touches storage", async () => {
+    const prepare = vi.fn(() => {
+      throw new Error("D1 must not be touched for an unsafe installation id")
+    })
+    const list = vi.fn(async () => ({
+      keys: [{ name: "repo-index-manifest:acme/private" }],
+      list_complete: true,
+    }))
+
+    expect(
+      await resolveReviewCrossRepoNamespaces(
+        {
+          SIGILIX_PLATFORM_DB: { prepare } as unknown as D1Database,
+          OPENCLAW_STATE: { list } as unknown as KVNamespace,
+          OPENCLAW_CROSS_REPO_CONTEXT: "on",
+        },
+        Number.MAX_SAFE_INTEGER + 1,
+        "acme",
+        "api",
+      ),
+    ).toEqual([])
+    expect(prepare).not.toHaveBeenCalled()
+    expect(list).not.toHaveBeenCalled()
+  })
 })
 
 describe("resolveLinearTeamRepoScope (Slack widen)", () => {

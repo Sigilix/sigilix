@@ -155,12 +155,12 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
   })
   const githubContext = scmProvider === "github"
   const namespace = indexNamespace(owner, repo)
-  // Cross-repo context. Resolved ONCE here as the UNION of (a) the flag-gated
-  // auto-discovery siblings (same-installation, owner-scoped manifest set) and
-  // (b) the Linear team's EXPLICITLY configured repo set for this repo (always
-  // honored — explicit config is the admin's opt-in, not gated behind the
-  // auto-discovery flag). `[]` ⇒ unchanged single-repo retrieval; capped +
-  // truncation-logged inside the resolver.
+  // Cross-repo context. Resolved ONCE here as the UNION of (a) flag-gated
+  // automatic siblings whose owner-scoped index manifests are intersected with
+  // this exact installation's D1 repo set and (b) the Linear team's EXPLICITLY
+  // configured repo set for this repo (always honored — explicit config is the
+  // admin's opt-in, not gated behind auto-discovery). `[]` means unchanged
+  // single-repo retrieval; the resolver bounds and logs only aggregate counts.
   const crossRepoNamespaces = githubContext
     ? await resolveReviewCrossRepoNamespaces(env, installationId, owner, repo)
     : []

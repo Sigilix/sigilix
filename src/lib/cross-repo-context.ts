@@ -2,18 +2,17 @@
 // is grounded not only in the PR's own repo index but also in its SIBLING repos
 // in the SAME GitHub App installation.
 //
-// ISOLATION IS THE WHOLE POINT. Siblings are resolved ONLY from
-// `listIndexedRepos(env, { owner })` — the `repo-index-manifest:*` KV set the
-// indexer writes on install / push and the uninstall handler deletes. A GitHub
-// App installation is tied to a single account (the `owner`), so filtering the
-// indexed-repo set by the PR repo's owner yields exactly the repos in the same
-// installation — never another tenant's, and never a repo the app isn't
-// installed on (no manifest ⇒ never surfaced). This module NEVER takes a repo
-// list from the caller, the diff, or user input: the only source is the
-// owner-scoped manifest set. Default OFF ⇒ `[]` ⇒ unchanged single-repo review.
+// ISOLATION IS THE WHOLE POINT. Automatic siblings are the intersection of
+// two independent sources: the exact installation's D1 `repo` rows (tenant
+// authority) and the owner-scoped `repo-index-manifest:*` KV set (proof that a
+// retrieval namespace exists). Owner alone is NOT an authorization boundary:
+// stale/reinstalled installations can share an owner. Missing or degraded D1
+// therefore fails automatic discovery closed. Default OFF ⇒ `[]` ⇒ unchanged
+// single-repo review.
 
 import { listIndexedRepos } from "@/src/shared/adapters/github/github-installation"
 import { indexNamespace } from "@/src/lib/repo-index-manifest"
+import { listRepoFullNamesForInstallation } from "@/src/features/tenancy"
 import {
   getLinearConnectionByInstallation,
   resolveLinearTeamBinding,
@@ -78,8 +77,9 @@ export async function resolveBindingRepoScope(
 
 /**
  * Hard cap on how many sibling namespaces we fan out to. Bounds the retrieval
- * budget (and blast radius) on large orgs regardless of how many repos are
- * indexed under the owner. The per-chunk cap lives in `retrieval.ts`.
+ * budget (and blast radius) on large orgs regardless of how many exact-
+ * installation repositories are indexed. The per-chunk cap lives in
+ * `retrieval.ts`.
  */
 export const MAX_CROSS_REPO_SIBLINGS = 8
 
@@ -91,33 +91,52 @@ export function crossRepoContextEnabled(env: { OPENCLAW_CROSS_REPO_CONTEXT?: str
 /**
  * Resolve the sibling repo namespaces to fold into a cross-repo review, with
  * hard tenant isolation (see the module header). Returns `[]` — i.e. unchanged
- * single-repo behavior — when the flag is off, KV is unbound, the manifest read
- * fails, or the owner has no other indexed repos. The PR repo's own namespace
- * is excluded (it is always queried as the weighted-highest primary). The
- * result is sorted (determinism) and capped at `MAX_CROSS_REPO_SIBLINGS`.
+ * single-repo behavior — when the flag is off, either store is unbound, either
+ * read fails, the reviewed base repo is not registered to the exact
+ * installation, or no other authorized repo has an index manifest. The PR
+ * repo's own namespace is excluded (it is always queried as the
+ * weighted-highest primary). The result is sorted (determinism) and capped at
+ * `MAX_CROSS_REPO_SIBLINGS`.
  */
 export async function resolveCrossRepoNamespaces(
-  env: { OPENCLAW_STATE?: KVNamespace; OPENCLAW_CROSS_REPO_CONTEXT?: string },
+  env: LinearRepoScopeEnv & { OPENCLAW_STATE?: KVNamespace; OPENCLAW_CROSS_REPO_CONTEXT?: string },
+  installationId: number,
   owner: string,
   repo: string,
 ): Promise<string[]> {
   if (!crossRepoContextEnabled(env)) return []
-  if (!env.OPENCLAW_STATE) return []
+  if (!Number.isSafeInteger(installationId) || installationId <= 0) return []
+  if (!env.OPENCLAW_STATE || !env.SIGILIX_PLATFORM_DB) return []
 
   const base = indexNamespace(owner, repo)
   let indexed: string[]
+  let installationRepos: string[]
   try {
-    // Owner-scoped: `listIndexedRepos` filters the manifest set to `<owner>/*`
-    // (lowercased), so this can only ever return same-installation namespaces.
-    indexed = await listIndexedRepos({ OPENCLAW_STATE: env.OPENCLAW_STATE }, { owner })
-  } catch (error) {
-    console.warn("cross-repo namespace resolution failed", { error: String(error), owner })
+    const resolved = await Promise.all([
+      listIndexedRepos({ OPENCLAW_STATE: env.OPENCLAW_STATE }, { owner }),
+      listRepoFullNamesForInstallation(env, installationId),
+    ])
+    ;[indexed, installationRepos] = resolved
+  } catch {
+    console.warn(JSON.stringify({ event: "review-cross-repo-automatic-resolution-failed" }))
     return []
   }
 
-  const siblings = indexed.filter((ns) => ns !== base && ns.startsWith(`${owner.toLowerCase()}/`))
-  siblings.sort()
-  return siblings.slice(0, MAX_CROSS_REPO_SIBLINGS)
+  const exactInstallation = new Set(installationRepos.map((name) => name.trim().toLowerCase()).filter(Boolean))
+  const candidates = indexed.filter((ns) => ns !== base && ns.startsWith(`${owner.toLowerCase()}/`))
+  const eligible = exactInstallation.has(base) ? candidates.filter((ns) => exactInstallation.has(ns)) : []
+  eligible.sort()
+  const capped = Math.max(0, eligible.length - MAX_CROSS_REPO_SIBLINGS)
+  console.log(
+    JSON.stringify({
+      event: "review-cross-repo-automatic-scope",
+      candidates: candidates.length,
+      eligible: eligible.length,
+      dropped: candidates.length - eligible.length,
+      capped,
+    }),
+  )
+  return eligible.slice(0, MAX_CROSS_REPO_SIBLINGS)
 }
 
 /** Map effective repo refs to `<owner>/<repo>` pairs, dropping any malformed name. */
@@ -158,7 +177,9 @@ export async function resolveLinearTeamRepoScope(
  * Sibling namespaces from the Linear team EXPLICITLY configured for `owner/repo`,
  * EXCLUDING that repo's own namespace. Unlike `resolveCrossRepoNamespaces`, this
  * is NOT gated behind `OPENCLAW_CROSS_REPO_CONTEXT` — an admin explicitly binding
- * multiple repos to the team IS the opt-in. Lowercased, deduped, sorted, capped at
+ * multiple repos to the team IS the opt-in. The binding lookup includes the exact
+ * installation id, and binding writes atomically prove every repo id belongs to
+ * that same installation. Lowercased, deduped, sorted, capped at
  * `MAX_CROSS_REPO_SIBLINGS`. Fail-soft `[]` (D1 unbound, repo not in any allowed
  * team binding, or error) ⇒ unchanged single-repo behavior.
  */
@@ -186,7 +207,8 @@ export async function resolveConfiguredCrossRepoNamespaces(
 
 /**
  * PR-review cross-repo namespaces: the union of the auto-discovery siblings
- * (`OPENCLAW_CROSS_REPO_CONTEXT`-gated, same-installation manifest set) and the
+ * (`OPENCLAW_CROSS_REPO_CONTEXT`-gated, exact-installation D1 ∩ manifest set)
+ * and the
  * team's EXPLICITLY configured Linear repo set (always honored). Configured
  * namespaces rank FIRST (admin intent), then auto-discovery; deduped, the PR
  * repo's own namespace excluded, capped at `MAX_CROSS_REPO_SIBLINGS` (truncation
@@ -198,20 +220,22 @@ export async function resolveReviewCrossRepoNamespaces(
   owner: string,
   repo: string,
 ): Promise<string[]> {
+  if (!Number.isSafeInteger(installationId) || installationId <= 0) return []
   const [configured, auto] = await Promise.all([
     resolveConfiguredCrossRepoNamespaces(env, installationId, owner, repo),
-    resolveCrossRepoNamespaces(env, owner, repo),
+    resolveCrossRepoNamespaces(env, installationId, owner, repo),
   ])
   const base = indexNamespace(owner, repo)
+  const candidates = configured.length + auto.length
   const merged = [...new Set([...configured, ...auto])].filter((ns) => ns !== base)
   if (merged.length > MAX_CROSS_REPO_SIBLINGS) {
     console.log(
       JSON.stringify({
         event: "review-cross-repo-siblings-capped",
-        owner,
-        repo,
-        total: merged.length,
-        capped: MAX_CROSS_REPO_SIBLINGS,
+        candidates,
+        eligible: merged.length,
+        dropped: candidates - merged.length,
+        capped: merged.length - MAX_CROSS_REPO_SIBLINGS,
       }),
     )
   }

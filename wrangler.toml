@@ -603,6 +603,16 @@ SIGILIX_CLI_ORG_MEMORY = "on"
 SIGILIX_MEMORY_DECAY_MODE = "shadow"
 SIGILIX_REPO_ROLE_CLASSIFY = "on"
 
+# Apply-everywhere umbrella (2026-07-14) — ON. The single flag the surface-memory
+# program rides (PRs #946 Slack/Linear mention-reply apply, #947 portal-chat apply,
+# #948 CLI org-gap + seat→org precedence, #949 repo-facts, #950/#951 seat "My
+# conventions" write + CLI seat∪org read). Off (prior default) = each surface was
+# byte-identical to before. On = org + seat memory surfaces in Slack, Linear,
+# portal chat, and the CLI, with ORG GUARDRAILS INVIOLABLE over seat (org-wins on
+# collision). Recall-safe + fail-soft (a memory-read failure never costs the
+# primary result). Reversible: set to "off" to return every surface to dark.
+SIGILIX_SURFACE_MEMORY_APPLY = "on"
+
 # sig-training-data-consent: MASTER kill switch for the consent-gated training
 # corpus. Pinned OFF — the ONLY value that enables retention is the exact string
 # "on", and it must NOT be flipped until the legal prerequisites in

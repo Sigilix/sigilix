@@ -16,10 +16,19 @@
 // corpus all degrade to "no org entries" — logged, never thrown, never
 // blocking the seat-memory response.
 //
-// ADDITIVE ONLY: this module never removes or suppresses a seat-memory
-// result — it only ever renders MORE context for the CLI's model to read.
+// PRECEDENCE is FLAG-GATED (OPENCLAW_SURFACE_MEMORY_APPLY — the SAME flag #946/#947
+// reuse; see unionSeatAndOrgMemory):
+//   - off (default) — SEAT-WINS, additive-only: seat first, org appended, a seat
+//                     result winning any id collision. Byte-identical to before.
+//   - on            — ORG-PRECEDENCE (founder decision): an org guardrail is
+//                     inviolable. Org first + labeled authoritative; a seat entry
+//                     that conflicts with an org rule (same id OR same content) is
+//                     DROPPED; the surviving seat entries follow, labeled as
+//                     applying only where they do not conflict with org policy. A
+//                     seat preference can ADD non-conflicting context but can NEVER
+//                     override, weaken, or suppress an org guardrail.
 
-import { loadLearnings, type LearningEntry } from "@/src/features/learnings"
+import { loadLearnings, type LearningEntry, type SurfaceMemoryApplyMode } from "@/src/features/learnings"
 import { LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import type { Env } from "@/src/shared/types/env"
 import type { AgentMemoryQueryResult } from "./types"
@@ -65,19 +74,69 @@ export interface OrgMemoryForCli {
   truncated: boolean
 }
 
+// ON-mode precedence labels. The org label marks a guardrail INVIOLABLE; the seat
+// label matches the portal-chat wording (agent-memory-chat-surface.ts's
+// renderSeatMemoryForPrompt) so a seat preference reads as subordinate to org
+// policy the same way everywhere it surfaces.
+const ORG_AUTHORITATIVE_LABEL = "[org policy — inviolable]"
+const SEAT_SUBORDINATE_LABEL = "[your preference — applies only where it does not conflict with org policy]"
+
 /**
- * Merge seat-memory results with org-memory additions, deduped by id — a seat
- * result wins any collision (the CLI's own memory is authoritative over an
- * org-wide rule that happens to render the same id). Seat entries stay first,
- * in their existing order; org additions are appended in their existing
- * order. In practice a real collision can't occur (seat ids are `mem_<uuid>`,
- * org ids are rendered `org:<learningId>` — disjoint namespaces by
- * construction), but the dedup guard stays as defense-in-depth.
+ * Normalize content for a seat↔org collision check: drop a leading `[tag] `
+ * (e.g. an org rule's `[required] `) and fold case + surrounding whitespace, so a
+ * seat preference that RESTATES an org rule collides even when only the polarity
+ * tag differs. Used only in ON (org-precedence) mode.
+ */
+function normalizeForCollision(content: string): string {
+  return content
+    .replace(/^\[[^\]]*\]\s*/, "")
+    .trim()
+    .toLowerCase()
+}
+
+/**
+ * Merge seat-memory results with org-memory additions. Precedence is FLAG-GATED on
+ * OPENCLAW_SURFACE_MEMORY_APPLY (`mode`; the SAME flag #946/#947 reuse), so one flag
+ * flips the whole apply-everywhere program:
+ *
+ *   - "off" (default) — SEAT-WINS, additive-only, byte-identical to before this
+ *     slice: seat entries stay first in their existing order; org additions are
+ *     appended, each org entry whose id is NOT already present (a seat result wins
+ *     any id collision). Contents are untouched.
+ *
+ *   - "on" — ORG-PRECEDENCE (founder decision — org guardrails are inviolable): org
+ *     entries come FIRST, relabeled authoritative; a seat entry that CONFLICTS with
+ *     an org rule — same id OR same (tag-stripped) content — is DROPPED; the
+ *     surviving seat entries follow, relabeled as applying only where they do not
+ *     conflict with org policy. A seat preference can ADD non-conflicting context
+ *     but can never override, weaken, or suppress an org guardrail.
+ *
+ * In practice a real id collision can't occur (seat ids are `mem_<uuid>`, org ids
+ * are rendered `org:<learningId>` — disjoint namespaces by construction); the
+ * id/content collision guards stay as defense-in-depth for the inviolable-org
+ * property. STRUCTURAL SAFETY (both modes): a seat entry is a free-text
+ * `AgentMemoryQueryResult` (no learnings `polarity`), so it can never be a
+ * `polarity:"suppress"/"require"` learning and can never reach
+ * `decideLearningSuppressions` — a seat preference can only add context.
  */
 export function unionSeatAndOrgMemory(
   seat: readonly AgentMemoryQueryResult[],
   org: readonly AgentMemoryQueryResult[],
+  mode: SurfaceMemoryApplyMode = "off",
 ): AgentMemoryQueryResult[] {
+  if (mode === "on") {
+    // ORG-PRECEDENCE: org first + authoritative label; a conflicting seat entry is
+    // dropped (org wins by id OR by tag-stripped content); the rest follow, labeled
+    // subordinate.
+    const orgIds = new Set(org.map((r) => r.id))
+    const orgContents = new Set(org.map((r) => normalizeForCollision(r.content)))
+    const seatKept = seat.filter((r) => !orgIds.has(r.id) && !orgContents.has(normalizeForCollision(r.content)))
+    return [
+      ...org.map((r) => ({ ...r, content: `${ORG_AUTHORITATIVE_LABEL} ${r.content}` })),
+      ...seatKept.map((r) => ({ ...r, content: `${SEAT_SUBORDINATE_LABEL} ${r.content}` })),
+    ]
+  }
+  // OFF (default): SEAT-WINS, additive-only — preserved byte-for-byte.
   const seatIds = new Set(seat.map((r) => r.id))
   const additions = org.filter((r) => !seatIds.has(r.id))
   return [...seat, ...additions]

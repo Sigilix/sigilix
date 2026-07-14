@@ -12,7 +12,10 @@ import { sha256Hex } from "@/src/lib/auth-bearer"
 vi.mock("./agent-context", () => ({ gatherAgentContext: vi.fn() }))
 vi.mock("@/src/shared/adapters/github/github-installation", () => ({ resolveInstallation: vi.fn() }))
 vi.mock("@/src/lib/ensemble/adapters/review-sink", () => ({ buildClient: vi.fn() }))
-vi.mock("@/src/features/learnings", () => ({ loadLearnings: vi.fn() }))
+vi.mock("@/src/features/learnings", () => ({
+  loadLearnings: vi.fn(),
+  resolveSurfaceMemoryApplyMode: vi.fn(() => "off"),
+}))
 // #146: self-heal seams. `indexNamespace` is pure — keep the real impl so the marker key is real.
 vi.mock("./index-producer", () => ({ enqueueIndexJobsForRepos: vi.fn(), isIndexerEnabled: vi.fn() }))
 vi.mock("./repo-index-manifest", () => ({
@@ -24,7 +27,7 @@ import { handleAgentContextRoute } from "./api-context-route"
 import { gatherAgentContext } from "./agent-context"
 import { resolveInstallation } from "@/src/shared/adapters/github/github-installation"
 import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
-import { loadLearnings } from "@/src/features/learnings"
+import { loadLearnings, resolveSurfaceMemoryApplyMode } from "@/src/features/learnings"
 import { enqueueIndexJobsForRepos, isIndexerEnabled } from "./index-producer"
 import { readRepoIndexManifest } from "./repo-index-manifest"
 import type { Env } from "@/src/shared/types/env"
@@ -36,6 +39,7 @@ const mockLoadLearnings = vi.mocked(loadLearnings)
 const mockEnqueue = vi.mocked(enqueueIndexJobsForRepos)
 const mockIndexerEnabled = vi.mocked(isIndexerEnabled)
 const mockReadManifest = vi.mocked(readRepoIndexManifest)
+const mockSurfaceMode = vi.mocked(resolveSurfaceMemoryApplyMode)
 const TOKEN = "ctx-secret"
 const MIGRATION_SQL_API_KEY = readFileSync(
   new URL("../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
@@ -115,6 +119,7 @@ beforeEach(() => {
   mockClient(async () => ({ headSha: "abc", treeSha: "t" }))
   mockGather.mockResolvedValue(okResult as never)
   mockLoadLearnings.mockResolvedValue(null) // default: no learnings
+  mockSurfaceMode.mockReturnValue("off") // default: surface-memory-apply OFF (repo-only)
   // #146 self-heal defaults: indexer on, no manifest yet, enqueue succeeds.
   mockIndexerEnabled.mockReturnValue(true)
   mockReadManifest.mockResolvedValue({ kind: "missing" } as never)
@@ -296,6 +301,100 @@ describe("handleAgentContextRoute — retrieval", () => {
     expect(res.status).toBe(200)
     expect(mockBuild).not.toHaveBeenCalled()
     expect(mockGather).toHaveBeenCalled()
+  })
+})
+
+// Part 1 (apply-everywhere): when OPENCLAW_SURFACE_MEMORY_APPLY is "on", /v1/context
+// grounding folds the installation's ORG guardrails into the repo-scope learnings,
+// ordered + labeled ABOVE repo facts. Off (default) stays repo-only, byte-identical.
+describe("handleAgentContextRoute — surface-memory-apply (Part 1: CLI org gap)", () => {
+  const repoStore = {
+    schemaVersion: 1,
+    scope: "repo",
+    subjectId: "1",
+    entries: [{ id: "r1", rule: "cents are integers", polarity: "require", createdTs: "2026-06-01" }],
+  }
+  const orgStore = {
+    schemaVersion: 1,
+    scope: "org",
+    subjectId: "42",
+    entries: [
+      {
+        id: "o1",
+        rule: "all PRs need a design doc",
+        polarity: "require",
+        type: "durable_preference",
+        createdTs: "2026-06-05",
+      },
+    ],
+  }
+  function byScope(repo: unknown, org: unknown) {
+    return async (_e: unknown, scope: string) => (scope === "repo" ? repo : org) as never
+  }
+
+  it("OFF (default) — repo-scope learnings ONLY, the org KV key is never read", async () => {
+    mockLoadLearnings.mockImplementation(byScope(repoStore, orgStore))
+    await handleAgentContextRoute(req(validBody), appEnv())
+    expect(mockLoadLearnings).toHaveBeenCalledWith(expect.anything(), "repo", "1")
+    expect(mockLoadLearnings).not.toHaveBeenCalledWith(expect.anything(), "org", expect.anything())
+    const call = mockGather.mock.calls[0]?.[0] as { learnings?: readonly string[] }
+    expect(call.learnings).toEqual(["[required] cents are integers"]) // repo-only, unchanged
+  })
+
+  it("ON — org guardrails are included and labeled ABOVE repo facts", async () => {
+    mockSurfaceMode.mockReturnValue("on")
+    mockLoadLearnings.mockImplementation(byScope(repoStore, orgStore))
+    await handleAgentContextRoute(req(validBody), appEnv())
+    expect(mockLoadLearnings).toHaveBeenCalledWith(expect.anything(), "org", "42") // installation id
+    expect(mockLoadLearnings).toHaveBeenCalledWith(expect.anything(), "repo", "1")
+    const call = mockGather.mock.calls[0]?.[0] as { learnings?: readonly string[] }
+    const lines = call.learnings ?? []
+    expect(lines[0]).toBe("[org policy — must follow] all PRs need a design doc") // org FIRST + labeled
+    // The org guardrail is ordered strictly ABOVE the repo fact.
+    expect(lines.indexOf("[org policy — must follow] all PRs need a design doc")).toBeLessThan(
+      lines.indexOf("[required] cents are integers"),
+    )
+  })
+
+  it("ON — a learning mirrored repo→org surfaces ONCE, as the org guardrail (org wins the dedup)", async () => {
+    mockSurfaceMode.mockReturnValue("on")
+    const shared = {
+      id: "shared",
+      rule: "no console.log in prod",
+      polarity: "require",
+      type: "durable_preference",
+      createdTs: "2026-06-10",
+    }
+    mockLoadLearnings.mockImplementation(
+      byScope({ ...repoStore, entries: [shared] }, { ...orgStore, entries: [shared] }),
+    )
+    await handleAgentContextRoute(req(validBody), appEnv())
+    const call = mockGather.mock.calls[0]?.[0] as { learnings?: readonly string[] }
+    expect(call.learnings).toEqual(["[org policy — must follow] no console.log in prod"]) // once, as org
+  })
+
+  it("ON — a non-durable org rule is labeled [org guidance] (not a must-follow policy)", async () => {
+    mockSurfaceMode.mockReturnValue("on")
+    const orgGuidance = {
+      ...orgStore,
+      entries: [{ id: "g1", rule: "we use zod for parsing", polarity: "context", createdTs: "2026-06-05" }],
+    }
+    mockLoadLearnings.mockImplementation(byScope({ ...repoStore, entries: [] }, orgGuidance))
+    await handleAgentContextRoute(req(validBody), appEnv())
+    const call = mockGather.mock.calls[0]?.[0] as { learnings?: readonly string[] }
+    expect(call.learnings).toEqual(["[org guidance] we use zod for parsing"])
+  })
+
+  it("ON — the org leg soft-fails (its KV read throws) → degrades to repo-only, never throws", async () => {
+    mockSurfaceMode.mockReturnValue("on")
+    mockLoadLearnings.mockImplementation(async (_e: unknown, scope: string) => {
+      if (scope === "org") throw new Error("org kv down")
+      return repoStore as never
+    })
+    const res = await handleAgentContextRoute(req(validBody), appEnv())
+    expect(res.status).toBe(200) // request never breaks on a memory fault
+    const call = mockGather.mock.calls[0]?.[0] as { learnings?: readonly string[] }
+    expect(call.learnings).toEqual(["[required] cents are integers"]) // repo facts still surface
   })
 })
 

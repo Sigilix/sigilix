@@ -615,6 +615,35 @@ describe("POST /v1/memory/query — Seat∪Org memory layering (Phase 3)", () =>
     })
   })
 
+  it("flag ON + OPENCLAW_SURFACE_MEMORY_APPLY on — ORG WINS: org first + labeled authoritative, seat labeled subordinate", async () => {
+    // Part 2 (precedence flip): the SAME apply flag flips the union from seat-wins to
+    // org-precedence. With OPENCLAW_SURFACE_MEMORY_APPLY off (the tests above) the org
+    // rule trails the seat fact; on, the org guardrail leads and the seat pref is
+    // relabeled subordinate.
+    const { env, token } = await perTenantEnv({
+      OPENCLAW_CLI_ORG_MEMORY: "on",
+      OPENCLAW_SURFACE_MEMORY_APPLY: "on",
+    })
+    await handleMemoryWriteRoute(writeReq(seatBody, token), env)
+    await appendLearning(
+      env,
+      "org",
+      String(ORG_INSTALL_ID),
+      orgEntry("a", { rule: "always use @/ imports", polarity: "require" }),
+    )
+    vi.spyOn(console, "log").mockImplementation(() => undefined)
+
+    const res = await handleMemoryQueryRoute(queryReq({ ...seatBody, query: "seat" }, token), env)
+    expect(res.status).toBe(200)
+    const out = (await res.json()) as { results: Array<{ id: string; content: string }> }
+    expect(out.results.length).toBe(2)
+    expect(out.results[0]?.id).toBe("org:a") // org FIRST now (precedence flipped)
+    expect(out.results[0]?.content).toBe("[org policy — inviolable] [required] always use @/ imports")
+    expect(out.results[1]?.content).toBe(
+      "[your preference — applies only where it does not conflict with org policy] seat fact",
+    )
+  })
+
   it("flag ON + no seat memory yet — response is org-only (a brand-new CLI session still inherits the org's rules)", async () => {
     const { env, token } = await perTenantEnv({ OPENCLAW_CLI_ORG_MEMORY: "on" })
     await appendLearning(env, "org", String(ORG_INSTALL_ID), orgEntry("a"))

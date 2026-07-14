@@ -486,6 +486,15 @@ new_sqlite_classes = ["AgentMcpCapabilityDO"]
 # put` instead — `[vars]` is for values that are safe to commit and
 # need a default at deploy time.
 [vars]
+# Gardener consolidation pass mode (#938). off (code default) | shadow (compute +
+# log would-merge to the `memory-gardener-digest`, NO memory mutation) | enforce
+# (write the canonical rule + tombstone the originals). Read raw off env like its
+# sibling OPENCLAW_MEMORY_DECAY_MODE (which lives as a Cloudflare dashboard var).
+# shadow = zero behavior change; the shadow->enforce flip is a deliberate gated
+# decision after watching the digest. Adding this here does NOT wipe the
+# dashboard-set memory flags (Workers Builds preserves them — proven by #935/#938).
+OPENCLAW_MEMORY_CONSOLIDATE = "shadow"
+
 # SIG-234 (2026-05-26): bake-off DISABLED because production now runs
 # the lineup that the bake-off was validating. The bake-off candidate
 # config in `src/lib/shadow-bakeoff-config.ts` is preserved as a

@@ -30,7 +30,8 @@ import {
 } from "@/src/lib/index-producer"
 import { multiCorpusEnabled } from "@/src/lib/multi-corpus"
 import { postPrOverviewStubIfNeeded } from "@/src/lib/pr-overview-stub"
-import { handleInstallReposRemoved, handleInstallationDeleted } from "@/src/lib/index-delete"
+import { handleInstallReposRemoved } from "@/src/lib/index-delete"
+import { handleGitHubInstallationDeletedLifecycle } from "@/src/lib/github-repository-context-lifecycle"
 import {
   type GitHubWebhookPayload,
   queueGithubMention,
@@ -128,54 +129,14 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
       }
     }
     if (event === "installation" && payload.action === "deleted" && typeof installationId === "number") {
-      const ownerLogin = payload.installation?.account?.login
-      if (typeof ownerLogin !== "string" || ownerLogin.length === 0) {
-        // No account.login means we can't disambiguate which repos to
-        // delete. Log + return 200 so GitHub doesn't redeliver — there's
-        // no actionable retry from our side.
-        console.error(
-          JSON.stringify({
-            event: "index-delete-missing-account-login",
-            installation_id: installationId,
-          }),
-        )
-        return new Response("missing account.login\n", { status: 200 })
-      }
-      try {
-        const { results, anyError } = await handleInstallationDeleted({
-          env,
-          installationId,
-          ownerLogin,
-          // code-reviewer HIGH-1: GitHub ships `repositories[]` on
-          // `installation.deleted`. Use it as the authoritative
-          // discovery source so we clean up indexer-disabled installs
-          // (no repo-index-manifest to find) too. KV scan still runs
-          // as a backup for orphans.
-          ...(Array.isArray(payload.repositories) ? { repositoriesFromPayload: payload.repositories } : {}),
-        })
-        if (anyError) {
-          console.error(
-            JSON.stringify({
-              event: "index-delete-fanout-partial",
-              installation_id: installationId,
-              reason: "install-deleted",
-              count: results.length,
-            }),
-          )
-          return new Response("delete fanout partial\n", { status: 503 })
-        }
-        return new Response("installation deleted\n", { status: 202 })
-      } catch (err) {
-        console.error(
-          JSON.stringify({
-            event: "index-delete-fanout-threw",
-            installation_id: installationId,
-            reason: "install-deleted",
-            err: err instanceof Error ? err.message : String(err),
-          }),
-        )
-        return new Response("delete fanout threw\n", { status: 503 })
-      }
+      return handleGitHubInstallationDeletedLifecycle({
+        env,
+        installationId,
+        ownerLogin: payload.installation?.account?.login,
+        ...(Array.isArray(payload.repositories) ? { repositoriesFromPayload: payload.repositories } : {}),
+        deliveryId: request.headers.get("x-github-delivery"),
+        nowIso: new Date().toISOString(),
+      })
     }
 
     if (

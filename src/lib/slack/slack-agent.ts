@@ -22,8 +22,7 @@ import {
   readRepositoryContextForScopedRepositories,
 } from "@/src/features/repository-context"
 import { recallSlackMemory, captureSlackMemory } from "@/src/lib/slack/slack-memory"
-import { captureInstructiveLearning, resolveLearningsMode, resolveOrgMemoryCaptureMode } from "@/src/features/learnings"
-import { isSlackOrgTeacher } from "@/src/lib/slack/slack-api"
+import { maybeCaptureSlackOrgTeach } from "./slack-agent-org-teach"
 import {
   applySkillGuidance,
   renderSkillProvenanceNote,
@@ -356,35 +355,15 @@ async function runQa(env: Env, ctx: SlackMentionContext, memScope: SlackMemorySc
   // distinguishable from a correct denial (a non-admin). The admin check runs
   // only when capture would proceed past its mode gates, so with learnings
   // capture OFF (the default) there is no `users.info` call at all.
-  const orgTeachActive =
-    resolveLearningsMode(env.OPENCLAW_LEARNINGS_MODE) !== "off" && resolveOrgMemoryCaptureMode(env) !== "off"
-  if (orgTeachActive) {
-    const authz = await isSlackOrgTeacher({ botToken: ctx.botToken, userId: ctx.slackUserId })
-    if (authz.authorized) {
-      await captureInstructiveLearning({
-        env,
-        scope: "org",
-        subjectId: String(ctx.scope.installationId),
-        surface: "chat",
-        sourceKind: "chat",
-        message: ctx.mentionText,
-        dedupeId: `slack:${ctx.channelId}:${ctx.threadTs}:${ctx.slackUserId}`,
-        actor: `slack:${ctx.slackUserId}`,
-        telemetry: { surface_detail: "slack", team_id: ctx.scope.teamId },
-      }).catch(() => {})
-    } else {
-      console.log(
-        JSON.stringify({
-          event: "org-teach-authz-denied",
-          surface: "slack",
-          reason: authz.reason,
-          actor: `slack:${ctx.slackUserId}`,
-          subject_id: String(ctx.scope.installationId),
-          team_id: ctx.scope.teamId,
-        }),
-      )
-    }
-  }
+  await maybeCaptureSlackOrgTeach(env, {
+    botToken: ctx.botToken,
+    slackUserId: ctx.slackUserId,
+    installationId: ctx.scope.installationId,
+    channelId: ctx.channelId,
+    threadTs: ctx.threadTs,
+    mentionText: ctx.mentionText,
+    teamId: ctx.scope.teamId,
+  })
 
   return { reply, action: offer ? { kind: "implement-offer" } : { kind: "qa" } }
 }

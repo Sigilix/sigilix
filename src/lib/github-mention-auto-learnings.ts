@@ -39,15 +39,25 @@ export interface GithubMentionQaLearningCapture {
  * Extract + persist (KV-append) a learning from the human's Q&A question.
  * Does NOT post any comment. Returns `null` when no learning applies (mode
  * off/shadow, unauthorized, dedupe hit, nothing extracted, or any internal
- * error) so the caller's reply is never blocked. Internal — the public entry
- * point is `postGithubMentionQaReply`.
+ * error) so the caller's reply is never blocked. On the PR surface the public
+ * entry point is `postGithubMentionQaReply` (folds the rule into the answer
+ * reply). On the genuine GitHub-Issue surface there is no host answer to fold
+ * into, so the issue-comment learnings dispatcher calls this capture-only
+ * variant directly (dark, no reply) — see `dispatchIssueCommentLearningsCapture`.
  */
-async function captureGithubMentionQaLearning(args: {
+export async function captureGithubMentionQaLearning(args: {
   client: GithubMentionLearningClient
   env: Env
   owner: string
   repo: string
-  prNumber: number
+  /**
+   * The PR the Q&A happened on, when there is one. Omitted on the genuine
+   * GitHub-Issue surface (an Issue is not a PR), which keeps
+   * `classifyLearningMemory` from anchoring a standing Issue instruction to a
+   * PR lifecycle — an undefined `prNumber` classifies as a durable preference
+   * instead of PR-scoped `ephemeral_project`.
+   */
+  prNumber?: number
   surface: GithubMentionLearningSurface
   commentId: number
   sourceComment: GithubMentionLearningSourceComment
@@ -112,7 +122,9 @@ async function captureGithubMentionQaLearning(args: {
     const { type, lifespanAnchor } = classifyLearningMemory({
       sourceKind: "qa",
       polarity: extracted.polarity,
-      prNumber: args.prNumber,
+      // `exactOptionalPropertyTypes`: omit the key when there's no PR rather
+      // than passing `undefined` (the genuine-Issue surface has no PR).
+      ...(args.prNumber !== undefined ? { prNumber: args.prNumber } : {}),
       suggestedType: extracted.memoryType ?? null,
     })
     const entry: LearningEntry = {
@@ -123,7 +135,11 @@ async function captureGithubMentionQaLearning(args: {
       pathGlob: extracted.pathGlob ?? null,
       scope: "repo",
       subjectId,
-      source: { kind: "qa", prNumber: args.prNumber, commentId: args.commentId },
+      source: {
+        kind: "qa",
+        ...(args.prNumber !== undefined ? { prNumber: args.prNumber } : {}),
+        commentId: args.commentId,
+      },
       createdTs,
       appliedCount: 0,
       authorLogin: args.sourceComment.author,

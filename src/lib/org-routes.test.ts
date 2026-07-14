@@ -26,6 +26,8 @@ describe("handleOrgRoutes dispatcher", () => {
       ["DELETE", "https://x/v1/org/1/members/dev/seat"],
       ["PUT", "https://x/v1/org/1/members"],
       ["POST", "https://x/v1/org/1/members/222"],
+      ["POST", "https://x/v1/org/1/repository-context"],
+      ["DELETE", "https://x/v1/org/1/repository-context"],
       ["GET", "https://x/v1/org/unknown"],
       ["GET", "https://x/v1/other"],
     ]
@@ -71,6 +73,18 @@ describe("handleOrgRoutes dispatcher", () => {
       expect(res!.headers.get("access-control-allow-methods")).toContain("PATCH")
       expect(res!.headers.get("access-control-allow-methods")).toContain("DELETE")
     }
+  })
+
+  it("answers CORS preflight for the repository-context path", async () => {
+    const request = new Request("https://x/v1/org/1/repository-context", {
+      method: "OPTIONS",
+      headers: { origin: PORTAL_ORIGIN },
+    })
+    const response = await handleOrgRoutes(request, env, ctx)
+    expect(response).not.toBeNull()
+    expect(response!.status).toBe(204)
+    expect(response!.headers.get("access-control-allow-methods")).toContain("GET")
+    expect(response!.headers.get("access-control-allow-methods")).toContain("PUT")
   })
 
   it("rejects malformed member-route identifiers before authentication", async () => {

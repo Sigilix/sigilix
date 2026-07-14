@@ -1299,10 +1299,10 @@ export interface Env extends AwsBedrockEnv {
   // (@/features/entitlements); ships dark.
   OPENCLAW_ENTITLEMENTS_MODE?: string
 
-  // SIG-343 PR C: platform DB — tenant/repo/usage_ledger + (SIG-38) triage_usage_ledger.
-  // Optional so a deploy that hasn't provisioned/migrated D1 stays metering-off (dark).
+  // SIG-343 platform DB; optional so an unprovisioned/unmigrated deploy stays metering-off (dark).
   SIGILIX_PLATFORM_DB?: D1Database
 
+  OPENCLAW_REPOSITORY_CONTEXT_API?: string // Exact "on" exposes the canonical org repository-context API.
   // SIG-303 full usage metering (two independent pools: ORG + SEAT). Own flag +
   // tunable per-(pool × window) caps, independent of the SIG-38 PR-review gate.
   //   SIGILIX_USAGE_METER_MODE      "shadow" (default/unknown) | "off" | "enforce".

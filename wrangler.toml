@@ -619,6 +619,11 @@ SIGILIX_ENTITLEMENTS_MODE = "enforce"
 # in D1; this master switch is the immediate all-tenant incident rollback.
 SIGILIX_SKILLS_MODE = "on"
 
+# Canonical exact-installation repository-context admin API. Migration 0024 was
+# verified on production D1 before this global rollout. Only exact "on" exposes
+# the route; remove this line (or set it to "off") and deploy to roll it back.
+SIGILIX_REPOSITORY_CONTEXT_API = "on"
+
 # SIG-138 code/dependency graph (Greptile-parity). Both default OFF.
 #   SIGILIX_GRAPH_INDEX     "off" | "shadow" | "on"  — graph WRITER in the
 #                            indexer (extract + RepoGraphDO upsert/commit).

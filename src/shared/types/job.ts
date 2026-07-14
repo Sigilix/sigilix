@@ -539,6 +539,19 @@ export type JobMessage =
   // reviews exactly the head that passed the size cap + cache check. `reservedAtMs`
   // is the POST's `Date.now()` so `settleDemoSpend` reconciles the reservation against
   // the SAME UTC-day budget key the POST reserved on.
+  // Gardener P2: a memory-consolidation cluster the cron tick
+  // (`memory-consolidate.ts`) cleared (>= 3 near-duplicate rules, no
+  // suppress+require conflict) and enqueued for the single Gardener LLM call.
+  // The consumer (`memory-consolidate-cluster.ts`) re-loads the store by these
+  // ids, runs the model, and — only in `enforce` at confidence >= threshold —
+  // appends ONE canonical rule + tombstones these originals. `scope`/`subjectId`
+  // key the `learnings:<scope>:<subjectId>` store; clustering never crosses it.
+  | {
+      type: "consolidate-cluster"
+      scope: import("@/src/features/learnings").LearningScope
+      subjectId: string
+      memberIds: string[]
+    }
   | {
       type: "demo-review"
       jobId: string

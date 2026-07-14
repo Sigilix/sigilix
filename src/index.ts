@@ -78,6 +78,7 @@ import { handleAdminAgentRunRoute, handleAdminAgentStatusRoute } from "@/src/lib
 import { tryHandleAgentMcpMachineRoute } from "@/src/lib/agent-runner/mcp-capability-route"
 import { runIndexReconciliation } from "@/src/lib/index-reconciliation"
 import { runMemoryDecayPass } from "@/src/lib/memory-decay"
+import { runMemoryConsolidatePass } from "@/src/lib/memory-consolidate"
 import { handleReviewStatusRoute } from "@/src/do/status-route"
 import { tryHandleHealthRoute } from "@/src/lib/health-routes"
 import { handleAuthRoutes } from "@/src/lib/auth-routes"
@@ -820,26 +821,14 @@ export default {
         )
       }),
     )
-    // Memory Gardener — activity-aware decay tick (Phase-1 dynamic-memory moat).
-    // Independent of the indexer gate below: it runs EVERY tick and self-gates
-    // on OPENCLAW_MEMORY_DECAY_MODE (unset → "off" → returns instantly with zero
-    // side effects, so prod is unaffected until an operator opts in). Own
-    // try/catch + own error-event name so a decay failure can never poison the
-    // reconciliation tick, and vice-versa.
-    ctx.waitUntil(
-      (async () => {
-        try {
-          await runMemoryDecayPass(env)
-        } catch (err) {
-          console.error(
-            JSON.stringify({
-              event: "memory-decay-tick-error",
-              error: err instanceof Error ? err.message : String(err),
-            }),
-          )
-        }
-      })(),
-    )
+    // Memory Gardener ticks — activity-aware decay (Phase-1) + memory
+    // consolidation (P2). Each runs EVERY tick, independent of the indexer gate
+    // below AND of each other, and self-gates on its own mode flag (unset → "off"
+    // → instant no-op, prod unaffected until an operator opts in). Each carries
+    // its own error event so a failure in one can never poison the other tick or
+    // the reconciliation tick.
+    ctx.waitUntil(runMemoryDecayPass(env).catch((err) => logTickError("memory-decay-tick-error", err)))
+    ctx.waitUntil(runMemoryConsolidatePass(env).catch((err) => logTickError("memory-consolidate-tick-error", err)))
     // Billing recovery is independent of the indexer gate below.
     ctx.waitUntil(enqueueDueOrgSeatBillingOperations(env))
     // CodeRabbit C1: gate the auto-fire on OPENCLAW_INDEXER_ENABLED. The
@@ -866,6 +855,11 @@ export default {
       })(),
     )
   },
+}
+
+/** Shared background-tick error logger for the scheduled() Gardener/reconcile ticks. */
+function logTickError(event: string, err: unknown): void {
+  console.error(JSON.stringify({ event, error: err instanceof Error ? err.message : String(err) }))
 }
 
 /**

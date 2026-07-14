@@ -179,6 +179,8 @@ export {
   CLAIM_EXTRACTOR_TIMEOUT_MS,
   LEARNING_EXTRACTOR_CONFIG,
   LEARNING_EXTRACTOR_TIMEOUT_MS,
+  GARDENER_CONSOLIDATION_CONFIG,
+  GARDENER_CONSOLIDATION_TIMEOUT_MS,
 } from "./model-provider-extractors"
 
 /** @deprecated kept for telemetry compatibility — derive from SPECIALIST_CONFIGS instead */

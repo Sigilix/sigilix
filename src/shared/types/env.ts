@@ -299,25 +299,25 @@ export interface Env extends AwsBedrockEnv {
   // Parsed by resolveConfigAsCodeMode (@/src/shared/domain/config/resolve).
   OPENCLAW_CONFIG_AS_CODE_MODE?: string
 
-  // Memory Gardener — activity-aware decay pass (Phase-1 of the dynamic-memory
-  // moat), driven off the 6h cron. Three-state, DEFAULT OFF:
-  //   - "off" (default / unset / any other value): the decay pass is fully
-  //           inert — it returns immediately without a single KV read or GitHub
-  //           call, so prod is UNAFFECTED until an operator explicitly opts in.
-  //   - "shadow": scans ephemeral memories, resolves the anchoring PR's closure
-  //               time, and LOGS each would-reap (`memory-decay-shadow`) — bakes
-  //               the eligibility signal WITHOUT archiving anything.
-  //   - "enforce": ALSO tombstones each eligible ephemeral memory into the
-  //               `learnings-archive:` keyspace (archive-then-remove; never a
-  //               hard delete). Durable tiers (durable_preference /
-  //               architectural_fact) and legacy records are NEVER touched.
-  // Bounded per tick: it covers up to MAX_LEARNINGS_KEYS_PER_TICK `learnings:`
-  // keys (lexicographic, from the start — no cross-tick cursor) and a capped
-  // number of PR lookups; beyond those bounds the tail is deferred to a future
-  // paginating slice (logged via `memory-decay-tick-truncated`), not auto-retried.
-  // Parsed by resolveMemoryDecayMode (@/features/learnings). Operator flips via
-  // `wrangler secret put OPENCLAW_MEMORY_DECAY_MODE shadow`.
+  // Memory Gardener — activity-aware decay pass (Phase-1). 6h cron, DEFAULT OFF.
+  // "off" (default/unset/any) = fully inert (no KV read, no GitHub call). "shadow"
+  // = scan ephemeral memories + resolve the anchoring PR's closure + LOG each
+  // would-reap, archiving nothing. "enforce" = ALSO tombstone each eligible
+  // ephemeral into `learnings-archive:` (archive-then-remove; never a hard delete);
+  // durable tiers + legacy records are NEVER touched. Bounded + parsed by
+  // resolveMemoryDecayMode (@/features/learnings).
   OPENCLAW_MEMORY_DECAY_MODE?: string
+
+  // Memory Gardener — memory-CONSOLIDATION pass (Gardener P2). Same 6h cron,
+  // DEFAULT OFF. "off" (default/unset/any) = fully inert (no KV scan, embed, LLM
+  // call). "shadow" = scan each `learnings:` store, runtime-embed its rules,
+  // cluster near-duplicates (cosine > 0.85, >= 3 members) + enqueue a
+  // `consolidate-cluster` job per cleared cluster; the consumer RUNS the Gardener
+  // LLM + writes the digest but appends/archives NOTHING. "enforce" = the consumer
+  // ALSO appends the ONE canonical rule + tombstones its merged inputs
+  // (archive-then-remove). A suppress+require cluster is rejected before the model.
+  // Bounded per tick; parsed by resolveMemoryConsolidateMode (@/features/learnings).
+  OPENCLAW_MEMORY_CONSOLIDATE?: string
 
   // Seat∪Org memory layering — Phase 1 (write side only). Two-state, DEFAULT
   // OFF:

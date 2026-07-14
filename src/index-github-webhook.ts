@@ -30,8 +30,10 @@ import {
 } from "@/src/lib/index-producer"
 import { multiCorpusEnabled } from "@/src/lib/multi-corpus"
 import { postPrOverviewStubIfNeeded } from "@/src/lib/pr-overview-stub"
-import { handleInstallReposRemoved } from "@/src/lib/index-delete"
-import { handleGitHubInstallationDeletedLifecycle } from "@/src/lib/github-repository-context-lifecycle"
+import {
+  handleGitHubInstallationDeletedLifecycle,
+  handleGitHubRepositoriesRemovedLifecycle,
+} from "@/src/lib/github-repository-context-lifecycle"
 import {
   type GitHubWebhookPayload,
   queueGithubMention,
@@ -98,35 +100,13 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
     // still be deletable on uninstall (GDPR / SOC 2).
     if (event === "installation_repositories" && payload.action === "removed" && typeof installationId === "number") {
       const removed = payload.repositories_removed ?? []
-      try {
-        const { results, anyError } = await handleInstallReposRemoved({
-          env,
-          installationId,
-          repositories: removed,
-        })
-        if (anyError) {
-          console.error(
-            JSON.stringify({
-              event: "index-delete-fanout-partial",
-              installation_id: installationId,
-              reason: "install-repos-removed",
-              count: results.length,
-            }),
-          )
-          return new Response("delete fanout partial\n", { status: 503 })
-        }
-        return new Response("repos-removed deleted\n", { status: 202 })
-      } catch (err) {
-        console.error(
-          JSON.stringify({
-            event: "index-delete-fanout-threw",
-            installation_id: installationId,
-            reason: "install-repos-removed",
-            err: err instanceof Error ? err.message : String(err),
-          }),
-        )
-        return new Response("delete fanout threw\n", { status: 503 })
-      }
+      return handleGitHubRepositoriesRemovedLifecycle({
+        env,
+        installationId,
+        repositories: removed,
+        deliveryId: request.headers.get("x-github-delivery"),
+        nowIso: new Date().toISOString(),
+      })
     }
     if (event === "installation" && payload.action === "deleted" && typeof installationId === "number") {
       return handleGitHubInstallationDeletedLifecycle({

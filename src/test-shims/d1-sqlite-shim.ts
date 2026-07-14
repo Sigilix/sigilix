@@ -15,6 +15,7 @@ class D1StmtShim {
     private readonly db: DatabaseSync,
     private readonly sql: string,
     private readonly params: Params = [],
+    private readonly onExecute?: () => void,
   ) {}
 
   /** True when this statement is a SELECT (read) statement. */
@@ -23,12 +24,13 @@ class D1StmtShim {
   }
 
   bind(...args: unknown[]): D1StmtShim {
-    return new D1StmtShim(this.db, this.sql, args)
+    return new D1StmtShim(this.db, this.sql, args, this.onExecute)
   }
 
   runSync(): D1Result {
     const stmt = this.db.prepare(this.sql)
     const info = stmt.run(...(this.params as Parameters<typeof stmt.run>))
+    this.onExecute?.()
     return {
       success: true,
       results: [],
@@ -46,6 +48,7 @@ class D1StmtShim {
   allSync<T = Record<string, unknown>>(): D1Result<T> {
     const stmt = this.db.prepare(this.sql)
     const rows = stmt.all(...(this.params as Parameters<typeof stmt.all>)) as T[]
+    this.onExecute?.()
     return {
       success: true,
       results: rows,
@@ -60,6 +63,7 @@ class D1StmtShim {
   async first<T = Record<string, unknown>>(colName?: string): Promise<T | null> {
     const stmt = this.db.prepare(this.sql)
     const row = stmt.get(...(this.params as Parameters<typeof stmt.get>)) as Record<string, unknown> | undefined
+    this.onExecute?.()
     if (row == null) return null
     if (colName) return (row[colName] ?? null) as T
     return row as T
@@ -68,6 +72,7 @@ class D1StmtShim {
 
 export class D1DatabaseShim {
   private readonly db: DatabaseSync
+  private bookmarkVersion = 0
 
   constructor() {
     this.db = new DatabaseSync(":memory:")
@@ -75,6 +80,15 @@ export class D1DatabaseShim {
 
   prepare(sql: string): D1StmtShim {
     return new D1StmtShim(this.db, sql)
+  }
+
+  prepareForSession(sql: string, onExecute: () => void): D1StmtShim {
+    return new D1StmtShim(this.db, sql, [], onExecute)
+  }
+
+  issueBookmark(): string {
+    this.bookmarkVersion += 1
+    return `d1-shim:${this.bookmarkVersion}`
   }
 
   async batch<T = unknown>(stmts: D1StmtShim[]): Promise<D1Result<T>[]> {
@@ -105,6 +119,39 @@ export class D1DatabaseShim {
   async exec(sql: string): Promise<{ count: number; duration: number }> {
     this.db.exec(sql)
     return { count: 0, duration: 0 }
+  }
+
+  withSession(constraintOrBookmark?: string): D1DatabaseSession {
+    const bookmark =
+      constraintOrBookmark === undefined ||
+      constraintOrBookmark === "first-primary" ||
+      constraintOrBookmark === "first-unconstrained"
+        ? null
+        : constraintOrBookmark
+    return new D1SessionShim(this, bookmark) as unknown as D1DatabaseSession
+  }
+}
+
+class D1SessionShim {
+  constructor(
+    private readonly database: D1DatabaseShim,
+    private bookmark: string | null,
+  ) {}
+
+  private readonly markExecuted = (): void => {
+    this.bookmark = this.database.issueBookmark()
+  }
+
+  prepare(sql: string): D1StmtShim {
+    return this.database.prepareForSession(sql, this.markExecuted)
+  }
+
+  async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
+    return this.database.batch<T>(statements as unknown as D1StmtShim[])
+  }
+
+  getBookmark(): string | null {
+    return this.bookmark
   }
 }
 

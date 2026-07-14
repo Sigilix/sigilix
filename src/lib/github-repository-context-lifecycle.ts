@@ -4,6 +4,7 @@ import {
   replaceRepositoryContext,
 } from "@/src/features/repository-context"
 import { handleInstallationDeleted, handleInstallReposRemoved, type InstallRepoEntry } from "@/src/lib/index-delete"
+import { deleteRepoActiveIndexByInstallationId } from "@/src/lib/repo-active-index"
 import type { Env } from "@/src/shared/types/env"
 
 const PROVIDER = "github"
@@ -287,6 +288,18 @@ export async function handleGitHubInstallationDeletedLifecycle(
   // arms. Let the index arm make progress even when D1 is unavailable, but keep the
   // combined webhook response retryable until both arms have settled.
   if (typeof args.ownerLogin !== "string" || args.ownerLogin.length === 0) {
+    let activeIndexCleanupFailed = false
+    if (args.env.SIGILIX_PLATFORM_DB !== undefined) {
+      try {
+        await deleteRepoActiveIndexByInstallationId({
+          db: args.env.SIGILIX_PLATFORM_DB,
+          installationId: args.installationId,
+        })
+      } catch (error) {
+        activeIndexCleanupFailed = true
+        emitLifecycleThrow("index-delete-installation-active-index-threw", args.installationId, error)
+      }
+    }
     console.error(
       JSON.stringify({
         event: "index-delete-missing-account-login",
@@ -295,7 +308,7 @@ export async function handleGitHubInstallationDeletedLifecycle(
     )
     // GitHub cannot repair an omitted account.login on redelivery. Preserve the established
     // terminal response only after the installation-id-scoped context cleanup has succeeded.
-    return contextResult.status === "ok"
+    return contextResult.status === "ok" && !activeIndexCleanupFailed
       ? new Response("missing account.login\n", { status: 200 })
       : new Response("delete fanout partial\n", { status: 503 })
   }

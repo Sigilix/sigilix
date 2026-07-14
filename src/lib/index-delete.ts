@@ -52,6 +52,11 @@ import { activeRunKey } from "./repo-index-active-run"
 import { deleteLexicalNamespace } from "./lexical-index"
 import { deleteGraph } from "./repo-graph-client"
 import { deleteScopedRulesManifest } from "./scoped-rules-kv"
+import {
+  deleteRepoActiveIndexByInstallationId,
+  deleteRepoActiveIndexByRepoAndInstallation,
+  deleteRepoActiveIndexByRepoId,
+} from "./repo-active-index"
 // SIG-376 (Tier-1 1/8): the per-(owner, repo) state-resolution + legacy-
 // orphan-purge IO cluster — plus the public result/arg types and the
 // Vectorize batch constant they share with the core — were lifted into a
@@ -77,6 +82,7 @@ const KV_LIST_PAGE_LIMIT = 1000
  */
 export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<DeleteResult> {
   const { env, owner, repo, reason } = args
+  const { skipActiveIndexCleanup = false, activeIndexInstallationId, activeIndexGithubRepoId } = args
   const result: DeleteResult = {
     status: "complete",
     vectorIds: 0,
@@ -166,6 +172,28 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
           ? vectorsRead.vectors.githubRepoId
           : undefined))
 
+  let activeIndexCleanupFailed = false
+  if (!skipActiveIndexCleanup && env.SIGILIX_PLATFORM_DB !== undefined) {
+    const scopedRepoId = isPositiveSafeInteger(activeIndexGithubRepoId) ? activeIndexGithubRepoId : reviewMemoryRepoId
+    try {
+      if (activeIndexInstallationId !== undefined) {
+        if (scopedRepoId === undefined) throw new Error("immutable repository id unavailable")
+        await deleteRepoActiveIndexByRepoAndInstallation({
+          db: env.SIGILIX_PLATFORM_DB,
+          githubRepoId: scopedRepoId,
+          installationId: activeIndexInstallationId,
+        })
+      } else if (reviewMemoryRepoId !== undefined) {
+        await deleteRepoActiveIndexByRepoId({ db: env.SIGILIX_PLATFORM_DB, githubRepoId: reviewMemoryRepoId })
+      }
+    } catch (err) {
+      activeIndexCleanupFailed = true
+      const message = err instanceof Error ? err.message : String(err)
+      result.errors.push(`d1.delete(repo-active-index): ${message}`)
+      console.error(JSON.stringify({ event: "index-delete-active-index-failed", owner, repo, err: message }))
+    }
+  }
+
   if (!safeToTouchRepoOnlyState) {
     console.warn(
       JSON.stringify({
@@ -186,32 +214,35 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
     // proceeds to wipe the KV id-list + manifest leaves orphaned
     // embeddings unrecoverable on redelivery.
     let vectorizeDeleteFailed = false
-    if (vectorsRead.kind === "ok") {
-      const ids = flattenIds(vectorsRead.vectors)
-      // Codex v1 N2: dedup before batched delete.
-      const uniq = Array.from(new Set(ids))
-      for (let i = 0; i < uniq.length; i += VECTORIZE_DELETE_BATCH) {
-        const batch = uniq.slice(i, i + VECTORIZE_DELETE_BATCH)
-        try {
-          await env.OPENCLAW_CODE_INDEX.deleteByIds(batch)
-          result.vectorIds += batch.length
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err)
-          result.errors.push(`vectorize.deleteByIds: ${message}`)
-          vectorizeDeleteFailed = true
-          console.error(
-            JSON.stringify({
-              event: "index-delete-vectorize-batch-failed",
-              owner,
-              repo,
-              batch_start: i,
-              batch_size: batch.length,
-              err: message,
-            }),
-          )
-        }
+    const ids = new Set(vectorsRead.kind === "ok" ? flattenIds(vectorsRead.vectors) : [])
+    if (manifestRead.kind === "ok" && manifestRead.manifest.activeIndex !== undefined) {
+      for (const pathIds of Object.values(manifestRead.manifest.activeIndex.byPath)) {
+        for (const id of pathIds) ids.add(id)
       }
-    } else if (vectorsRead.kind === "invalid") {
+    }
+    const uniq = Array.from(ids)
+    for (let i = 0; i < uniq.length; i += VECTORIZE_DELETE_BATCH) {
+      const batch = uniq.slice(i, i + VECTORIZE_DELETE_BATCH)
+      try {
+        await env.OPENCLAW_CODE_INDEX.deleteByIds(batch)
+        result.vectorIds += batch.length
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        result.errors.push(`vectorize.deleteByIds: ${message}`)
+        vectorizeDeleteFailed = true
+        console.error(
+          JSON.stringify({
+            event: "index-delete-vectorize-batch-failed",
+            owner,
+            repo,
+            batch_start: i,
+            batch_size: batch.length,
+            err: message,
+          }),
+        )
+      }
+    }
+    if (vectorsRead.kind === "invalid") {
       console.warn(
         JSON.stringify({
           event: "index-delete-vectors-kv-invalid",
@@ -221,31 +252,27 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
           kv_reason: vectorsRead.reason,
         }),
       )
-    } else {
-      // missing: pre-PR3 indexes have no vectors record. Vector data
-      // leaks until natural re-index churn populates the record.
-      // Documented limitation in the design v1.1 addendum.
+    } else if (vectorsRead.kind === "missing") {
       console.warn(
         JSON.stringify({
           event: "index-delete-no-vectors-record",
           owner,
           repo,
           reason,
-          note: "pre-PR3 index — vector deletion not possible; KV cleanup proceeds",
         }),
       )
     }
 
     // Steps 2 + 3: KV deletes for repo-index-vectors:* and
     // repo-index-manifest:*. CR Critical #2 fix: keep the id list +
-    // manifest until ALL Vectorize batches succeed. A redelivery on
+    // manifest until ALL Vectorize batches and D1 cleanup succeed. A redelivery on
     // partial failure must find the id list intact so it can retry
     // the leaked batches. Idempotency holds because deleteByIds is
     // idempotent.
-    if (vectorizeDeleteFailed) {
+    if (vectorizeDeleteFailed || activeIndexCleanupFailed) {
       console.warn(
         JSON.stringify({
-          event: "index-delete-kv-cleanup-deferred-pending-vectorize-retry",
+          event: "index-delete-kv-cleanup-deferred-pending-retry",
           owner,
           repo,
           reason,
@@ -710,6 +737,7 @@ async function listBranchStateReposForRepo(args: {
 // ---------------------------------------------------------------------
 
 export interface InstallRepoEntry {
+  id?: number | undefined
   full_name?: string | undefined
 }
 
@@ -732,6 +760,25 @@ export async function handleInstallReposRemoved(
   for (const entry of repositories) {
     const parsed = parseFullName(entry)
     if (!parsed) {
+      if (isPositiveSafeInteger(entry.id) && env.SIGILIX_PLATFORM_DB !== undefined) {
+        try {
+          await deleteRepoActiveIndexByRepoAndInstallation({
+            db: env.SIGILIX_PLATFORM_DB,
+            githubRepoId: entry.id,
+            installationId,
+          })
+        } catch (err) {
+          anyError = true
+          console.error(
+            JSON.stringify({
+              event: "index-delete-removed-repo-active-index-failed",
+              installation_id: installationId,
+              github_repo_id: entry.id,
+              err: err instanceof Error ? err.message : String(err),
+            }),
+          )
+        }
+      }
       console.warn(
         JSON.stringify({
           event: "index-delete-skip-invalid-payload",
@@ -748,12 +795,18 @@ export async function handleInstallReposRemoved(
     })
     if (branchState.errors.length > 0) anyError = true
     const stateRepos = [parsed.repo, ...branchState.repos]
-    for (const repo of stateRepos) {
+    for (const [index, repo] of stateRepos.entries()) {
       const r = await deleteRepoIndex({
         env,
         owner: parsed.owner,
         repo,
         reason: "install-repos-removed",
+        ...(index === 0
+          ? {
+              activeIndexInstallationId: installationId,
+              ...(isPositiveSafeInteger(entry.id) ? { activeIndexGithubRepoId: entry.id } : {}),
+            }
+          : { skipActiveIndexCleanup: true }),
       })
       results.push(r)
       if (r.status === "partial") anyError = true
@@ -801,6 +854,22 @@ export async function handleInstallationDeleted(
   const { env, installationId, ownerLogin, repositoriesFromPayload } = args
   const reposToDelete = new Map<string, string>() // repo → owner
   const errors: string[] = []
+
+  if (env.SIGILIX_PLATFORM_DB !== undefined) {
+    try {
+      await deleteRepoActiveIndexByInstallationId({ db: env.SIGILIX_PLATFORM_DB, installationId })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      errors.push(`d1.delete(repo-active-index-installation): ${message}`)
+      console.error(
+        JSON.stringify({
+          event: "index-delete-installation-active-index-failed",
+          installation_id: installationId,
+          err: message,
+        }),
+      )
+    }
+  }
 
   // Discovery 1: payload's repositories[] (authoritative when present).
   if (repositoriesFromPayload && repositoriesFromPayload.length > 0) {
@@ -894,6 +963,7 @@ export async function handleInstallationDeleted(
       owner,
       repo,
       reason: "install-deleted",
+      skipActiveIndexCleanup: true,
     })
     results.push(r)
     if (r.status === "partial") anyError = true
@@ -921,4 +991,8 @@ function parseFullName(entry: InstallRepoEntry): { owner: string; repo: string }
   const repo = trimmed.slice(slash + 1)
   if (owner.length === 0 || repo.length === 0) return null
   return { owner, repo }
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
 }

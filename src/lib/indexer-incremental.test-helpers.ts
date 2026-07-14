@@ -7,11 +7,14 @@
 
 import { vi } from "vitest"
 
+import type { RepoActiveIndexBuiltMode, RepoActiveIndexSnapshotV1 } from "@/src/lib/repo-active-index"
 import { repoIndexManifestKey, type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
 import { repoIndexVectorsKey, type RepoIndexVectorsV1 } from "@/src/lib/repo-index-vectors"
 import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from "@/src/shared/adapters/model"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
+
+export const TEST_GITHUB_REPO_ID = 808_247_824
 
 export function makeKvStub(): { kv: Env["OPENCLAW_STATE"]; store: Map<string, string> } {
   const store = new Map<string, string>()
@@ -108,6 +111,28 @@ export function seedIndexedRepo(kv: Map<string, string>, manifestOver: Partial<R
   }
   kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
   kv.set(repoIndexVectorsKey("Sigilix", "sigilix"), JSON.stringify(vectors))
+}
+
+export function seedActiveIndexedRepo(
+  kv: Map<string, string>,
+  builtMode: RepoActiveIndexBuiltMode,
+  activeOver: Partial<RepoActiveIndexSnapshotV1> = {},
+): void {
+  const activeIndex: RepoActiveIndexSnapshotV1 = {
+    version: 1,
+    githubRepoId: TEST_GITHUB_REPO_ID,
+    builtMode,
+    byPath: {
+      "src/changed.ts": ["1".repeat(48)],
+      "src/deleted.ts": ["2".repeat(48)],
+      "src/unchanged.ts": ["3".repeat(48)],
+    },
+    ...activeOver,
+  }
+  seedIndexedRepo(kv, {
+    githubRepoId: TEST_GITHUB_REPO_ID,
+    activeIndex,
+  })
 }
 
 export function pushJobWithChangedPaths(): Extract<JobMessage, { type: "index-repo" }> {

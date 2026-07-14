@@ -1,44 +1,6 @@
 // ARC-235 — async indexer Cloudflare Queue consumer.
-//
-// Handles `index-repo` messages enqueued by ARC-234's webhook producer
-// (and, later, by ARC-237/SIG-35 push-driven re-index). Walks the target
-// branch tree via GitHub Trees + Contents APIs using the installation
-// token, chunks files into 30-line overlapping windows, embeds via the
-// Workers AI binding, and upserts to OPENCLAW_CODE_INDEX under
-// `namespace = <owner>/<repo>` lowercased for default branches and an isolated
-// `<owner>/<repo>/__branch__/<encodedBranch>` namespace for non-default
-// branch indexes.
-//
-// State machine — bootstrap (message.shard is undefined):
-//   1. Sensitive-repo gate (consumer-side defense-in-depth).
-//   2. Resolve default branch → headSha + treeSha (Codex v2 B1: these
-//      are DIFFERENT SHAs; the Trees endpoint takes a tree SHA).
-//   3. Compute runId from (owner, repo, headSha, modelId, chunkerVersion).
-//   4. Freshness check vs manifest. Same SHA + same config → skip.
-//   5. Fetch the tree. Truncated → refuse + log + no manifest.
-//   6. Filter to indexable files (extension + skip-dirs + size).
-//   7. Process slice [0, MAX_FILES_PER_JOB) via the streaming pipeline.
-//   8. If totalFiles > MAX_FILES_PER_JOB: enqueue the next shard.
-//      Else: write the manifest.
-//
-// State machine — shard (message.shard is defined):
-//   1. Sensitive-repo gate.
-//   2. Config-drift check: recompute current runId; mismatch → refuse.
-//   3. Fetch the tree at shard.treeSha. Truncated → refuse.
-//   4. Drift check: indexableFiles.length === shard.totalFiles.
-//   5. Process slice [shard.lo, shard.hi).
-//   6. Accumulate filesDone/chunksDone. Final shard writes manifest.
-//
-// Streaming pipeline: two-buffer flush. Chunks accumulate to EMBED_BATCH
-// before embedding; embedded vectors accumulate to UPSERT_BATCH before
-// upsert. Memory stays bounded — Codex v2 MAJOR note on the 128 MB
-// isolate limit; the v1 design's "buffer all chunks then all vectors"
-// would have OOM'd on 10k+ chunk runs.
-//
-// Idempotency: chunk IDs are content-addressed (sha256 over namespace +
-// path + lines + content, truncated to 48 chars). Re-running the same
-// slice upserts to the same IDs — Vectorize replaces in place. Safe
-// against queue retries + bootstrap-side double-fanout.
+// Resolves immutable identity, walks a pinned tree, embeds one bounded slice,
+// and publishes or queues one retry-idempotent continuation.
 
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
@@ -52,11 +14,15 @@ import { enqueueWarmupRerunsForIndex } from "./warmup"
 import { commitGraph, debugActiveGraphVersion } from "./repo-graph-client"
 import { graphIndexEnabled } from "./graph-flags"
 import { resolveIndexTarget } from "./index-branch"
-// SIG-376 (SIG-318 Tier-1 7/8): the pure foundation, the embed/upsert
-// pipeline, and the persistence + enqueue cluster were lifted into sibling
-// leaf modules. Core imports back the symbols its consumer handlers call,
-// and re-exports the previously-public ones so importers + tests resolve
-// them unchanged via "@/src/lib/indexer".
+import {
+  activeIndexAllowsFreshSkip,
+  activeIndexModeForBootstrap,
+  activeIndexModeForContinuation,
+  activeIndexRunAlreadyPublished,
+  repoActiveIndexChunkCount,
+  resolveLiveGithubRepoId,
+  stageActiveIndexSlice,
+} from "./indexer-active-index"
 import {
   MAX_FILES_PER_JOB,
   effectiveChunkerVersion,
@@ -75,17 +41,9 @@ import {
   persistScopedRulesManifest,
 } from "@/src/lib/indexer-persist"
 
-// SIG-131: re-export the chunking primitives so existing consumers that
-// import them from "./indexer" (branch-retrieval.ts, tests/indexer-pure)
-// keep working unchanged after the move to chunk-core.ts.
 export { chunkFile, splitOversizedWindow } from "./chunk-core"
 export type { Chunk } from "./chunk-core"
 
-// SIG-376: re-export the previously-public symbols moved into the leaf
-// modules so every importer + test that reads them from "@/src/lib/indexer"
-// keeps resolving unchanged. Private moved symbols (`leaseAllows`,
-// `processSlice`, the persist helpers, `sha256HexPrefix`, `pathHitsSkipDir`,
-// the constants/types only used internally) are NOT re-exported.
 export {
   CHUNKER_VERSION,
   MAX_FILES_PER_JOB,
@@ -102,16 +60,7 @@ export type { ProcessSliceResult } from "@/src/lib/indexer-slice"
 
 export { graphIndexEnabled } from "./graph-flags"
 
-/**
- * True iff this run should call commitGraphVersion after writing the
- * manifest. Requires `shouldFinalize(activeRunId, runId)` — this run
- * still holds the lease (or it's absent), mirroring persistManifest.
- *
- * SIG-156 PR3: the prior `manifestWritten` gate was removed alongside
- * the manifest-write hardening — persistManifest now throws on KV
- * failure, so callers reaching shouldCommitGraph have a written manifest
- * by construction.
- */
+/** True when this run still owns finalization and may commit its graph. */
 export function shouldCommitGraph(args: { activeRunId: string | null; runId: string }): boolean {
   return shouldFinalize(args.activeRunId, args.runId)
 }
@@ -136,11 +85,6 @@ export async function handleIndexRepoJob(args: ConsumerArgs): Promise<void> {
 
 async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void> {
   const { owner, repo, installationId, reason } = job
-  // SIG-243 Phase 1: forward the immutable repo ID from the queue
-  // message to persistManifest so the new manifest record carries
-  // `githubRepoId`. Legacy in-flight messages (no field) flow through
-  // as undefined; the field is omitted from the manifest in that case.
-  const githubRepoId = job.githubRepoId
   const astOn = astChunkingEnabled(env)
 
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
@@ -175,6 +119,10 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     )
     return
   }
+  const githubRepoId = resolveLiveGithubRepoId({
+    liveGithubRepoId: repoMeta.id,
+    queuedGithubRepoId: job.githubRepoId,
+  })
   const target = await resolveIndexTarget({
     owner,
     repo,
@@ -183,6 +131,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   })
   const namespace = target.namespace
   const stateRepo = target.stateRepo
+  const activeIndexMode = activeIndexModeForBootstrap(env, target.isDefault)
 
   // SIG-422: read the prior manifest BEFORE resolving the head. The PUSH
   // pin (below) is only safe to apply when this run's push chain is intact
@@ -190,6 +139,13 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   // next commit, so the manifest can only advance, never regress. The read
   // is otherwise unchanged (the freshness check + incremental path reuse it).
   const existing = await readRepoIndexManifest(env, owner, stateRepo)
+  if (existing.kind === "ok") {
+    resolveLiveGithubRepoId({
+      liveGithubRepoId: githubRepoId,
+      queuedGithubRepoId: job.githubRepoId,
+      priorManifest: existing.manifest,
+    })
+  }
   const priorHeadSha = existing.kind === "ok" ? existing.manifest.headSha : undefined
   const head = await resolveIndexHead({ client, owner, repo, target, job, priorHeadSha })
   if (!head) {
@@ -226,7 +182,16 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       currentEmbeddingDim: EMBEDDING_DIMENSIONS,
       currentChunkerVersion: effectiveChunkerVersion(astOn),
     })
-    if (fresh) {
+    if (
+      fresh &&
+      (await activeIndexAllowsFreshSkip({
+        env,
+        mode: activeIndexMode,
+        isDefaultBranch: target.isDefault,
+        githubRepoId,
+        manifest: existing.manifest,
+      }))
+    ) {
       if (
         !target.isDefault ||
         (await freshManifestHasActiveGraph({ env, owner, repo, runId, graphRunId: existing.manifest.graphRunId }))
@@ -271,6 +236,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       headSha,
       treeSha,
       runId,
+      activeIndexMode,
       astChunking: astOn,
       existingManifest: existing,
       chunkerVersion: effectiveChunkerVersion(astOn),
@@ -280,11 +246,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   }
 
   // SIG-136: claim the run lease as the FIRST side-effecting write after
-  // deciding to (re-)index, so claim-order reflects run START order. An
-  // older run that started embedding earlier must not overwrite a newer
-  // run's lease late (after its own slow processSlice) — claiming here,
-  // before getTree / the empty-repo branch / processSlice, closes that
-  // embedding-window clobber. Throws on KV failure → queue retries.
+  // Claim before slow work so an older run cannot overwrite a newer lease late.
   await writeActiveRun(env, owner, stateRepo, runId)
 
   const tree = await client.getRepoTree(owner, repo, treeSha)
@@ -327,23 +289,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     }),
   )
 
-  // SIG-172: enumerate SIGILIX.md + .sigilix/rules/*.md at any depth
-  // and persist the manifest separately from the vector index. Runs
-  // only on the default-branch bootstrap (branch indexes share the
-  // default branch's rules; the per-PR review path reads the
-  // repo-level key). Best-effort — never fails the index job, because
-  // vectors are the load-bearing artifact and scoped rules are
-  // additive prompt context.
-  //
-  // SIG-172 M2 (fix-up): the rule-file walk + content fetches can take
-  // seconds on a large repo. An older overlapping bootstrap that
-  // started before a newer run (and thus lost the lease at writeActiveRun
-  // above) could still reach the writeScopedRulesManifest call AFTER
-  // the newer run had finalised its own scoped-rules manifest, and
-  // clobber it with stale rules. Gate the WRITE behind the same lease
-  // check that protects persistManifest / persistVectorIds. The walk +
-  // fetches are still attempted (cheap to throw away), but the actual
-  // KV write only happens if this run still holds the lease.
+  // Default-branch scoped rules are additive, best-effort, and lease-gated.
   if (target.isDefault) {
     try {
       await persistScopedRulesManifest({
@@ -389,6 +335,19 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       )
       return
     }
+    const activeSlice = await stageActiveIndexSlice({
+      env,
+      mode: activeIndexMode,
+      isDefaultBranch: target.isDefault,
+      githubRepoId,
+      installationId,
+      runId,
+      totalFiles: 0,
+      lo: 0,
+      hi: 0,
+      idsByPath: {},
+      finalize: true,
+    })
     await persistManifest({
       env,
       owner,
@@ -404,6 +363,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       chunkCount: 0,
       shardCount: 1,
       chunkerVersion: effectiveChunkerVersion(astOn),
+      ...(activeSlice.activeIndex ? { activeIndex: activeSlice.activeIndex } : {}),
       roleClassify: { client, treeEntries: tree.tree },
     })
     console.log(
@@ -454,13 +414,10 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     astChunking: astOn,
   })
 
-  // ARC-238 Codex v1 B3 + code-reviewer MED-2: vectors-record write
-  // is NOT best-effort, and a `stale-skip` outcome MUST stop the
-  // chain. If proceed=false, the caller doesn't write the manifest
-  // and doesn't enqueue the next shard — the authoritative run
-  // already on disk owns those writes.
-  // SIG-136: the run lease was claimed early (right after the freshness
-  // gate, before processSlice) so a stale run can't clobber it late.
+  // A stale vector-ledger merge must stop this run before D1 admits the slice,
+  // publish, or enqueue. Keep D1 staging below both processSlice (which durably
+  // upserts every referenced vector) and this ledger write: completed_through
+  // certifies that the slice's referenced vector IDs already exist.
   const vectorsResult = await persistVectorIds({
     env,
     owner,
@@ -482,6 +439,20 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     )
     return
   }
+  const activeSlice = await stageActiveIndexSlice({
+    env,
+    mode: activeIndexMode,
+    isDefaultBranch: target.isDefault,
+    githubRepoId,
+    installationId,
+    runId,
+    totalFiles,
+    lo: 0,
+    hi: sliceHi,
+    idsByPath,
+    finalize: totalFiles <= MAX_FILES_PER_JOB,
+  })
+  if (activeSlice.runSealed && activeSlice.activeIndex === undefined) return
 
   if (totalFiles > MAX_FILES_PER_JOB) {
     // Hand off to the next continuation shard. Final shard will write
@@ -505,6 +476,8 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       githubRepoId,
       installationId,
       reason,
+      activeIndexMode,
+      ...(activeSlice.bookmark ? { activeIndexBookmark: activeSlice.bookmark } : {}),
       ...(target.isDefault ? {} : { branch: target.branch }),
       lo: MAX_FILES_PER_JOB,
       hi: Math.min(MAX_FILES_PER_JOB * 2, totalFiles),
@@ -536,6 +509,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     )
     return
   }
+  const publishedChunkCount = activeSlice.activeIndex ? repoActiveIndexChunkCount(activeSlice.activeIndex) : chunkCount
   await persistManifest({
     env,
     owner,
@@ -548,9 +522,10 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     branch: target.isDefault ? null : target.branch,
     defaultBranch: target.defaultBranch,
     fileCount: sliceHi,
-    chunkCount,
+    chunkCount: publishedChunkCount,
     shardCount: 1,
     chunkerVersion: effectiveChunkerVersion(astOn),
+    ...(activeSlice.activeIndex ? { activeIndex: activeSlice.activeIndex } : {}),
     roleClassify: { client, treeEntries: tree.tree },
   })
   console.log(
@@ -561,7 +536,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       branch: target.isDefault ? null : target.branch,
       run_id: runId,
       file_count: sliceHi,
-      chunk_count: chunkCount,
+      chunk_count: publishedChunkCount,
       shard_count: 1,
     }),
   )
@@ -582,17 +557,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       )
     }
   }
-  // ARC-236: fan out reruns for PRs that warmed up. Best-effort —
-  // failure to enqueue doesn't fail the index job (the indexing
-  // itself succeeded; reruns are a customer-UX upgrade).
-  // M4 (CR PR #80): pass `runId` so the helper's KV breadcrumb
-  // dedupes against queue-retry redelivery of this index-repo job.
-  // CR phase-end catch on commit 4: wrap in try/catch — internal KV
-  // calls are already best-effort, but a transport error from
-  // listOpenPullRequests is caught + swallowed by the helper, yet
-  // an unforeseen path could still throw. Belt-and-suspenders: any
-  // throw here must NOT fail the index job (which already
-  // succeeded) and trigger an indexer queue retry → full re-embed.
+  // Warmup reruns are deduped and best-effort after the index is durable.
   try {
     if (target.isDefault)
       await enqueueWarmupRerunsForIndex({
@@ -662,11 +627,6 @@ async function handleShardJob(
   env: Env,
 ): Promise<void> {
   const { owner, repo, installationId, reason } = job
-  // SIG-243 Phase 1: shard messages carry the parent run's
-  // githubRepoId so the final manifest write at the end of the chain
-  // stamps it correctly. Bootstrap (`handleBootstrapJob`) forwards
-  // it into the first shard message via `enqueueShard` below.
-  const githubRepoId = job.githubRepoId
   const resolvedDefaultBranch = shard.defaultBranch ?? job.branch ?? null
   if (resolvedDefaultBranch === null) {
     console.warn(
@@ -690,6 +650,7 @@ async function handleShardJob(
   const stateRepo = target.stateRepo
   const namespace = target.namespace
   const astOn = astChunkingEnabled(env)
+  const activeIndexMode = activeIndexModeForContinuation(job.activeIndexMode, target.isDefault)
 
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
     console.log(
@@ -705,10 +666,7 @@ async function handleShardJob(
     return
   }
 
-  // Kimi v2 d.1: config-drift check. If `EMBEDDING_MODEL` or
-  // `CHUNKER_VERSION` rotated between bootstrap and this shard, the
-  // recomputed runId won't match. Abort the chain — next webhook (or
-  // ARC-237 push re-index) starts fresh with the new config.
+  // Abort a continuation if embedding or chunking config drifted.
   const currentRunId = await computeRunId({
     owner,
     repo: stateRepo,
@@ -733,6 +691,35 @@ async function handleShardJob(
     throw new Error("indexer: GITHUB_APP_ID and GITHUB_PRIVATE_KEY required")
   }
   const client = await buildClient(env, installationId)
+  const repoMeta = await client.getRepository(owner, repo)
+  if (!repoMeta) {
+    console.warn(
+      JSON.stringify({
+        event: "index-shard-repo-not-found",
+        owner,
+        repo,
+        run_id: shard.runId,
+      }),
+    )
+    return
+  }
+  const githubRepoId = resolveLiveGithubRepoId({
+    liveGithubRepoId: repoMeta.id,
+    queuedGithubRepoId: job.githubRepoId,
+  })
+  if (
+    await activeIndexRunAlreadyPublished({
+      env,
+      mode: activeIndexMode,
+      owner,
+      stateRepo,
+      isDefaultBranch: target.isDefault,
+      githubRepoId,
+      runId: shard.runId,
+    })
+  ) {
+    return
+  }
 
   const tree = await client.getRepoTree(owner, repo, shard.treeSha)
   if (!tree) {
@@ -762,10 +749,7 @@ async function handleShardJob(
   }
   const indexableFiles = walkIndexableFiles(tree.tree)
   if (indexableFiles.length !== shard.totalFiles) {
-    // Tree composition drifted under us (the underlying tree SHA
-    // hasn't changed but the filter result differs — shouldn't
-    // normally happen since the tree SHA pins both). Refuse to write
-    // the manifest; the next push-driven re-index will repair.
+    // Refuse a filtered-tree mismatch; a later full run repairs it.
     console.warn(
       JSON.stringify({
         event: "index-shard-tree-drift",
@@ -779,17 +763,7 @@ async function handleShardJob(
     return
   }
 
-  // ARC-238 Codex v1 B3 + code-reviewer MED-2: vectors-record write
-  // can return proceed=false on stale-skip. In that case we abort
-  // the chain — neither writing the manifest (would overwrite the
-  // authoritative one with stale runId + counts) nor enqueueing the
-  // next shard.
-  // SIG-136: a continuation shard proceeds only if it still owns the lease
-  // (or it's absent); then refresh the TTL so a long chain keeps the lease.
-  // Validate the lease BEFORE the slow embed/upsert work so a
-  // superseded/redelivered shard doesn't write orphaned vectors to Vectorize
-  // (vectors not recorded in the id-list pollute retrieval + escape the
-  // GDPR uninstall delete). persistVectorIds re-checks at the end as backstop.
+  // Validate the lease before embedding; persistVectorIds rechecks after it.
   if (!(await leaseAllows(env, owner, stateRepo, shard.runId))) {
     console.warn(
       JSON.stringify({
@@ -822,6 +796,8 @@ async function handleShardJob(
     astChunking: astOn,
   })
 
+  // Keep D1 staging below this ledger write for the same durability invariant
+  // as bootstrap: an admitted slice may reference only already-written IDs.
   const vectorsResult = await persistVectorIds({
     env,
     owner,
@@ -844,6 +820,21 @@ async function handleShardJob(
     )
     return
   }
+  const activeSlice = await stageActiveIndexSlice({
+    env,
+    mode: activeIndexMode,
+    isDefaultBranch: target.isDefault,
+    githubRepoId,
+    installationId,
+    runId: shard.runId,
+    totalFiles: shard.totalFiles,
+    lo: shard.lo,
+    hi: shard.hi,
+    idsByPath,
+    ...(job.activeIndexBookmark ? { bookmark: job.activeIndexBookmark } : {}),
+    finalize: shard.hi >= shard.totalFiles,
+  })
+  if (activeSlice.runSealed && activeSlice.activeIndex === undefined) return
 
   const cumulativeFiles = shard.filesDone + sliceFiles.length
   const cumulativeChunks = shard.chunksDone + sliceChunkCount
@@ -866,6 +857,9 @@ async function handleShardJob(
       )
       return
     }
+    const publishedChunkCount = activeSlice.activeIndex
+      ? repoActiveIndexChunkCount(activeSlice.activeIndex)
+      : cumulativeChunks
     await persistManifest({
       env,
       owner,
@@ -878,9 +872,10 @@ async function handleShardJob(
       headSha: shard.headSha,
       runId: shard.runId,
       fileCount: cumulativeFiles,
-      chunkCount: cumulativeChunks,
+      chunkCount: publishedChunkCount,
       shardCount,
       chunkerVersion: effectiveChunkerVersion(astOn),
+      ...(activeSlice.activeIndex ? { activeIndex: activeSlice.activeIndex } : {}),
       roleClassify: { client, treeEntries: tree.tree },
     })
     console.log(
@@ -890,7 +885,7 @@ async function handleShardJob(
         repo,
         run_id: shard.runId,
         file_count: cumulativeFiles,
-        chunk_count: cumulativeChunks,
+        chunk_count: publishedChunkCount,
         shard_count: shardCount,
       }),
     )
@@ -911,13 +906,7 @@ async function handleShardJob(
         )
       }
     }
-    // ARC-236: fan out reruns on the final-shard path too. Multi-
-    // shard repos benefit from the same warmup-rerun UX.
-    // M4 (CR PR #80): same runId-keyed dedupe as the single-shard
-    // path — guards against final-shard queue redelivery.
-    // CR phase-end catch on commit 4: same belt-and-suspenders
-    // try/catch as the bootstrap path. Best-effort applies here
-    // too — multi-shard repos already paid the indexing cost.
+    // Same deduped, best-effort warmup fanout as the single-shard path.
     try {
       if (target.isDefault)
         await enqueueWarmupRerunsForIndex({
@@ -960,6 +949,8 @@ async function handleShardJob(
     githubRepoId,
     installationId,
     reason,
+    activeIndexMode,
+    ...(activeSlice.bookmark ? { activeIndexBookmark: activeSlice.bookmark } : {}),
     ...(target.isDefault ? {} : { branch: target.branch }),
     lo: shard.hi,
     hi: Math.min(shard.hi + MAX_FILES_PER_JOB, shard.totalFiles),

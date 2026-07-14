@@ -5,11 +5,12 @@
 //     changing the existing write behavior.
 
 import { describe, expect, it, vi } from "vitest"
-import { computeRepoRoleForIndex, persistManifest } from "@/src/lib/indexer-persist"
+import { computeRepoRoleForIndex, enqueueNextShard, persistManifest } from "@/src/lib/indexer-persist"
 import { readRepoIndexManifest } from "@/src/lib/repo-index-manifest"
 import type { TreeEntry } from "@/src/lib/indexer-internals"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
 
 function makeKvStub(): { kv: Env["OPENCLAW_STATE"]; store: Map<string, string> } {
   const store = new Map<string, string>()
@@ -41,6 +42,69 @@ function fakeClient(getFileContent: GitHubClient["getFileContent"]): GitHubClien
 }
 
 const EXPRESS_PKG = JSON.stringify({ dependencies: { express: "^4" } })
+
+const ACTIVE_INDEX = {
+  version: 1 as const,
+  githubRepoId: 808247824,
+  builtMode: "shadow" as const,
+  byPath: { "src/server.ts": ["a".repeat(48)] },
+}
+
+describe("enqueueNextShard — pinned active-index state", () => {
+  it("forwards the pinned mode and bookmark onto the root continuation message", async () => {
+    const send = vi.fn(async (_message: JobMessage) => undefined)
+    await enqueueNextShard(makeEnv({ OPENCLAW_JOBS: { send } as unknown as Env["OPENCLAW_JOBS"] }), {
+      owner: "Sigilix",
+      repo: "sigilix",
+      githubRepoId: 808247824,
+      installationId: 42,
+      reason: "push",
+      activeIndexMode: "shadow",
+      activeIndexBookmark: "bookmark-1",
+      lo: 1000,
+      hi: 2000,
+      headSha: "a".repeat(40),
+      treeSha: "b".repeat(40),
+      defaultBranch: "main",
+      totalFiles: 2500,
+      filesDone: 1000,
+      chunksDone: 1200,
+      runId: "0123456789abcdef",
+    })
+
+    expect(send).toHaveBeenCalledOnce()
+    expect(send.mock.calls[0]?.[0]).toMatchObject({
+      activeIndexMode: "shadow",
+      activeIndexBookmark: "bookmark-1",
+      shard: { runId: "0123456789abcdef" },
+    })
+  })
+
+  it("keeps the bookmark absent on legacy/off continuations", async () => {
+    const send = vi.fn(async (_message: JobMessage) => undefined)
+    await enqueueNextShard(makeEnv({ OPENCLAW_JOBS: { send } as unknown as Env["OPENCLAW_JOBS"] }), {
+      owner: "Sigilix",
+      repo: "sigilix",
+      githubRepoId: undefined,
+      installationId: 42,
+      reason: "manual",
+      activeIndexMode: "off",
+      lo: 1,
+      hi: 2,
+      headSha: "a",
+      treeSha: "b",
+      defaultBranch: "main",
+      totalFiles: 2,
+      filesDone: 1,
+      chunksDone: 1,
+      runId: "run-1",
+    })
+
+    const message = send.mock.calls[0]?.[0] as unknown as Record<string, unknown>
+    expect(message.activeIndexMode).toBe("off")
+    expect(message).not.toHaveProperty("activeIndexBookmark")
+  })
+})
 
 describe("computeRepoRoleForIndex", () => {
   it("returns undefined and does not fetch when the flag is off", async () => {
@@ -221,5 +285,43 @@ describe("persistManifest — repo-role stamping (additive)", () => {
     const result = await readRepoIndexManifest(makeEnv({ OPENCLAW_STATE: kv }), "Sigilix", "sigilix")
     expect(result.kind).toBe("ok")
     if (result.kind === "ok") expect(result.manifest.repoRole).toBe("frontend")
+  })
+
+  it("stamps a valid active index only on the matching default-branch manifest", async () => {
+    const { kv } = makeKvStub()
+    await persistManifest({
+      ...baseArgs,
+      env: makeEnv({ OPENCLAW_STATE: kv }),
+      githubRepoId: ACTIVE_INDEX.githubRepoId,
+      activeIndex: ACTIVE_INDEX,
+    })
+
+    const result = await readRepoIndexManifest(makeEnv({ OPENCLAW_STATE: kv }), "Sigilix", "sigilix")
+    expect(result.kind).toBe("ok")
+    if (result.kind === "ok") expect(result.manifest.activeIndex).toEqual(ACTIVE_INDEX)
+  })
+
+  it.each([
+    ["branch scope", { githubRepoId: 808247824, branch: "feature/x", activeIndex: ACTIVE_INDEX }],
+    ["missing live id", { githubRepoId: undefined, branch: null, activeIndex: ACTIVE_INDEX }],
+    ["mismatched live id", { githubRepoId: 808247825, branch: null, activeIndex: ACTIVE_INDEX }],
+    [
+      "malformed snapshot",
+      {
+        githubRepoId: 808247824,
+        branch: null,
+        activeIndex: { ...ACTIVE_INDEX, byPath: { "src/server.ts": [""] } },
+      },
+    ],
+  ])("rejects %s before writing either manifest key", async (_label, overrides) => {
+    const { kv, store } = makeKvStub()
+    await expect(
+      persistManifest({
+        ...baseArgs,
+        ...overrides,
+        env: makeEnv({ OPENCLAW_STATE: kv }),
+      }),
+    ).rejects.toThrow(/active index/i)
+    expect(store.size).toBe(0)
   })
 })

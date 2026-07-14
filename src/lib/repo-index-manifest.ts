@@ -26,6 +26,7 @@
 
 import type { Env } from "@/src/shared/types/env"
 import { isRepoRole, type RepoRole } from "@/src/features/repo-role"
+import { parseRepoActiveIndexSnapshot, type RepoActiveIndexSnapshotV1 } from "./repo-active-index"
 
 // SIG-132 (2026-05-20) — multi-tenant isolation. The index namespace
 // (Vectorize namespace + the suffix of the manifest/vectors KV keys) is
@@ -55,6 +56,7 @@ const KV_KEY_PREFIX = "repo-index-manifest:"
 // side freshness revalidation makes the TTL mostly a backstop, but
 // alignment keeps the lifecycle bookkeeping simple.
 const TTL_SECONDS = 60 * 24 * 60 * 60 // 60 days
+const MAX_PAYLOAD_BYTES = 10 * 1024 * 1024
 
 // ---------------------------------------------------------------------
 // Schema (v1)
@@ -106,6 +108,12 @@ export interface RepoIndexManifestV1 {
    * at the type-guard boundary.
    */
   githubRepoId?: number
+  /**
+   * Exact default-branch Vectorize membership, keyed by immutable GitHub
+   * repository ID. Optional so manifests written before the active-index
+   * rollout continue to parse unchanged.
+   */
+  activeIndex?: RepoActiveIndexSnapshotV1
   /** Default-branch commit SHA at index time. */
   headSha: string
   /** Stable per-run id — sha256(owner|repo|headSha|modelId|chunkerVersion).slice(0,16). */
@@ -195,9 +203,16 @@ function isRepoIndexManifestV1(value: unknown): value is RepoIndexManifestV1 {
   if (typeof o.owner !== "string" || o.owner.length === 0) return false
   if (
     o.githubRepoId !== undefined &&
-    (typeof o.githubRepoId !== "number" || !Number.isInteger(o.githubRepoId) || o.githubRepoId <= 0)
+    (typeof o.githubRepoId !== "number" || !Number.isSafeInteger(o.githubRepoId) || o.githubRepoId <= 0)
   )
     return false
+  if (o.activeIndex !== undefined) {
+    const activeIndex = parseRepoActiveIndexSnapshot(o.activeIndex)
+    if (activeIndex === null) return false
+    if (o.branch !== undefined) return false
+    if (o.githubRepoId !== activeIndex.githubRepoId) return false
+    o.activeIndex = activeIndex
+  }
   if (typeof o.headSha !== "string" || o.headSha.length === 0) return false
   if (typeof o.runId !== "string" || o.runId.length === 0) return false
   if (o.graphRunId !== undefined && (typeof o.graphRunId !== "string" || o.graphRunId.length === 0)) return false
@@ -298,17 +313,37 @@ export function parseRepoIndexManifest(raw: string): ReadResult {
  * path.
  */
 export async function writeRepoIndexManifest(env: Env, manifest: RepoIndexManifestV1): Promise<void> {
-  await env.OPENCLAW_STATE.put(repoIndexManifestKey(manifest.owner, manifest.repo), JSON.stringify(manifest), {
+  if (manifest.activeIndex !== undefined) {
+    const activeIndex = parseRepoActiveIndexSnapshot(manifest.activeIndex)
+    if (
+      activeIndex === null ||
+      manifest.branch !== undefined ||
+      typeof manifest.githubRepoId !== "number" ||
+      !Number.isSafeInteger(manifest.githubRepoId) ||
+      manifest.githubRepoId <= 0 ||
+      manifest.githubRepoId !== activeIndex.githubRepoId
+    ) {
+      throw new Error("repo index manifest active index is invalid or does not match the default-branch repository")
+    }
+  }
+
+  const payload = JSON.stringify(manifest)
+  const payloadBytes = new TextEncoder().encode(payload).byteLength
+  if (payloadBytes > MAX_PAYLOAD_BYTES) {
+    throw new Error(`repo index manifest is too large (${payloadBytes} bytes; max ${MAX_PAYLOAD_BYTES})`)
+  }
+
+  await env.OPENCLAW_STATE.put(repoIndexManifestKey(manifest.owner, manifest.repo), payload, {
     expirationTtl: TTL_SECONDS,
   })
   const isDefaultBranchManifest = manifest.branch === undefined
   if (
     isDefaultBranchManifest &&
     typeof manifest.githubRepoId === "number" &&
-    Number.isInteger(manifest.githubRepoId) &&
+    Number.isSafeInteger(manifest.githubRepoId) &&
     manifest.githubRepoId > 0
   ) {
-    await env.OPENCLAW_STATE.put(repoTenantKey(manifest.githubRepoId), JSON.stringify(manifest), {
+    await env.OPENCLAW_STATE.put(repoTenantKey(manifest.githubRepoId), payload, {
       expirationTtl: TTL_SECONDS,
     })
     console.log(

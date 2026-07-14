@@ -4,11 +4,12 @@
 // freshness validation (`isManifestFresh`), and key normalization
 // (`repoIndexManifestKey`).
 
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
   indexNamespace,
   isManifestFresh,
   legacyRepoIndexManifestKey,
+  parseRepoIndexManifest,
   readRepoIndexManifest,
   repoIndexManifestKey,
   REPO_TENANT_PREFIX,
@@ -56,6 +57,16 @@ const SAMPLE_MANIFEST: RepoIndexManifestV1 = {
   chunkerVersion: 1,
   windowLines: 30,
   overlapLines: 10,
+}
+
+const SAMPLE_ACTIVE_INDEX = {
+  version: 1 as const,
+  githubRepoId: 808247824,
+  builtMode: "shadow" as const,
+  byPath: {
+    "src/a.ts": ["a".repeat(48), "b".repeat(48)],
+    "src/b.ts": ["c".repeat(48)],
+  },
 }
 
 describe("indexNamespace", () => {
@@ -169,6 +180,53 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
     if (result.kind === "ok") {
       expect(result.manifest.githubRepoId).toBeUndefined()
     }
+  })
+
+  it("round-trips the optional immutable active index", async () => {
+    const { kv } = makeKvStub()
+    const manifest = {
+      ...SAMPLE_MANIFEST,
+      githubRepoId: SAMPLE_ACTIVE_INDEX.githubRepoId,
+      activeIndex: SAMPLE_ACTIVE_INDEX,
+    } as RepoIndexManifestV1
+
+    await writeRepoIndexManifest(makeEnv(kv), manifest)
+
+    const result = await readRepoIndexManifest(makeEnv(kv), "Sigilix", "Sigilix")
+    expect(result.kind).toBe("ok")
+    if (result.kind === "ok") {
+      expect(result.manifest.activeIndex).toEqual(SAMPLE_ACTIVE_INDEX)
+      expect(Object.getPrototypeOf(result.manifest.activeIndex?.byPath)).toBeNull()
+    }
+  })
+
+  it("keeps legacy manifests without an active index valid", () => {
+    const result = parseRepoIndexManifest(JSON.stringify(SAMPLE_MANIFEST))
+    expect(result.kind).toBe("ok")
+    if (result.kind === "ok") expect(result.manifest.activeIndex).toBeUndefined()
+  })
+
+  it.each([
+    ["wrong version", { ...SAMPLE_ACTIVE_INDEX, version: 2 }],
+    ["unsafe repository id", { ...SAMPLE_ACTIVE_INDEX, githubRepoId: Number.MAX_SAFE_INTEGER + 1 }],
+    ["unsupported build mode", { ...SAMPLE_ACTIVE_INDEX, builtMode: "off" }],
+    ["array map", { ...SAMPLE_ACTIVE_INDEX, byPath: [] }],
+    ["empty path", { ...SAMPLE_ACTIVE_INDEX, byPath: { "": ["a".repeat(48)] } }],
+    ["NUL path", { ...SAMPLE_ACTIVE_INDEX, byPath: { "src/a\0.ts": ["a".repeat(48)] } }],
+    ["non-array ids", { ...SAMPLE_ACTIVE_INDEX, byPath: { "src/a.ts": "a".repeat(48) } }],
+    ["empty chunk id", { ...SAMPLE_ACTIVE_INDEX, byPath: { "src/a.ts": [""] } }],
+    ["NUL chunk id", { ...SAMPLE_ACTIVE_INDEX, byPath: { "src/a.ts": [`${"a".repeat(24)}\0a`] } }],
+    ["repository identity mismatch", { ...SAMPLE_ACTIVE_INDEX, githubRepoId: SAMPLE_ACTIVE_INDEX.githubRepoId + 1 }],
+  ])("rejects an active index with %s", (_label, activeIndex) => {
+    const result = parseRepoIndexManifest(JSON.stringify({ ...SAMPLE_MANIFEST, githubRepoId: 808247824, activeIndex }))
+    expect(result).toEqual({ kind: "invalid", reason: "shape" })
+  })
+
+  it("rejects an unsafe top-level githubRepoId", () => {
+    const result = parseRepoIndexManifest(
+      JSON.stringify({ ...SAMPLE_MANIFEST, githubRepoId: Number.MAX_SAFE_INTEGER + 1 }),
+    )
+    expect(result).toEqual({ kind: "invalid", reason: "shape" })
   })
 
   it("dual-writes to the new repo-tenant:{id} key when githubRepoId is set (SIG-243 Phase 2)", async () => {
@@ -333,6 +391,36 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
       },
     } as unknown as Env
     await expect(writeRepoIndexManifest(env, SAMPLE_MANIFEST)).rejects.toThrow("KV down")
+  })
+
+  it("serializes the manifest candidate exactly once before dual-writing", async () => {
+    const { kv } = makeKvStub()
+    const manifest = { ...SAMPLE_MANIFEST, githubRepoId: 808247824 }
+    const stringify = vi.spyOn(JSON, "stringify")
+    try {
+      await writeRepoIndexManifest(makeEnv(kv), manifest)
+      expect(stringify.mock.calls.filter(([value]) => value === manifest)).toHaveLength(1)
+    } finally {
+      stringify.mockRestore()
+    }
+  })
+
+  it("uses UTF-8 bytes to reject an oversized candidate before either key is mutated", async () => {
+    const { kv, store } = makeKvStub()
+    const legacyKey = repoIndexManifestKey("Sigilix", "sigilix")
+    const tenantKey = repoTenantKey(808247824)
+    store.set(legacyKey, "prior-legacy")
+    store.set(tenantKey, "prior-tenant")
+    const manifest = {
+      ...SAMPLE_MANIFEST,
+      githubRepoId: 808247824,
+      // Fewer than 10 MiB JavaScript code units, but more than 10 MiB UTF-8.
+      runId: "é".repeat(5 * 1024 * 1024 + 1),
+    } as RepoIndexManifestV1
+
+    await expect(writeRepoIndexManifest(makeEnv(kv), manifest)).rejects.toThrow(/too large/i)
+    expect(store.get(legacyKey)).toBe("prior-legacy")
+    expect(store.get(tenantKey)).toBe("prior-tenant")
   })
 })
 

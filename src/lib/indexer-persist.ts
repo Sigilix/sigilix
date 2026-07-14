@@ -26,6 +26,11 @@ import type { JobMessage } from "@/src/shared/types/job"
 import { GitHubClient } from "@/src/shared/adapters/github"
 import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from "@/src/shared/adapters/model"
 import { writeRepoIndexManifest, type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
+import {
+  parseRepoActiveIndexSnapshot,
+  type RepoActiveIndexMode,
+  type RepoActiveIndexSnapshotV1,
+} from "@/src/lib/repo-active-index"
 import { computeMerge, readRepoIndexVectors, writeRepoIndexVectors } from "@/src/lib/repo-index-vectors"
 import { readActiveRunId } from "@/src/lib/repo-index-active-run"
 import { CHUNK_LINES, CHUNK_OVERLAP } from "@/src/lib/chunk-core"
@@ -53,6 +58,10 @@ interface EnqueueNextShardArgs {
   githubRepoId: number | undefined
   installationId: number
   reason: IndexRepoMessage["reason"]
+  /** Rollout mode pinned by the bootstrap for this entire shard chain. */
+  activeIndexMode: RepoActiveIndexMode
+  /** D1 session bookmark produced after staging the preceding slice. */
+  activeIndexBookmark?: string | undefined
   branch?: string
   lo: number
   hi: number
@@ -74,11 +83,13 @@ export async function enqueueNextShard(env: Env, args: EnqueueNextShardArgs): Pr
     // every shard. Conditional spread keeps the queue message tight
     // under exactOptionalPropertyTypes. Positive-integer guard matches
     // every other producer site.
-    ...(typeof args.githubRepoId === "number" && Number.isInteger(args.githubRepoId) && args.githubRepoId > 0
+    ...(typeof args.githubRepoId === "number" && Number.isSafeInteger(args.githubRepoId) && args.githubRepoId > 0
       ? { githubRepoId: args.githubRepoId }
       : {}),
     installationId: args.installationId,
     reason: args.reason,
+    activeIndexMode: args.activeIndexMode,
+    ...(args.activeIndexBookmark !== undefined ? { activeIndexBookmark: args.activeIndexBookmark } : {}),
     ...(args.branch ? { branch: args.branch } : {}),
     shard: {
       lo: args.lo,
@@ -134,6 +145,8 @@ interface PersistManifestArgs {
   chunkCount: number
   shardCount: number
   chunkerVersion: number
+  /** Exact default-branch membership materialized by the active-index stage. */
+  activeIndex?: RepoActiveIndexSnapshotV1 | undefined
   /**
    * A precomputed repo role to carry forward (the incremental push path passes
    * the prior manifest's role so a delta refresh doesn't erase it). Takes
@@ -209,6 +222,21 @@ export async function computeRepoRoleForIndex(args: {
 }
 
 export async function persistManifest(args: PersistManifestArgs): Promise<void> {
+  let activeIndex: RepoActiveIndexSnapshotV1 | undefined
+  if (args.activeIndex !== undefined) {
+    activeIndex = parseRepoActiveIndexSnapshot(args.activeIndex) ?? undefined
+    if (
+      activeIndex === undefined ||
+      args.branch !== null ||
+      typeof args.githubRepoId !== "number" ||
+      !Number.isSafeInteger(args.githubRepoId) ||
+      args.githubRepoId <= 0 ||
+      args.githubRepoId !== activeIndex.githubRepoId
+    ) {
+      throw new Error("active index requires a valid matching immutable repository ID on the default branch")
+    }
+  }
+
   const manifest: RepoIndexManifestV1 = {
     v: 1,
     // SIG-35: default-branch manifests keep the historical bare repo
@@ -239,11 +267,14 @@ export async function persistManifest(args: PersistManifestArgs): Promise<void> 
   if (args.graphRunId !== undefined) {
     manifest.graphRunId = args.graphRunId
   }
+  if (activeIndex !== undefined) {
+    manifest.activeIndex = activeIndex
+  }
   // SIG-243 Phase 1: persist the immutable repo ID when the queue
   // message carried it. Conditional spread keeps the manifest shape
   // tight under exactOptionalPropertyTypes. Positive-integer guard
   // matches the type-guard in repo-index-manifest.ts.
-  if (typeof args.githubRepoId === "number" && Number.isInteger(args.githubRepoId) && args.githubRepoId > 0) {
+  if (typeof args.githubRepoId === "number" && Number.isSafeInteger(args.githubRepoId) && args.githubRepoId > 0) {
     manifest.githubRepoId = args.githubRepoId
   }
   // Additive: stamp the detected repo role. A carried-forward role

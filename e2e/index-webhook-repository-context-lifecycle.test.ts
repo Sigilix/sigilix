@@ -6,11 +6,15 @@ import {
   type ReplaceRepositoryContextArgs,
 } from "@/src/features/repository-context"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { stageRepoActiveIndexSlice } from "@/src/lib/repo-active-index"
 
 const SECRET = "repository-context-lifecycle-secret"
 const INSTALLATION_ID = 42
 const NOW = "2026-07-13T23:00:00.000Z"
-const MIGRATION_SQL = readFileSync(new URL("../migrations/0024_create_repository_context.sql", import.meta.url), "utf8")
+const MIGRATION_SQL = [
+  readFileSync(new URL("../migrations/0024_create_repository_context.sql", import.meta.url), "utf8"),
+  readFileSync(new URL("../migrations/0025_create_repo_active_index_stage.sql", import.meta.url), "utf8"),
+].join("\n")
 
 function snapshotArgs(
   scopeId: string,
@@ -232,6 +236,17 @@ describe("GitHub uninstall repository-context lifecycle", () => {
     const db = makeD1()
     await db.exec(MIGRATION_SQL)
     expect((await replaceRepositoryContext(db, snapshotArgs("42"))).status).toBe("updated")
+    await stageRepoActiveIndexSlice({
+      db,
+      githubRepoId: 101,
+      installationId: INSTALLATION_ID,
+      runId: "a".repeat(16),
+      totalFiles: 1,
+      lo: 0,
+      hi: 1,
+      mode: "shadow",
+      idsByPath: { "src/index.ts": ["b".repeat(48)] },
+    })
     const worker = (await import("@/src/index")).default
 
     const response = await postUninstall(worker, makeEnv(db), { includeLogin: false })
@@ -240,6 +255,39 @@ describe("GitHub uninstall repository-context lifecycle", () => {
     await expect(readRepositoryContext(db, "github", "42")).resolves.toMatchObject({
       status: "ok",
       snapshot: { revision: 2, deletedAt: expect.any(String) },
+    })
+    await expect(db.prepare("SELECT COUNT(*) AS count FROM repo_active_index_run").first("count")).resolves.toBe(0)
+  })
+
+  it("keeps a missing-login uninstall retryable when installation-scoped staging cleanup fails", async () => {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL)
+    expect((await replaceRepositoryContext(db, snapshotArgs("42"))).status).toBe("updated")
+    const failingDb = {
+      prepare(sql: string) {
+        if (sql === "DELETE FROM repo_active_index_run WHERE installation_id = ?") {
+          const failed = {
+            bind: () => failed,
+            run: async () => {
+              throw new Error("D1 delete unavailable")
+            },
+          }
+          return failed
+        }
+        return db.prepare(sql)
+      },
+      batch: db.batch.bind(db),
+      exec: db.exec.bind(db),
+      withSession: db.withSession.bind(db),
+    } as unknown as D1Database
+    const worker = (await import("@/src/index")).default
+
+    const response = await postUninstall(worker, makeEnv(failingDb), { includeLogin: false })
+
+    expect(response.status).toBe(503)
+    await expect(readRepositoryContext(db, "github", "42")).resolves.toMatchObject({
+      status: "ok",
+      snapshot: { deletedAt: expect.any(String) },
     })
   })
 

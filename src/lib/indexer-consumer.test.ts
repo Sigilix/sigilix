@@ -11,6 +11,7 @@
 //   - tree-truncated refuses + no manifest
 //   - sensitive-repo gate at the consumer
 
+import { readFileSync } from "node:fs"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const {
@@ -82,6 +83,15 @@ import { CHUNKER_VERSION } from "@/src/lib/indexer"
 import { encodeBranchName } from "@/src/lib/index-branch"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+
+async function makeActiveIndexDb(): Promise<D1Database> {
+  const db = makeD1()
+  await db.exec(
+    readFileSync(new URL("../../migrations/0025_create_repo_active_index_stage.sql", import.meta.url), "utf8"),
+  )
+  return db
+}
 
 interface Sent {
   message: JobMessage
@@ -106,7 +116,9 @@ function makeKvStub(): {
   return { kv, store }
 }
 
-function makeEnv(opts: { sensitive?: string } = {}): {
+function makeEnv(
+  opts: { sensitive?: string; activeIndexDb?: D1Database; activeIndexMode?: "off" | "shadow" | "on" } = {},
+): {
   env: Env
   sent: Sent[]
   kv: Map<string, string>
@@ -125,6 +137,8 @@ function makeEnv(opts: { sensitive?: string } = {}): {
     GITHUB_APP_ID: "12345",
     GITHUB_PRIVATE_KEY: "fake-key",
     OPENCLAW_SENSITIVE_REPOS: opts.sensitive,
+    SIGILIX_PLATFORM_DB: opts.activeIndexDb,
+    OPENCLAW_REPO_ACTIVE_INDEX_MODE: opts.activeIndexMode,
   } as unknown as Env
   return { env, sent, kv: store }
 }
@@ -142,7 +156,7 @@ beforeEach(() => {
   mockCommitGraph.mockReset().mockResolvedValue(undefined)
   mockDebugActiveGraphVersion.mockReset().mockResolvedValue(null)
 
-  mockGetRepository.mockResolvedValue({ default_branch: "main" })
+  mockGetRepository.mockResolvedValue({ default_branch: "main", id: 808247824 })
   mockGetBranch.mockResolvedValue({ headSha: "a".repeat(40), treeSha: "b".repeat(40) })
   mockGetFileContent.mockImplementation(async (_o, _r, path: string) => `// content of ${path}\nconsole.log("hi")`)
   mockAiRun.mockImplementation(async (_model: string, input: { text: string | string[] }) => {
@@ -179,7 +193,8 @@ describe("handleIndexRepoJob — bootstrap happy path (single shard)", () => {
       truncated: false,
     })
 
-    const { env, sent, kv } = makeEnv()
+    const activeIndexDb = await makeActiveIndexDb()
+    const { env, sent, kv } = makeEnv({ activeIndexDb, activeIndexMode: "on" })
     await handleIndexRepoJob({ job: bootstrapJob(), env })
 
     // CodeRabbit nit on PR #76: a regression that skipped installation
@@ -198,6 +213,11 @@ describe("handleIndexRepoJob — bootstrap happy path (single shard)", () => {
       expect(rec.namespace).toBe("sigilix/sigilix")
     }
     expect(sent).toHaveLength(0) // no shard enqueued
+    await expect(
+      activeIndexDb
+        .prepare("SELECT completed_through, total_files, sealed, invalidated FROM repo_active_index_run")
+        .first(),
+    ).resolves.toEqual({ completed_through: 2, total_files: 2, sealed: 1, invalidated: 0 })
     // manifest is written
     const stored = kv.get(repoIndexManifestKey("Sigilix", "sigilix"))
     expect(stored).toBeTruthy()
@@ -210,7 +230,25 @@ describe("handleIndexRepoJob — bootstrap happy path (single shard)", () => {
       expect(parsed.shardCount).toBe(1)
       expect(parsed.modelId).toBe(EMBEDDING_MODEL)
       expect(parsed.embeddingDim).toBe(EMBEDDING_DIMENSIONS)
+      expect(parsed.githubRepoId).toBe(808247824)
+      expect(parsed.activeIndex).toMatchObject({
+        version: 1,
+        githubRepoId: 808247824,
+        builtMode: "on",
+      })
+      expect(Object.keys(parsed.activeIndex?.byPath ?? {}).sort()).toEqual(["README.md", "src/index.ts"])
     }
+  })
+
+  it("rejects a queue repository ID that disagrees with live GitHub identity before side effects", async () => {
+    const { env, sent, kv } = makeEnv()
+    await expect(handleIndexRepoJob({ job: bootstrapJob({ githubRepoId: 111 }), env })).rejects.toThrow(
+      /repository id mismatch/i,
+    )
+    expect(mockGetBranch).not.toHaveBeenCalled()
+    expect(mockVectorizeUpsert).not.toHaveBeenCalled()
+    expect(sent).toHaveLength(0)
+    expect(kv.size).toBe(0)
   })
 
   it("indexes a non-default branch into isolated KV and Vectorize state", async () => {
@@ -285,6 +323,42 @@ describe("handleIndexRepoJob — freshness skip", () => {
     expect(mockGetRepoTree).not.toHaveBeenCalled()
     expect(mockGetFileContent).not.toHaveBeenCalled()
     expect(mockVectorizeUpsert).not.toHaveBeenCalled()
+  })
+
+  it("backfills a fresh legacy manifest when shadow active-index rollout is enabled", async () => {
+    mockGetRepoTree.mockResolvedValue({
+      tree: [{ path: "src/index.ts", type: "blob", size: 100 }],
+      truncated: false,
+    })
+    const activeIndexDb = await makeActiveIndexDb()
+    const { env, kv } = makeEnv({ activeIndexDb, activeIndexMode: "shadow" })
+    const manifest: RepoIndexManifestV1 = {
+      v: 1,
+      repo: "sigilix",
+      owner: "Sigilix",
+      headSha: "a".repeat(40),
+      runId: "0123456789abcdef",
+      fileCount: 1,
+      chunkCount: 1,
+      shardCount: 1,
+      indexedAt: "2026-05-17T00:00:00.000Z",
+      modelId: EMBEDDING_MODEL,
+      embeddingDim: EMBEDDING_DIMENSIONS,
+      chunkerVersion: CHUNKER_VERSION,
+      windowLines: 30,
+      overlapLines: 10,
+    }
+    kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
+
+    await handleIndexRepoJob({ job: bootstrapJob(), env })
+
+    expect(mockGetRepoTree).toHaveBeenCalledOnce()
+    const stored = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(stored.activeIndex).toMatchObject({
+      version: 1,
+      githubRepoId: 808247824,
+      builtMode: "shadow",
+    })
   })
 
   it("skips a fresh manifest only when graph active version also matches (SIG-155)", async () => {
@@ -575,98 +649,6 @@ describe("handleIndexRepoJob — freshness skip", () => {
   })
 })
 
-describe("handleIndexRepoJob — bootstrap with >MAX_FILES_PER_JOB enqueues next shard", () => {
-  it("processes first MAX slice and enqueues continuation; does NOT write manifest", async () => {
-    // Build a tree with MAX_FILES_PER_JOB + 5 indexable files.
-    const tree = Array.from({ length: MAX_FILES_PER_JOB + 5 }, (_, i) => ({
-      path: `src/file-${i}.ts`,
-      type: "blob",
-      size: 100,
-    }))
-    mockGetRepoTree.mockResolvedValue({ tree, truncated: false })
-
-    const { env, sent, kv } = makeEnv()
-    await handleIndexRepoJob({ job: bootstrapJob(), env })
-
-    expect(mockGetFileContent).toHaveBeenCalledTimes(MAX_FILES_PER_JOB)
-    // No manifest yet — chain not complete.
-    expect(kv.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
-    // One shard enqueued.
-    expect(sent).toHaveLength(1)
-    const next = sent[0]!.message
-    if (next.type !== "index-repo") throw new Error("unexpected job type")
-    expect(next.shard).toBeDefined()
-    expect(next.shard?.lo).toBe(MAX_FILES_PER_JOB)
-    expect(next.shard?.hi).toBe(MAX_FILES_PER_JOB + 5)
-    expect(next.shard?.totalFiles).toBe(MAX_FILES_PER_JOB + 5)
-    expect(next.shard?.filesDone).toBe(MAX_FILES_PER_JOB)
-  })
-})
-
-describe("handleIndexRepoJob — final shard writes manifest with cumulative totals", () => {
-  it("uses incoming filesDone+chunksDone + own slice to write the manifest", async () => {
-    const totalFiles = MAX_FILES_PER_JOB + 3
-    const tree = Array.from({ length: totalFiles }, (_, i) => ({
-      path: `src/file-${i}.ts`,
-      type: "blob",
-      size: 100,
-    }))
-    mockGetRepoTree.mockResolvedValue({ tree, truncated: false })
-
-    // Simulate the final shard message that the bootstrap would have
-    // enqueued: lo=MAX, hi=totalFiles, filesDone=MAX, chunksDone=K.
-    const headSha = "a".repeat(40)
-    const treeSha = "b".repeat(40)
-    // Compute the actual runId the consumer expects.
-    const { computeRunId } = await import("@/src/lib/indexer")
-    const runId = await computeRunId({
-      owner: "Sigilix",
-      repo: "sigilix",
-      headSha,
-      modelId: EMBEDDING_MODEL,
-      chunkerVersion: 2,
-    })
-    const job: JobMessage = {
-      type: "index-repo",
-      owner: "Sigilix",
-      repo: "sigilix",
-      installationId: 99,
-      reason: "install",
-      shard: {
-        lo: MAX_FILES_PER_JOB,
-        hi: totalFiles,
-        headSha,
-        treeSha,
-        totalFiles,
-        filesDone: MAX_FILES_PER_JOB,
-        chunksDone: 4242,
-        runId,
-      },
-    }
-
-    const { env, kv } = makeEnv()
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
-    await handleIndexRepoJob({ job, env })
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("index-shard-default-branch-missing"))
-
-    // Final shard processed the trailing 3 files.
-    expect(mockGetFileContent).toHaveBeenCalledTimes(3)
-    // Manifest written with cumulative totals.
-    const stored = kv.get(repoIndexManifestKey("Sigilix", "sigilix"))
-    expect(stored).toBeTruthy()
-    if (stored) {
-      const parsed = JSON.parse(stored) as RepoIndexManifestV1
-      expect(parsed.fileCount).toBe(MAX_FILES_PER_JOB + 3)
-      // CodeRabbit nit on PR #76: assert exact. The mock returns a
-      // 2-line content per file → chunkFile emits exactly 1 chunk per
-      // file. Final shard's 3 files add 3 chunks. 4242 + 3 = 4245.
-      expect(parsed.chunkCount).toBe(4245)
-      // shardCount derived from ceil(totalFiles / MAX_FILES_PER_JOB) = 2.
-      expect(parsed.shardCount).toBe(2)
-    }
-  })
-})
-
 describe("handleIndexRepoJob — config-drift refusal (Kimi v2 d.1)", () => {
   it("aborts a shard chain when the recomputed runId doesn't match the shard's runId", async () => {
     const job: JobMessage = {
@@ -800,11 +782,14 @@ describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blo
         store.delete(key)
       },
     } as unknown as Env["OPENCLAW_STATE"]
+    const activeIndexDb = await makeActiveIndexDb()
     const env = {
       OPENCLAW_STATE: kv,
       OPENCLAW_JOBS: { send: async (_msg: JobMessage) => {} },
       AI: { run: (model: string, input: unknown) => mockAiRun(model, input) },
       OPENCLAW_CODE_INDEX: { upsert: mockVectorizeUpsert },
+      SIGILIX_PLATFORM_DB: activeIndexDb,
+      OPENCLAW_REPO_ACTIVE_INDEX_MODE: "on",
       GITHUB_APP_ID: "12345",
       GITHUB_PRIVATE_KEY: "fake-key",
     } as unknown as Env
@@ -818,6 +803,9 @@ describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blo
     // Coverage-before-upsert guarantee: nothing was upserted to Vectorize
     // before the ledger write failed (so no orphan is even possible here).
     expect(mockVectorizeUpsert).not.toHaveBeenCalled()
+    await expect(
+      activeIndexDb.prepare("SELECT COUNT(*) AS count FROM repo_active_index_run").first("count"),
+    ).resolves.toBe(0)
     // Manifest must NOT have been written.
     expect(store.has(repoIndexManifestKey("Sigilix", "sigilix"))).toBe(false)
   })

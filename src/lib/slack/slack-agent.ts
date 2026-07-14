@@ -16,6 +16,11 @@ import { dispatchTicketImplementation } from "@/src/lib/linear-agent-run"
 import { resolveLinearAgentRunMode } from "@/src/lib/agent-runner/mode"
 import { triageIssue } from "@/src/lib/triage"
 import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
+import {
+  makeGitHubRepositoryContextScopedIdentity,
+  parseRepositoryContextScopedMode,
+  readRepositoryContextForScopedRepositories,
+} from "@/src/features/repository-context"
 import { recallSlackMemory, captureSlackMemory } from "@/src/lib/slack/slack-memory"
 import { captureInstructiveLearning } from "@/src/features/learnings"
 import {
@@ -247,22 +252,19 @@ export async function runSlackAgent(env: Env, ctx: SlackMentionContext): Promise
 // ─── Q&A path ────────────────────────────────────────────────────────────────
 
 async function runQa(env: Env, ctx: SlackMentionContext, memScope: SlackMemoryScope): Promise<SlackAgentResult> {
-  // Recall relevant prior context — soft-fails to [] on error.
-  const recalled = await recallSlackMemory(env, memScope, ctx.mentionText)
-
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
   const commentId = `slack:${ctx.channelId}:${ctx.slackUserId}`
 
-  // Build the GitHub-scoped agent tools for this installation.
-  const tools = await buildSlackAgentTools(env, ctx)
+  // These reads are independent. Keep the optional repository-context D1 deadline
+  // off the serial Slack latency path; every optional leg fails soft on its own.
+  const [recalled, tools, repositoryContext, skillContext] = await Promise.all([
+    recallSlackMemory(env, memScope, ctx.mentionText),
+    buildSlackAgentTools(env, ctx),
+    loadSlackRepositoryContext(env, ctx),
+    loadAgentSkillContext(env, ctx.scope.installationId, ctx.mentionText, commentId),
+  ])
 
-  const initialUserMessage = buildInitialUserMessage(ctx, recalled)
-
-  // Governed org skills ("agent" surface): installation-scoped, reviewed
-  // guidance appended to the system prompt. Resolution soft-fails to undefined
-  // (and applySkillGuidance is the identity without a context), so the no-skill
-  // path is byte-identical to today's prompt.
-  const skillContext = await loadAgentSkillContext(env, ctx.scope.installationId, ctx.mentionText, commentId)
+  const initialUserMessage = buildInitialUserMessage(ctx, recalled, repositoryContext)
 
   const loopResult = await runAgentLoop({
     model,
@@ -591,11 +593,14 @@ async function runOfferRevise(
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
   const commentId = `slack:${ctx.channelId}:${ctx.slackUserId}`
 
-  const tools = await buildSlackAgentTools(env, ctx)
-  const initialUserMessage = buildReviseUserMessage(ctx, offer)
-
-  // Same governed-skill seam as runQa — identity when nothing resolves.
-  const skillContext = await loadAgentSkillContext(env, ctx.scope.installationId, ctx.mentionText, commentId)
+  // Same independent optional-context seam as runQa. Repository context can only
+  // reach the prompt builder; buildSlackAgentTools accepts env + authorized scope.
+  const [tools, repositoryContext, skillContext] = await Promise.all([
+    buildSlackAgentTools(env, ctx),
+    loadSlackRepositoryContext(env, ctx),
+    loadAgentSkillContext(env, ctx.scope.installationId, ctx.mentionText, commentId),
+  ])
+  const initialUserMessage = buildReviseUserMessage(ctx, offer, repositoryContext)
 
   const loopResult = await runAgentLoop({
     model,
@@ -685,12 +690,16 @@ async function summarizeThreadToIssue(
   return { title, description }
 }
 
-function buildInitialUserMessage(ctx: SlackMentionContext, recalled: string[]): string {
+function buildInitialUserMessage(ctx: SlackMentionContext, recalled: string[], repositoryContext: string): string {
   const lines: string[] = []
   lines.push("[QUESTION]", ctx.mentionText, "")
 
   if (ctx.threadText) {
     lines.push("[THREAD CONTEXT — recent Slack messages, oldest first]", ctx.threadText, "")
+  }
+
+  if (repositoryContext) {
+    lines.push(repositoryContext, "")
   }
 
   if (recalled.length > 0) {
@@ -763,6 +772,28 @@ async function buildSlackAgentTools(env: Env, ctx: SlackMentionContext): Promise
       installationId: ctx.scope.installationId,
     },
   })
+}
+
+/**
+ * Read canonical repository descriptions for exactly this channel's immutable
+ * installation/repository scope. The identity is built solely from the already
+ * authorized SlackScope; stored context never participates in tool authorization.
+ */
+async function loadSlackRepositoryContext(env: Env, ctx: SlackMentionContext): Promise<string> {
+  const mode = parseRepositoryContextScopedMode(env.OPENCLAW_REPOSITORY_CONTEXT_SLACK_MODE)
+  const identity = makeGitHubRepositoryContextScopedIdentity(
+    ctx.scope.installationId,
+    ctx.scope.repos.map((repository) => ({
+      repositoryId: repository.githubRepoId,
+      fullName: `${repository.owner}/${repository.repo}`,
+    })),
+  )
+  const result = await readRepositoryContextForScopedRepositories({
+    ...(env.SIGILIX_PLATFORM_DB ? { db: env.SIGILIX_PLATFORM_DB } : {}),
+    mode,
+    identity,
+  })
+  return result.promptBlock
 }
 
 /** Dedupe `{ owner, repo }` pairs case-insensitively, preserving first-seen order. */
@@ -899,12 +930,15 @@ function parseImplementOffer(text: string): ParsedImplementOffer | null {
   }
 }
 
-function buildReviseUserMessage(ctx: SlackMentionContext, offer: ImplementOffer): string {
+function buildReviseUserMessage(ctx: SlackMentionContext, offer: ImplementOffer, repositoryContext: string): string {
   const lines: string[] = []
   lines.push("[CONTEXT] You previously offered to open a PR for this thread. Current plan:", offer.plan, "")
   lines.push("[USER REVISION]", ctx.mentionText, "")
   if (ctx.threadText) {
     lines.push("[THREAD CONTEXT — recent Slack messages, oldest first]", ctx.threadText, "")
+  }
+  if (repositoryContext) {
+    lines.push(repositoryContext, "")
   }
   lines.push(
     "[TASK]",

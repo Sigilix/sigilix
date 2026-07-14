@@ -48,6 +48,7 @@ import {
   handleMemoryExtractRoute,
   handleMemoryListRoute,
   handleMemoryDeleteRoute,
+  handleMemoryCreateRoute,
 } from "@/src/lib/agent-memory"
 import { handleResearchCreate, handleResearchStream, handleResearchCancel } from "@/src/do/deep-research/routes"
 import { tryHandleMcpRoute } from "@/src/do/mcp/routes"
@@ -342,17 +343,15 @@ export default {
       return handleFleetApiRoute(request, env)
     }
 
-    // SIG-483: agent-memory store. PUT writes a durable per-(user, repo) memory
-    // (embed → Vectorize tenant namespace + KV); POST/query semantically
-    // retrieves them. Static-bearer auth; inert (503) until the API key is set.
+    // SIG-483: agent-memory store — PUT writes a durable per-(user, repo) memory,
+    // POST/query retrieves, POST/extract distills facts from a chat exchange.
+    // Static-bearer auth; inert (503) until the API key is set.
     if (request.method === "PUT" && url.pathname === "/v1/memory") {
       return handleMemoryWriteRoute(request, env)
     }
     if (request.method === "POST" && url.pathname === "/v1/memory/query") {
       return handleMemoryQueryRoute(request, env)
     }
-    // POST/extract distills 0–3 durable facts from a conversation exchange via a
-    // cheap model and stores each through the same write path PUT uses.
     if (request.method === "POST" && url.pathname === "/v1/memory/extract") {
       return handleMemoryExtractRoute(request, env)
     }
@@ -488,11 +487,9 @@ export default {
       url.pathname.startsWith("/v1/research/") ||
       url.pathname === "/v1/workspace/prs" ||
       url.pathname === "/v1/metrics/dashboard" || // sig-metrics-dashboard (see metrics-dashboard-route.ts)
-      // sig-memory-crud: GET /v1/memory (list) + DELETE /v1/memory/:id (delete)
-      // are portal-facing (dual-authed session OR api key — see
-      // agent-memory-crud-route.ts). The earlier PUT/POST /v1/memory* routes
-      // (write/query/extract, api-key-only) return before this block, so
-      // adding /v1/memory here only affects the new GET/DELETE + their OPTIONS.
+      // sig-memory-crud: POST (session create) / GET (list) / DELETE are
+      // portal-facing; the earlier api-key-only PUT/POST /v1/memory* routes return
+      // before this block (see agent-memory-crud-route.ts).
       url.pathname === "/v1/memory" ||
       url.pathname.startsWith("/v1/memory/") ||
       // sig-gitlab-connector: the portal's connect-flow project fetches
@@ -592,10 +589,13 @@ export default {
     if (request.method === "GET" && url.pathname === "/v1/metrics/dashboard") {
       return withPortalCors(request, await handleMetricsDashboardRoute(request, env, ctx), env)
     }
-    // sig-memory-crud: the portal's memory-management surface. GET lists the caller's
-    // saved memories (paginated); DELETE removes one by id. Dual-authed (session OR api
-    // key — see agent-memory-crud-route.ts). Registered AFTER the PUT/POST /v1/memory*
-    // write/query/extract routes above, so the HTTP method disambiguates them.
+    // sig-memory-crud: the portal's memory-management surface (see
+    // agent-memory-crud-route.ts). POST creates the user's OWN repo-agnostic
+    // personal conventions (SESSION-authed; api-key create is PUT above); GET lists
+    // (dual-authed, paginated); DELETE removes one by id. Method disambiguates.
+    if (request.method === "POST" && url.pathname === "/v1/memory") {
+      return withPortalCors(request, await handleMemoryCreateRoute(request, env, ctx), env)
+    }
     if (request.method === "GET" && url.pathname === "/v1/memory") {
       return withPortalCors(request, await handleMemoryListRoute(request, env, ctx), env)
     }

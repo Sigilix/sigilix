@@ -19,7 +19,8 @@ import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { insertApiKey } from "@/src/lib/api-key-store"
 import { sha256Hex as keyHash } from "@/src/lib/auth-bearer"
 import { sha256Hex as contentHash } from "./agent-memory-route"
-import { handleMemoryListRoute, handleMemoryDeleteRoute } from "./agent-memory-crud-route"
+import { handleMemoryListRoute, handleMemoryDeleteRoute, handleMemoryCreateRoute } from "./agent-memory-crud-route"
+import { PERSONAL_CONVENTION_REPO_ID } from "./agent-memory-personal-subject"
 import { handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
 import type { AgentMemoryKind, AgentMemoryRecord } from "./types"
 import type { Env } from "@/src/shared/types/env"
@@ -122,12 +123,23 @@ let fk: FakeKV
 let idx: ReturnType<typeof fakeIndex>
 let sessionDb: D1Database
 
+/** Deterministic 768-dim embedder so the create path's vector leg succeeds — the
+ *  dedup pointer is only written once record + vector both land (see
+ *  storeMemoryFact). Mirrors agent-memory-route.test.ts's fakeAi. */
+function fakeAi(): Env["AI"] {
+  const DIMS = 768
+  return {
+    run: async () => ({ data: [Array.from({ length: DIMS }, () => 0.1)], shape: [1, DIMS] }),
+  } as unknown as Env["AI"]
+}
+
 function makeEnv(extra: Partial<Env> = {}): Env {
   return {
     OPENCLAW_SIGILIX_API_KEY: TOKEN,
     SIGILIX_PLATFORM_DB: sessionDb,
     OPENCLAW_STATE: fk.kv,
     OPENCLAW_AGENT_MEMORY_INDEX: idx.index,
+    AI: fakeAi(),
     ...extra,
   } as unknown as Env
 }
@@ -668,5 +680,232 @@ describe("/v1/memory — portal CORS", () => {
     expect(wrapped.status).toBe(200)
     expect(wrapped.headers.get("access-control-allow-origin")).toBe(ORIGIN)
     expect(wrapped.headers.get("access-control-allow-credentials")).toBe("true")
+  })
+})
+
+// ─── POST /v1/memory — session-authed "My conventions" create ─
+
+function createReq(body: unknown, cookie?: string, token: string | null = null): Request {
+  return new Request("https://api.sigilix.ai/v1/memory", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(cookie ? { cookie } : {}),
+    },
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  })
+}
+
+interface CreateResponse {
+  ok: boolean
+  count: number
+  created: Array<{ id: string; installationId: number; deduped: boolean; stored: boolean }>
+}
+
+/** Every persisted `agent-memory:` RECORD (skips the hash-pointer keyspace). */
+function storedRecords(): AgentMemoryRecord[] {
+  const out: AgentMemoryRecord[] = []
+  for (const [key, value] of fk.store) {
+    if (!key.startsWith("agent-memory:") || key.startsWith("agent-memory-hash:")) continue
+    out.push(JSON.parse(value) as AgentMemoryRecord)
+  }
+  return out
+}
+
+const SESSION_ENV = () => makeEnv({ OPENCLAW_SESSION_ENCRYPTION_KEY: SESSION_KEY })
+const COOKIE = "__Host-sigilix_session=sess-a"
+
+describe("POST /v1/memory — auth", () => {
+  it("503 when the endpoint is unkeyed (no api key, no D1)", async () => {
+    const res = await handleMemoryCreateRoute(createReq({ content: "x" }), unkeyedEnv())
+    expect(res.status).toBe(503)
+  })
+
+  it("401 without a session — an api-key bearer cannot create via POST (that is PUT)", async () => {
+    // A valid per-tenant key is presented, but POST is session-only: no cookie → 401.
+    const env = makeEnv({ SIGILIX_PLATFORM_DB: await d1WithKey("key42", 42) })
+    const res = await handleMemoryCreateRoute(createReq({ content: "x" }, undefined, "key42"), env)
+    expect(res.status).toBe(401)
+  })
+
+  it("403 when the session's stored user id disagrees with its GitHub identity", async () => {
+    seedSession("sess-a", 12345, "octocat", "user-2") // 12345 → user-1 in D1
+    stubInstallations([42])
+    const res = await handleMemoryCreateRoute(createReq({ content: "x" }, COOKIE), SESSION_ENV())
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: "memory_identity_unavailable" })
+  })
+
+  it("409 when the session owns no installation (nowhere personal to store it)", async () => {
+    seedSession("sess-a", 12345, "octocat", USER_ID)
+    stubInstallations([])
+    const res = await handleMemoryCreateRoute(createReq({ content: "x" }, COOKIE), SESSION_ENV())
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: "memory_no_installation" })
+    expect(storedRecords()).toHaveLength(0) // nothing written
+  })
+
+  it("503 (retryable) when the installation set can't be resolved — never a silent drop", async () => {
+    // A GitHub outage on /user/installations must NOT read as "no installation"
+    // (which would silently drop the write). It surfaces as a retryable 503.
+    seedSession("sess-a", 12345, "octocat", USER_ID)
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("boom", { status: 500 })),
+    )
+    const res = await handleMemoryCreateRoute(createReq({ content: "x" }, COOKIE), SESSION_ENV())
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({ error: "memory_scope_unavailable" })
+    expect(storedRecords()).toHaveLength(0) // nothing written
+  })
+})
+
+describe("POST /v1/memory — validation", () => {
+  beforeEach(() => {
+    seedSession("sess-a", 12345, "octocat", USER_ID)
+    stubInstallations([42])
+  })
+
+  it("400 on invalid JSON", async () => {
+    const res = await handleMemoryCreateRoute(createReq("{not json", COOKIE), SESSION_ENV())
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error?: string }).error).toBe("invalid_json")
+  })
+
+  it("400 on empty content", async () => {
+    const res = await handleMemoryCreateRoute(createReq({ content: "   " }, COOKIE), SESSION_ENV())
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error?: string }).error).toBe("invalid_request")
+  })
+
+  it("400 on a disallowed kind (only preference/decision — never a suppression-capable kind)", async () => {
+    for (const kind of ["dead_end", "correction", "task_state", "nonsense"]) {
+      const res = await handleMemoryCreateRoute(createReq({ content: "x", kind }, COOKIE), SESSION_ENV())
+      expect(res.status).toBe(400)
+    }
+    expect(storedRecords()).toHaveLength(0)
+  })
+
+  it("413 on an oversized body", async () => {
+    const huge = "a".repeat(70 * 1024) // > MAX_BODY_BYTES (64KB)
+    const res = await handleMemoryCreateRoute(createReq({ content: huge }, COOKIE), SESSION_ENV())
+    expect(res.status).toBe(413)
+  })
+})
+
+describe("POST /v1/memory — create (seat-scoped, repo-agnostic)", () => {
+  beforeEach(() => {
+    seedSession("sess-a", 12345, "octocat", USER_ID)
+  })
+
+  it("writes ONE record under the caller's OWN prefix at the sentinel repoId, defaulting kind=preference", async () => {
+    stubInstallations([42])
+    const res = await handleMemoryCreateRoute(
+      createReq({ content: "I prefer verbose commit messages" }, COOKIE),
+      SESSION_ENV(),
+    )
+    expect(res.status).toBe(201)
+    const body = (await res.json()) as CreateResponse
+    expect(body).toMatchObject({ ok: true, count: 1 })
+    expect(body.created).toHaveLength(1)
+    expect(body.created[0]).toMatchObject({ installationId: 42, deduped: false, stored: true })
+
+    const records = storedRecords()
+    expect(records).toHaveLength(1)
+    const rec = records[0]!
+    // Owner is derived from the trusted session ONLY — the caller's own prefix.
+    expect(rec.userId).toBe(PERSONAL_42)
+    // Repo-agnostic: the reserved sentinel, not any real repo.
+    expect(rec.repoId).toBe(PERSONAL_CONVENTION_REPO_ID)
+    expect(rec.kind).toBe("preference")
+    expect(rec.content).toBe("I prefer verbose commit messages")
+    // Structural non-suppression: a seat record carries NO learnings polarity.
+    expect("polarity" in (rec as unknown as Record<string, unknown>)).toBe(false)
+  })
+
+  it("accepts kind=decision", async () => {
+    stubInstallations([42])
+    const res = await handleMemoryCreateRoute(
+      createReq({ content: "We standardized on pnpm", kind: "decision" }, COOKIE),
+      SESSION_ENV(),
+    )
+    expect(res.status).toBe(201)
+    expect(storedRecords()[0]!.kind).toBe("decision")
+  })
+
+  it("fans out across ALL the caller's installations so the convention applies to every session", async () => {
+    stubInstallations([42, 99])
+    const res = await handleMemoryCreateRoute(createReq({ content: "tabs not spaces" }, COOKIE), SESSION_ENV())
+    expect(res.status).toBe(201)
+    const body = (await res.json()) as CreateResponse
+    expect(body.count).toBe(2)
+    const owners = storedRecords()
+      .map((r) => r.userId)
+      .sort()
+    expect(owners).toEqual([PERSONAL_42, PERSONAL_99])
+  })
+
+  it("SEAT ISOLATION: never writes another user's prefix, even one in the same installation", async () => {
+    // A peer's pre-existing record under the SAME installation must be untouched,
+    // and every record written must belong to the caller's own subject.
+    const peer = await seedRecord({ userId: "inst:42:user:user-2", repoId: "r", content: "peer" })
+    const peerRaw = fk.store.get(peer.recordKey)
+    stubInstallations([42])
+
+    await handleMemoryCreateRoute(createReq({ content: "mine only" }, COOKIE), SESSION_ENV())
+
+    // The peer's record is byte-identical (never written to another user's prefix).
+    expect(fk.store.get(peer.recordKey)).toBe(peerRaw)
+    // Every NEW record is owned by the caller's own subject — never user-2.
+    const mine = storedRecords().filter((r) => r.content === "mine only")
+    expect(mine).toHaveLength(1)
+    expect(mine.every((r) => r.userId === PERSONAL_42)).toBe(true)
+    expect(storedRecords().some((r) => r.userId === "inst:42:user:user-2" && r.content === "mine only")).toBe(false)
+  })
+
+  it("a personal convention surfaces in the caller's repo-agnostic seat list (and filters via ?repoId=*)", async () => {
+    // The convention has NO real repo, yet the session list (which walks the whole
+    // user prefix) surfaces it regardless of repo — the repo-agnostic guarantee.
+    stubInstallations([42])
+    await handleMemoryCreateRoute(createReq({ content: "no emojis in code" }, COOKIE), SESSION_ENV())
+
+    const listAll = (await (
+      await handleMemoryListRoute(listReq("", null, COOKIE), SESSION_ENV())
+    ).json()) as ListResponse
+    expect(listAll.memories.map((m) => m.content)).toContain("no emojis in code")
+
+    const sentinelParam = `?repoId=${encodeURIComponent(PERSONAL_CONVENTION_REPO_ID)}`
+    const listSentinel = (await (
+      await handleMemoryListRoute(listReq(sentinelParam, null, COOKIE), SESSION_ENV())
+    ).json()) as ListResponse
+    expect(listSentinel.memories.map((m) => m.content)).toEqual(["no emojis in code"])
+    expect(listSentinel.memories[0]!.repoId).toBe(PERSONAL_CONVENTION_REPO_ID)
+  })
+
+  it("round-trips: a created convention is deletable by the same caller (create → delete → gone)", async () => {
+    stubInstallations([42])
+    const created = (await (
+      await handleMemoryCreateRoute(createReq({ content: "squash before merge" }, COOKIE), SESSION_ENV())
+    ).json()) as CreateResponse
+    const id = created.created[0]!.id
+
+    const del = await handleMemoryDeleteRoute(delReq(id, null, COOKIE), SESSION_ENV(), id)
+    expect(del.status).toBe(200)
+    expect(storedRecords().some((r) => r.id === id)).toBe(false)
+  })
+
+  it("dedups identical content: second create returns the same id with deduped=true, no second copy", async () => {
+    stubInstallations([42])
+    const first = (await (
+      await handleMemoryCreateRoute(createReq({ content: "dupe me" }, COOKIE), SESSION_ENV())
+    ).json()) as CreateResponse
+    const second = (await (
+      await handleMemoryCreateRoute(createReq({ content: "dupe me" }, COOKIE), SESSION_ENV())
+    ).json()) as CreateResponse
+
+    expect(second.created[0]!.id).toBe(first.created[0]!.id)
+    expect(second.created[0]!.deduped).toBe(true)
+    expect(storedRecords().filter((r) => r.content === "dupe me")).toHaveLength(1)
   })
 })

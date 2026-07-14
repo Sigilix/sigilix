@@ -40,7 +40,10 @@ function snapshotArgs(
   }
 }
 
-function makeEnv(db: D1Database | undefined): Record<string, unknown> {
+function makeEnv(
+  db: D1Database | undefined,
+  options: { deleteRepoGraph?: () => Promise<void> } = {},
+): Record<string, unknown> {
   return {
     GITHUB_APP_ID: "12345",
     GITHUB_PRIVATE_KEY: "fake-key",
@@ -51,6 +54,10 @@ function makeEnv(db: D1Database | undefined): Record<string, unknown> {
       put: async (_key: string, _value: string) => {},
       delete: async (_key: string) => {},
       list: async () => ({ keys: [], list_complete: true }),
+    },
+    REPO_GRAPH_DO: {
+      idFromName: (name: string) => ({ name }),
+      get: () => ({ deleteRepoGraph: options.deleteRepoGraph ?? (async () => {}) }),
     },
   }
 }
@@ -91,6 +98,33 @@ async function postUninstall(
         "content-type": "application/json",
         "x-github-event": "installation",
         "x-github-delivery": options.deliveryId ?? "delivery-uninstall-1",
+        "x-hub-signature-256": await signBody(body),
+      },
+      body,
+    }),
+    env as never,
+    { waitUntil: () => {}, passThroughOnException: () => {} } as never,
+  )
+}
+
+async function postRepositoriesRemoved(
+  worker: { fetch: (request: Request, env: never, ctx: never) => Promise<Response> },
+  env: Record<string, unknown>,
+  repositoriesRemoved: Array<{ id?: number; full_name?: string }>,
+  deliveryId = "delivery-repositories-removed-1",
+): Promise<Response> {
+  const body = JSON.stringify({
+    action: "removed",
+    installation: { id: INSTALLATION_ID, account: { login: "acme" } },
+    repositories_removed: repositoriesRemoved,
+  })
+  return worker.fetch(
+    new Request("https://example.com/github/webhook", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "installation_repositories",
+        "x-github-delivery": deliveryId,
         "x-hub-signature-256": await signBody(body),
       },
       body,
@@ -240,5 +274,171 @@ describe("GitHub uninstall repository-context lifecycle", () => {
     const response = await postUninstall(worker, makeEnv(db))
 
     expect(response.status).toBe(503)
+  })
+})
+
+describe("GitHub repository removal repository-context lifecycle", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.spyOn(console, "log").mockImplementation(() => undefined)
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+  })
+
+  it("removes only exact repository ids and incident relationships through the signed worker webhook", async () => {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL)
+    expect(
+      (
+        await replaceRepositoryContext(
+          db,
+          snapshotArgs("42", {
+            repositories: [
+              { externalId: "101", fullName: "acme/api", context: "Public API", position: 0 },
+              { externalId: "202", fullName: "acme/worker", context: "Background jobs", position: 1 },
+              { externalId: "303", fullName: "acme/web", context: "Web application", position: 2 },
+            ],
+            relationships: [
+              {
+                fromExternalId: "101",
+                toExternalId: "202",
+                label: "publishes jobs",
+                normalizedLabel: "publishes jobs",
+                position: 0,
+              },
+              {
+                fromExternalId: "101",
+                toExternalId: "303",
+                label: "serves web",
+                normalizedLabel: "serves web",
+                position: 1,
+              },
+            ],
+          }),
+        )
+      ).status,
+    ).toBe("updated")
+    expect(
+      (
+        await replaceRepositoryContext(
+          db,
+          snapshotArgs("99", {
+            repositories: [{ externalId: "202", fullName: "other/worker", context: "control", position: 0 }],
+            relationships: [],
+          }),
+        )
+      ).status,
+    ).toBe("updated")
+    expect(
+      (
+        await replaceRepositoryContext(
+          db,
+          snapshotArgs("42", {
+            provider: "gitlab",
+            repositories: [{ externalId: "202", fullName: "other/gitlab", context: "provider control", position: 0 }],
+            relationships: [],
+          }),
+        )
+      ).status,
+    ).toBe("updated")
+    const worker = (await import("@/src/index")).default
+    const env = makeEnv(db)
+
+    expect((await postRepositoriesRemoved(worker, env, [{ id: 202, full_name: "acme/worker" }])).status).toBe(202)
+
+    await expect(readRepositoryContext(db, "github", "42")).resolves.toMatchObject({
+      status: "ok",
+      snapshot: {
+        revision: 2,
+        repositories: [
+          { externalId: "101", fullName: "acme/api" },
+          { externalId: "303", fullName: "acme/web" },
+        ],
+        relationships: [{ fromExternalId: "101", toExternalId: "303", label: "serves web" }],
+        conventions: "Use conventional commits.",
+        deletedAt: null,
+      },
+    })
+    await expect(readRepositoryContext(db, "github", "99")).resolves.toMatchObject({
+      status: "ok",
+      snapshot: { revision: 1, repositories: [{ externalId: "202", fullName: "other/worker" }] },
+    })
+    await expect(readRepositoryContext(db, "gitlab", "42")).resolves.toMatchObject({
+      status: "ok",
+      snapshot: { revision: 1, repositories: [{ externalId: "202", fullName: "other/gitlab" }] },
+    })
+
+    expect((await postRepositoriesRemoved(worker, env, [{ id: 202, full_name: "acme/worker" }])).status).toBe(202)
+    await expect(readRepositoryContext(db, "github", "42")).resolves.toMatchObject({
+      status: "ok",
+      snapshot: { revision: 2 },
+    })
+    await expect(
+      db
+        .prepare("SELECT COUNT(*) AS count FROM repository_context_audit WHERE provider = ? AND scope_id = ?")
+        .bind("github", "42")
+        .first<{ count: number }>(),
+    ).resolves.toEqual({ count: 2 })
+  })
+
+  it("creates a revision fence that rejects an in-flight stale revision-zero writer", async () => {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL)
+    const worker = (await import("@/src/index")).default
+
+    expect((await postRepositoriesRemoved(worker, makeEnv(db), [{ id: 202, full_name: "acme/worker" }])).status).toBe(
+      202,
+    )
+    await expect(readRepositoryContext(db, "github", "42")).resolves.toMatchObject({
+      status: "ok",
+      snapshot: {
+        revision: 1,
+        repositories: [],
+        relationships: [],
+        conventions: "",
+        deletedAt: null,
+      },
+    })
+    await expect(replaceRepositoryContext(db, snapshotArgs("42"))).resolves.toEqual({
+      status: "conflict",
+      currentRevision: 1,
+    })
+  })
+
+  it("returns 503 for a malformed entry after reconciling every valid exact id", async () => {
+    const db = makeD1()
+    await db.exec(MIGRATION_SQL)
+    expect((await replaceRepositoryContext(db, snapshotArgs("42"))).status).toBe("updated")
+    const worker = (await import("@/src/index")).default
+
+    const response = await postRepositoriesRemoved(worker, makeEnv(db), [
+      { id: 202, full_name: "acme/worker" },
+      { full_name: "acme/missing-id" },
+    ])
+
+    expect(response.status).toBe(503)
+    await expect(readRepositoryContext(db, "github", "42")).resolves.toMatchObject({
+      status: "ok",
+      snapshot: {
+        revision: 2,
+        repositories: [{ externalId: "101", fullName: "acme/api" }],
+        relationships: [],
+      },
+    })
+  })
+
+  it.each([
+    ["a missing platform D1 binding", undefined],
+    ["an unmigrated platform D1 binding", makeD1()],
+  ])("returns 503 for %s after the independent legacy cleanup still runs", async (_label, db) => {
+    const worker = (await import("@/src/index")).default
+    const deleteRepoGraph = vi.fn(async () => {})
+
+    const response = await postRepositoriesRemoved(worker, makeEnv(db, { deleteRepoGraph }), [
+      { id: 202, full_name: "acme/worker" },
+    ])
+
+    expect(response.status).toBe(503)
+    expect(deleteRepoGraph).toHaveBeenCalledTimes(1)
   })
 })

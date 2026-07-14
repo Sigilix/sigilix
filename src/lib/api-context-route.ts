@@ -23,7 +23,7 @@ import { resolveInstallation } from "@/src/shared/adapters/github/github-install
 import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { gatherAgentContext } from "./agent-context"
-import { loadLearnings, type LearningEntry } from "@/src/features/learnings"
+import { loadLearnings, resolveSurfaceMemoryApplyMode, type LearningEntry } from "@/src/features/learnings"
 import { enqueueIndexJobsForRepos, isIndexerEnabled, type EnqueueIndexJobsResult } from "./index-producer"
 import { indexNamespace, readRepoIndexManifest } from "./repo-index-manifest"
 
@@ -143,18 +143,77 @@ function learningTs(s: string): number {
   return Number.isNaN(n) ? 0 : n
 }
 
-/** Load the repo's review learnings as readable rules (most-recent first, capped). Soft-fail. */
-async function loadRepoLearnings(env: Env, repoId: number): Promise<string[]> {
+/** Load a learnings store's entries, soft-failing to [] on any error. */
+async function loadLearningEntriesSoft(env: Env, scope: "repo" | "org", subjectId: string): Promise<LearningEntry[]> {
   try {
-    const store = await loadLearnings(env, "repo", String(repoId))
-    if (!store || store.entries.length === 0) return []
-    return [...store.entries]
-      .sort((a, b) => learningTs(b.createdTs) - learningTs(a.createdTs))
-      .slice(0, MAX_LEARNINGS)
-      .map(formatLearning)
+    const store = await loadLearnings(env, scope, subjectId)
+    return store?.entries ?? []
   } catch {
     return []
   }
+}
+
+/** Newest-first by createdTs (unparseable sorts last), matching loadRepoLearnings' original order. */
+function sortNewestFirst(entries: readonly LearningEntry[]): LearningEntry[] {
+  return [...entries].sort((a, b) => learningTs(b.createdTs) - learningTs(a.createdTs))
+}
+
+/**
+ * One readable line for an ORG-scope guardrail, labeled HIGHER-precedence than a
+ * repo fact. A durable team policy is a must-follow (`[org policy — must follow]`);
+ * any other org rule is `[org guidance]`. Mirrors `surfacePromptTag`
+ * (features/learnings/domain/render.ts) so an org rule reads the same everywhere.
+ */
+function formatOrgLearning(e: LearningEntry): string {
+  const label = e.type === "durable_preference" ? "[org policy — must follow]" : "[org guidance]"
+  const cat = e.category ? ` (${e.category})` : ""
+  return `${label} ${e.rule.trim()}${cat}`
+}
+
+/** Load the repo's review learnings as readable rules (most-recent first, capped). Soft-fail. */
+async function loadRepoLearnings(env: Env, repoId: number): Promise<string[]> {
+  const entries = await loadLearningEntriesSoft(env, "repo", String(repoId))
+  return sortNewestFirst(entries).slice(0, MAX_LEARNINGS).map(formatLearning)
+}
+
+/**
+ * The learnings lines the CLI /v1/context grounding should surface for this turn.
+ *
+ * OFF (default / OPENCLAW_SURFACE_MEMORY_APPLY unset): repo-scope learnings ONLY,
+ * byte-identical to before this slice — no org KV read, no installation use.
+ *
+ * ON: the installation's ORG guardrails ∪ the repo facts, with ORG guardrails
+ * ordered FIRST and labeled higher-precedence (an org policy is inviolable team
+ * guidance; a repo fact applies only where it does not conflict). A learning
+ * mirrored repo→org (shared content-addressed id) surfaces ONCE as the org
+ * guardrail (org wins the dedup). Total capped at MAX_LEARNINGS, org kept
+ * preferentially. SEAT/personal memory is NEVER read here — /v1/context is a
+ * shared grounding slice, so only org + repo scope apply (matching
+ * renderSurfaceMemoryForPrompt). Fail-soft: each leg degrades to what it could
+ * load; never throws.
+ */
+async function loadContextLearnings(
+  env: Env,
+  args: { repoId: number | null; installationId: number | null; orgApply: boolean },
+): Promise<string[]> {
+  const { repoId, installationId, orgApply } = args
+  // OFF: repo-scope only, exactly as before — no org KV read.
+  if (!orgApply) return repoId !== null ? await loadRepoLearnings(env, repoId) : []
+
+  const [orgEntries, repoEntries] = await Promise.all([
+    installationId !== null
+      ? loadLearningEntriesSoft(env, "org", String(installationId))
+      : Promise.resolve<LearningEntry[]>([]),
+    repoId !== null ? loadLearningEntriesSoft(env, "repo", String(repoId)) : Promise.resolve<LearningEntry[]>([]),
+  ])
+
+  // Org guardrails win the dedup: drop a repo copy of a learning also present in
+  // org, so it surfaces once as the higher-precedence org guardrail.
+  const orgIds = new Set(orgEntries.map((e) => e.id))
+  const orgLines = sortNewestFirst(orgEntries).map(formatOrgLearning)
+  const repoLines = sortNewestFirst(repoEntries.filter((e) => !orgIds.has(e.id))).map(formatLearning)
+  // Org first (inviolable), then repo facts; the cap keeps org guardrails first.
+  return [...orgLines, ...repoLines].slice(0, MAX_LEARNINGS)
 }
 
 /**
@@ -293,7 +352,13 @@ export async function handleAgentContextRoute(request: Request, env: Env): Promi
   }
 
   const { fetchFileContent, repoId, installationId } = await resolveGrounding(env, parsed.owner, parsed.repo)
-  const learnings = repoId !== null ? await loadRepoLearnings(env, repoId) : []
+  // OFF (flag unset/off): repo-scope learnings only — byte-identical to before.
+  // ON: also fold in the installation's ORG guardrails, ordered/labeled above repo facts.
+  const learnings = await loadContextLearnings(env, {
+    repoId,
+    installationId,
+    orgApply: resolveSurfaceMemoryApplyMode(env) === "on",
+  })
 
   try {
     const result = await gatherAgentContext({

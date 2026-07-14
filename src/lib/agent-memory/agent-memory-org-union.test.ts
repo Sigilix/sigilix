@@ -137,10 +137,18 @@ function orgResult(id: string, content = "org"): AgentMemoryQueryResult {
   return { id, kind: "preference", content, ts: "2026-01-01T00:00:00.000Z", score: 1 }
 }
 
-describe("unionSeatAndOrgMemory", () => {
+// OFF / default mode — SEAT-WINS, additive-only. This is the byte-identical-to-before
+// behavior preserved when OPENCLAW_SURFACE_MEMORY_APPLY is unset/off.
+describe("unionSeatAndOrgMemory — seat-wins (mode off / default)", () => {
   it("appends org entries after seat entries, seat first", () => {
     const out = unionSeatAndOrgMemory([seatResult("mem_1")], [orgResult("org:a")])
     expect(out.map((r) => r.id)).toEqual(["mem_1", "org:a"])
+  })
+
+  it('explicit mode "off" behaves identically to the default', () => {
+    const seat = [seatResult("mem_1")]
+    const org = [orgResult("org:a")]
+    expect(unionSeatAndOrgMemory(seat, org, "off")).toEqual(unionSeatAndOrgMemory(seat, org))
   })
 
   it("dedups by id — a seat entry wins any collision with an org entry", () => {
@@ -151,6 +159,14 @@ describe("unionSeatAndOrgMemory", () => {
     expect(out).toEqual([seatResult("dup", "seat wins")])
   })
 
+  it("does NOT relabel content in off mode", () => {
+    const out = unionSeatAndOrgMemory(
+      [seatResult("mem_1", "prefer tabs")],
+      [orgResult("org:a", "[required] use spaces")],
+    )
+    expect(out.map((r) => r.content)).toEqual(["prefer tabs", "[required] use spaces"]) // untouched
+  })
+
   it("passes through seat-only unchanged when org is empty", () => {
     const seat = [seatResult("mem_1"), seatResult("mem_2")]
     expect(unionSeatAndOrgMemory(seat, [])).toEqual(seat)
@@ -159,5 +175,66 @@ describe("unionSeatAndOrgMemory", () => {
   it("passes through org-only when seat is empty", () => {
     const org = [orgResult("org:a")]
     expect(unionSeatAndOrgMemory([], org)).toEqual(org)
+  })
+})
+
+// ON mode — ORG-PRECEDENCE (founder decision, flag-gated on OPENCLAW_SURFACE_MEMORY_APPLY).
+// An org guardrail is inviolable: org first + labeled authoritative; a conflicting seat
+// pref is dropped; surviving seat entries follow, labeled subordinate.
+describe("unionSeatAndOrgMemory — org-precedence (mode on)", () => {
+  const ORG_LABEL = "[org policy — inviolable]"
+  const SEAT_LABEL = "[your preference — applies only where it does not conflict with org policy]"
+
+  it("orders org FIRST, seat after, and labels both", () => {
+    const out = unionSeatAndOrgMemory(
+      [seatResult("mem_1", "prefer verbose logs")],
+      [orgResult("org:a", "[required] use @/ imports")],
+      "on",
+    )
+    expect(out.map((r) => r.id)).toEqual(["org:a", "mem_1"]) // org first
+    expect(out[0]?.content).toBe(`${ORG_LABEL} [required] use @/ imports`)
+    expect(out[1]?.content).toBe(`${SEAT_LABEL} prefer verbose logs`)
+  })
+
+  it("drops a seat entry that collides with an org rule by ID — org wins", () => {
+    const out = unionSeatAndOrgMemory([seatResult("dup", "seat")], [orgResult("dup", "org")], "on")
+    expect(out.map((r) => r.id)).toEqual(["dup"]) // only the org copy survives
+    expect(out[0]?.content).toBe(`${ORG_LABEL} org`)
+  })
+
+  it("drops a seat entry that RESTATES an org rule by content (tag-insensitive) — org wins", () => {
+    const out = unionSeatAndOrgMemory(
+      [seatResult("mem_1", "Use @/ imports")], // same rule, different case, no tag
+      [orgResult("org:a", "[required] use @/ imports")],
+      "on",
+    )
+    expect(out.map((r) => r.id)).toEqual(["org:a"]) // the seat restatement is dropped
+  })
+
+  it("keeps a NON-conflicting seat preference (adds context, never overrides)", () => {
+    const out = unionSeatAndOrgMemory(
+      [seatResult("mem_1", "prefer trailing commas")],
+      [orgResult("org:a", "[required] no console.log in prod")],
+      "on",
+    )
+    expect(out.map((r) => r.id)).toEqual(["org:a", "mem_1"])
+    expect(out[1]?.content).toBe(`${SEAT_LABEL} prefer trailing commas`)
+  })
+
+  it("org-only stays org-only (labeled authoritative)", () => {
+    const out = unionSeatAndOrgMemory([], [orgResult("org:a", "policy")], "on")
+    expect(out).toEqual([{ ...orgResult("org:a", `${ORG_LABEL} policy`) }])
+  })
+})
+
+// STRUCTURAL SAFETY (recall-safety invariant): a seat memory is free-text and can
+// never carry a learnings polarity, so it can never become a suppress/require
+// learning that reaches decideLearningSuppressions.
+describe("seat memory is structurally non-suppressive", () => {
+  it("an AgentMemoryQueryResult carries no `polarity` — it can never be a suppress/require learning", () => {
+    const seat = seatResult("mem_1")
+    expect("polarity" in seat).toBe(false)
+    // Its kind is a free-text memory kind, never a learnings polarity.
+    expect(["decision", "preference", "dead_end", "correction", "task_state"]).toContain(seat.kind)
   })
 })

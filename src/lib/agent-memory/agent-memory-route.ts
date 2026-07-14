@@ -17,7 +17,7 @@
 import type { Env } from "@/src/shared/types/env"
 import { requireApiTenant } from "@/src/lib/api-key-resolver"
 import { readCliAppMemoryContext, resolveAppMemoryCliMode, type AppMemoryCliMode } from "@/src/features/app-memory"
-import { resolveCliOrgMemoryMode } from "@/src/features/learnings"
+import { resolveCliOrgMemoryMode, resolveSurfaceMemoryApplyMode } from "@/src/features/learnings"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import type { AgentMemoryKind, AgentMemoryQueryResult, AgentMemoryRecord } from "./types"
 import { ALL_AGENT_MEMORY_KINDS } from "./types"
@@ -405,10 +405,15 @@ export async function handleMemoryQueryRoute(request: Request, env: Env): Promis
             ids: org.entries.map((e) => e.id),
           })
         } else {
-          // ON: seat ∪ org, deduped by id (seat wins any collision), seat first.
-          legacyResults = unionSeatAndOrgMemory(seatResults, org.entries)
+          // ON: seat ∪ org. Precedence is flag-gated on OPENCLAW_SURFACE_MEMORY_APPLY
+          // (the SAME flag #946/#947 reuse): off ⇒ seat-wins (seat first, byte-identical
+          // to before); on ⇒ org-precedence (org guardrails inviolable, a conflicting
+          // seat pref dropped).
+          const surfaceMode = resolveSurfaceMemoryApplyMode(env)
+          legacyResults = unionSeatAndOrgMemory(seatResults, org.entries, surfaceMode)
           emitTelemetry("cli-org-memory-union", {
             installationId: caller.installationId,
+            surfaceMode,
             seatCount: seatResults.length,
             orgCount: org.entries.length,
             added: legacyResults.length - seatResults.length,

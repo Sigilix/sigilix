@@ -219,13 +219,13 @@ const CALL_DROP_TRACE: Scenario = {
         "Before proposing the fix: which causes have you ALREADY ruled out, and what was the evidence for each? " +
         "List them — do not re-investigate.",
       facts: [
-        { id: "rtp-timeout", anchors: ["rtp", "media", "inactivity", "rtptimeout"] },
+        { id: "rtp-timeout", anchors: ["rtptimeout", "flows continuously", "jitter", "60s"] },
         {
           id: "transport-reset",
-          anchors: ["transport", "udp", "icmp", "not a reset", "carrier-initiated bye", "we send"],
+          anchors: ["icmp", "we send", "sends the bye", "initiated by us"],
         },
-        { id: "dialplan-limit", anchors: ["dialplan", "absolute", "dial(", " l option", "no l ", "hangup"] },
-        { id: "nat-keepalive", anchors: ["nat", "qualify", "keepalive"] },
+        { id: "dialplan-limit", anchors: ["absolute_timeout", "l option", "no l ", "s option", "dial()"] },
+        { id: "nat-keepalive", anchors: ["qualify", "qualify ok", "options keepalive"] },
       ],
     },
     {
@@ -233,9 +233,12 @@ const CALL_DROP_TRACE: Scenario = {
       kind: "constraint",
       question: "What constraints must the fix respect? List every one we committed to.",
       facts: [
-        { id: "cannot-change-carrier", anchors: ["carrier", "will not respond", "cannot change", "their side"] },
-        { id: "no-global-disable", anchors: ["global", "other carriers", "not disable timers global", "rfc"] },
-        { id: "scoped-to-endpoint", anchors: ["endpoint", "pjsip.conf", "carrierx", "scoped"] },
+        {
+          id: "cannot-change-carrier",
+          anchors: ["will not respond", "won't respond", "never answers", "will not answer"],
+        },
+        { id: "no-global-disable", anchors: ["other carriers", "globally", "rfc-4028", "rfc 4028"] },
+        { id: "scoped-to-endpoint", anchors: ["pjsip.conf", "carrierx", "scoped"] },
       ],
     },
     {
@@ -248,7 +251,7 @@ const CALL_DROP_TRACE: Scenario = {
           id: "half-of-64",
           anchors: ["session-expires/2", "session expires/2", "half of 64", "half of the 64", "exactly half"],
         },
-        { id: "we-are-refresher", anchors: ["refresher", "uac", "refresh", "update"] },
+        { id: "we-are-refresher", anchors: ["refresher", "uac"] },
       ],
     },
   ],
@@ -261,7 +264,7 @@ const CALL_DROP_TRACE: Scenario = {
       anchors: ["session-timer", "session expires", "session-expires", "rfc 4028", "rfc4028"],
     },
     { id: "refresh-unanswered", anchors: ["refresh", "no response", "not answer", "refresher", "uac"] },
-    { id: "fix-timers-no", anchors: ["timers=no", "timers = no", "disable", "pjsip"] },
+    { id: "fix-timers-no", anchors: ["timers=no", "timers = no", "disable session-timers", "session-timers"] },
   ],
   minBuildupChars: 1900,
 }
@@ -366,7 +369,8 @@ export interface MeanCI {
 const Z95 = 1.959963984540054
 
 /** Mean + 95% normal-approx CI. n<=1 -> the point value with zero-width CI (documented:
- *  a single pass is noise — run N>=5 per condition for a CI you can act on). */
+ *  a single pass is noise — run N>=5 per condition, and per the repo model-eval standard
+ *  K>=12 for any delta you'll ACT on, for a CI you can trust). */
 export function meanCI(values: readonly number[]): MeanCI {
   const n = values.length
   if (n === 0) return { mean: 0, lo: 0, hi: 0, sd: 0, n: 0 }

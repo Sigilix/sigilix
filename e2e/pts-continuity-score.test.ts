@@ -29,6 +29,7 @@ import {
 import { buildScorecard, formatScorecard } from "./pts-continuity-scorecard"
 
 const bugHunt = CONTINUITY_SCENARIOS.find((s) => s.id === "double-charge-bug-hunt")!
+const callDrop = CONTINUITY_SCENARIOS.find((s) => s.id === "asterisk-32s-call-drop")!
 
 // ─── anchor matching + probe/task scoring ───
 
@@ -98,6 +99,25 @@ describe("anchor validity — a state-LOST re-derivation must NOT score retentio
       "Ruled out: only one /api/pay fires per checkout even on rage-clicks; the charge.refunded " +
       "path must keep working; the guard is a setnx keyed on event.id."
     const scores = bugHunt.probes.map((pr) => scoreProbe(pr, grounded))
+    expect(retentionScore(scores)).toBeGreaterThan(0.3)
+  })
+
+  // Same guard for the causal-trace scenario — its domain terms (rtp, nat, carrier, pjsip)
+  // are the most re-derivable in the corpus, so it needs the tightest anti-cheat check.
+  const rederivedCallDrop =
+    "For a call dropping mid-session, I'd check for an RTP media timeout, a NAT keepalive " +
+    "issue, a transport reset, or a dialplan hangup. Likely SIP session-timers — disable them " +
+    "on the pjsip endpoint. The carrier probably drops the refresh."
+  it("a generic re-derived answer recalls no session-specific fact on any call-drop probe", () => {
+    const scores = callDrop.probes.map((pr) => scoreProbe(pr, rederivedCallDrop))
+    expect(retentionScore(scores)).toBeLessThanOrEqual(0.1)
+  })
+  it("the established call-drop evidence DOES recall its facts", () => {
+    const grounded =
+      "Ruled out RTP: it flows continuously, rtptimeout is 60s. We send the BYE (no ICMP). No L " +
+      "option on Dial(). We (the UAC) are the refresher; 32 is session-expires/2; the carrier " +
+      "will not respond, so scope timers=no to the carrierX endpoint in pjsip.conf."
+    const scores = callDrop.probes.map((pr) => scoreProbe(pr, grounded))
     expect(retentionScore(scores)).toBeGreaterThan(0.3)
   })
 })

@@ -1,15 +1,20 @@
 // PTS SIG-578 — deep-work continuity CLI. Standalone runnable report over the continuity
 // corpus: drives each scenario through Control-A / Control-B [/ Treatment] on a real model
-// and prints the condition x metric scorecard, optionally writing the JSON scorecard.
+// and prints a condition x metric scorecard PER SCENARIO and pooled, optionally writing the
+// JSON scorecards.
 //
 // Runs through the SAME harness + model gateway as the live test. Needs a provider key in
 // the environment (or gitignored .dev.vars) — the key is chosen by the model's id shape
 // (OpenRouter slash id -> OPENROUTER_API_KEY; `:cloud` tag -> OLLAMA_API_KEY). No key ->
 // the command prints exactly what to set and exits non-zero.
 //
+// A single pass is noise; --runs defaults to 5, and per the repo model-eval standard use
+// K>=12 for any delta you'll ACT on. Report PER-SCENARIO deltas (a loose scenario must not
+// contaminate a well-guarded one); the pooled row is kept alongside, never instead.
+//
 // Usage:
-//   npm run pts-continuity-report                                  # defaults: openai/gpt-oss-120b, 3 runs, all scenarios
-//   npm run pts-continuity-report -- --model=deepseek-v4-pro:cloud --runs=5
+//   npm run pts-continuity-report                                  # defaults: openai/gpt-oss-120b, 5 runs, all scenarios
+//   npm run pts-continuity-report -- --model=deepseek-v4-pro:cloud --runs=12
 //   npm run pts-continuity-report -- --scenarios=double-charge-bug-hunt --out=scorecard.json
 //   npm run pts-continuity-report -- --treatment=<registered-compactor-id>
 
@@ -22,7 +27,7 @@ import {
   gatewayModelClient,
   continuityApiKey,
 } from "@/e2e/pts-continuity-harness"
-import { buildScorecard, formatScorecard } from "@/e2e/pts-continuity-scorecard"
+import { buildScorecard, formatScorecard, type Scorecard } from "@/e2e/pts-continuity-scorecard"
 
 const ALLOWED_ARGS: ReadonlySet<string> = new Set(["model", "runs", "scenarios", "treatment", "out"])
 
@@ -59,11 +64,13 @@ function readKey(name: string): string | undefined {
   return undefined
 }
 
+const pct = (x: number): string => `${(x * 100).toFixed(0)}%`
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
   const model = args.model ?? "openai/gpt-oss-120b"
   const runs = (() => {
-    const n = Number(args.runs ?? 3)
+    const n = Number(args.runs ?? 5)
     if (!Number.isFinite(n) || n < 1) die("--runs must be a positive integer")
     return Math.floor(n)
   })()
@@ -95,11 +102,11 @@ async function main(): Promise<void> {
   const conditions = standardConditions(treatment)
   if (!treatment) console.error("[pts] treatment condition skipped — no PTS compactor registered (stub seam ready).")
 
-  const byCondition = new Map<string, RunMetrics[]>()
-  for (const c of conditions) byCondition.set(c.id, [])
-
-  const pct = (x: number): string => `${(x * 100).toFixed(0)}%`
+  // Collect runs keyed by scenario so a loose scenario can't contaminate a well-guarded one.
+  const perScenario = new Map<string, Map<string, RunMetrics[]>>()
   for (const scenario of scenarios) {
+    const byCondition = new Map<string, RunMetrics[]>()
+    for (const c of conditions) byCondition.set(c.id, [])
     for (const c of conditions) {
       for (let k = 0; k < runs; k++) {
         const m = await runContinuitySession({ scenario, compactor: c.compactor, model: client })
@@ -110,20 +117,45 @@ async function main(): Promise<void> {
         )
       }
     }
+    perScenario.set(scenario.id, byCondition)
   }
 
-  const aggregates = conditions.map((c) => aggregateCondition(c.id, byCondition.get(c.id)!))
-  const scorecard = buildScorecard({
+  // Per-scenario scorecards.
+  const perScenarioCards: { scenarioId: string; scorecard: Scorecard }[] = []
+  for (const scenario of scenarios) {
+    const byCondition = perScenario.get(scenario.id)!
+    const aggregates = conditions.map((c) => aggregateCondition(c.id, byCondition.get(c.id)!))
+    const sc = buildScorecard({
+      model,
+      scenarioIds: [scenario.id],
+      runsPerCondition: runs,
+      baselineId: "control-b",
+      aggregates,
+    })
+    perScenarioCards.push({ scenarioId: scenario.id, scorecard: sc })
+    console.log(formatScorecard(sc))
+  }
+
+  // Pooled scorecard across all scenarios.
+  const pooled = conditions.map((c) =>
+    aggregateCondition(
+      c.id,
+      scenarios.flatMap((s) => perScenario.get(s.id)!.get(c.id)!),
+    ),
+  )
+  const pooledCard = buildScorecard({
     model,
     scenarioIds: scenarios.map((s) => s.id),
     runsPerCondition: runs * scenarios.length,
     baselineId: "control-b",
-    aggregates,
+    aggregates: pooled,
   })
-  console.log(formatScorecard(scorecard))
+  console.log("\n[pts] POOLED across scenarios:")
+  console.log(formatScorecard(pooledCard))
+
   if (args.out) {
-    writeFileSync(args.out, JSON.stringify(scorecard, null, 2))
-    console.error(`[pts] scorecard JSON written to ${args.out}`)
+    writeFileSync(args.out, JSON.stringify({ perScenario: perScenarioCards, pooled: pooledCard }, null, 2))
+    console.error(`[pts] scorecards JSON written to ${args.out}`)
   }
 }
 

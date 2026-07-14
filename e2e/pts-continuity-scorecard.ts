@@ -60,7 +60,11 @@ export function buildScorecard(args: {
   baselineId: string
   aggregates: ConditionAgg[]
 }): Scorecard {
-  const base = args.aggregates.find((a) => a.condition === args.baselineId) ?? null
+  const foundBase = args.aggregates.find((a) => a.condition === args.baselineId) ?? null
+  // If the baseline has NO non-errored runs, its mean is a meaningless 0, and a delta of
+  // (target - 0) would print a large FAKE positive that reads like a real finding. Drop the
+  // baseline entirely in that case so every non-baseline row shows no delta (rendered N/A).
+  const base = foundBase && foundBase.n > 0 ? foundBase : null
   const rows: ScorecardRow[] = args.aggregates.map((a) => {
     const isBase = a.condition === args.baselineId
     const b = isBase ? null : base

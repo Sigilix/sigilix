@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 // Mock the Phase 1 primitives this layer wraps. retrieveChunks +
-// fetchPullRequestContext + getInstallationToken + GitHubClient.
+// PR-context fetchers + getInstallationToken + GitHubClient.
 const mockRetrieveChunks = vi.fn()
 const mockFetchPullRequestContext = vi.fn()
+const mockFetchPullRequestContextFromEnv = vi.fn()
+const mockFetchPullRequestContextWithClient = vi.fn()
 const mockGetInstallationToken = vi.fn(async (_args: unknown) => "test-token")
 const mockGetFileContent = vi.fn()
 // SIG-407: the graph-DO boundary the symbol expander calls. Default-off means the
@@ -32,6 +34,8 @@ vi.mock("@/src/lib/github-pr-context", async () => {
   return {
     ...actual,
     fetchPullRequestContext: (args: unknown) => mockFetchPullRequestContext(args),
+    fetchPullRequestContextFromEnv: (args: unknown) => mockFetchPullRequestContextFromEnv(args),
+    fetchPullRequestContextWithClient: (args: unknown) => mockFetchPullRequestContextWithClient(args),
   }
 })
 
@@ -57,6 +61,8 @@ import type { Env } from "@/src/shared/types/env"
 beforeEach(() => {
   mockRetrieveChunks.mockReset()
   mockFetchPullRequestContext.mockReset()
+  mockFetchPullRequestContextFromEnv.mockReset()
+  mockFetchPullRequestContextWithClient.mockReset()
   mockGetInstallationToken.mockReset().mockResolvedValue("test-token")
   mockGetFileContent.mockReset()
   mockEnclosing.mockReset()
@@ -459,17 +465,17 @@ describe("retrieve_codebase", () => {
 })
 
 describe("fetch_pr", () => {
-  function ghTool(): ReturnType<typeof createAgentTools>[number] {
+  function ghTool(github = makeGithubCtx(), env = makeEnv()): ReturnType<typeof createAgentTools>[number] {
     const tools = createAgentTools({
-      env: makeEnv(),
+      env,
       surface: "github-mention",
-      github: makeGithubCtx(),
+      github,
     })
     return tools.find((t) => t.name === "fetch_pr")!
   }
 
-  it("returns ok with PR context when fetch succeeds", async () => {
-    mockFetchPullRequestContext.mockResolvedValue({
+  it("uses the exact supplied installation client and never delegates authorization to an env wrapper", async () => {
+    const contextResult = {
       ok: true,
       context: {
         owner: "Sigilix",
@@ -482,14 +488,35 @@ describe("fetch_pr", () => {
         state: "merged",
         mergedAt: null,
       },
+    }
+    // Keep the pre-fix path executable so RED is caused by the boundary
+    // assertions below, not by an unrelated undefined mock result.
+    mockFetchPullRequestContext.mockResolvedValue(contextResult)
+    mockFetchPullRequestContextFromEnv.mockResolvedValue(contextResult)
+    mockFetchPullRequestContextWithClient.mockResolvedValue(contextResult)
+    const github = makeGithubCtx()
+    const env = makeEnv({
+      GITHUB_APP_ID: "1",
+      GITHUB_PRIVATE_KEY: "key",
+      OPENCLAW_GITHUB_INSTALLATION_MAP: JSON.stringify({ "Sigilix/rubberfit": "999" }),
     })
-    const result = (await ghTool().execute(
+    const result = (await ghTool(github, env).execute(
       { owner: "Sigilix", repo: "rubberfit", number: 162 },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean; pr: unknown }
     expect(result.ok).toBe(true)
     expect(result.pr).toMatchObject({ number: 162 })
+    expect(mockFetchPullRequestContextWithClient).toHaveBeenCalledOnce()
+    expect(mockFetchPullRequestContextWithClient).toHaveBeenCalledWith({
+      owner: "Sigilix",
+      repo: "rubberfit",
+      number: 162,
+      client: github.githubClient,
+    })
+    expect(mockFetchPullRequestContextFromEnv).not.toHaveBeenCalled()
+    expect(mockFetchPullRequestContext).not.toHaveBeenCalled()
+    expect(mockGetInstallationToken).not.toHaveBeenCalled()
   })
 
   it("REJECTS out-of-allowedRepos as recoverable tool error (not throw)", async () => {
@@ -501,6 +528,8 @@ describe("fetch_pr", () => {
     expect(result.ok).toBe(false)
     expect(result.error).toMatch(/outside the allowed set/)
     expect(result.allowedRepos).toEqual([{ owner: "Sigilix", repo: "rubberfit" }])
+    expect(mockFetchPullRequestContextWithClient).not.toHaveBeenCalled()
+    expect(mockFetchPullRequestContextFromEnv).not.toHaveBeenCalled()
     expect(mockFetchPullRequestContext).not.toHaveBeenCalled()
   })
 
@@ -525,8 +554,10 @@ describe("fetch_pr", () => {
     }
   })
 
-  it("propagates fetchPullRequestContext failure as recoverable error", async () => {
+  it("propagates the client-backed fetch failure as a recoverable error without env fallback", async () => {
     mockFetchPullRequestContext.mockResolvedValue({ ok: false, reason: "not_found" })
+    mockFetchPullRequestContextFromEnv.mockResolvedValue({ ok: false, reason: "not_found" })
+    mockFetchPullRequestContextWithClient.mockResolvedValue({ ok: false, reason: "not_found" })
     const result = (await ghTool().execute(
       { owner: "Sigilix", repo: "rubberfit", number: 999 },
       new AbortController().signal,
@@ -534,6 +565,9 @@ describe("fetch_pr", () => {
     )) as { ok: boolean; error: string }
     expect(result.ok).toBe(false)
     expect(result.error).toMatch(/not_found/)
+    expect(mockFetchPullRequestContextWithClient).toHaveBeenCalledOnce()
+    expect(mockFetchPullRequestContextFromEnv).not.toHaveBeenCalled()
+    expect(mockFetchPullRequestContext).not.toHaveBeenCalled()
   })
 })
 

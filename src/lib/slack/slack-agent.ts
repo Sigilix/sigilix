@@ -14,7 +14,6 @@ import { buildClient, parseGithubMentionResponse } from "@/src/lib/github-mentio
 import { buildLinearClient } from "@/src/lib/linear"
 import { dispatchTicketImplementation } from "@/src/lib/linear-agent-run"
 import { resolveLinearAgentRunMode } from "@/src/lib/agent-runner/mode"
-import { resolveLinearTeamRepoScope } from "@/src/lib/cross-repo-context"
 import { triageIssue } from "@/src/lib/triage"
 import { appendUsageEvent, checkUsagePool } from "@/src/features/tenancy"
 import { recallSlackMemory, captureSlackMemory } from "@/src/lib/slack/slack-memory"
@@ -129,23 +128,24 @@ type SlackLinearPolicy =
  * proof is required; only a DB-absent legacy deployment may use global maps. */
 async function resolveSlackLinearPolicy(
   env: Env,
+  installationId: number,
   primary: SlackScope["repos"][number],
   teamId: string,
 ): Promise<SlackLinearPolicy> {
   if (!env.SIGILIX_PLATFORM_DB) return { ok: true, config: null }
   try {
-    const connection = await getLinearConnectionByInstallation(env, primary.installationId)
+    const connection = await getLinearConnectionByInstallation(env, installationId)
     if (!connection || connection.status !== "active") return { ok: false, reason: "unavailable" }
     const [config, binding] = await Promise.all([
-      getLinearConfig(env, primary.installationId),
+      getLinearConfig(env, installationId),
       resolveLinearTeamBinding(env, connection.organizationId, teamId),
     ])
     if (
       !config ||
       !binding ||
-      binding.installationId !== primary.installationId ||
+      binding.installationId !== installationId ||
       binding.accessState !== "allowed" ||
-      binding.githubRepoId <= 0 ||
+      binding.githubRepoId !== primary.githubRepoId ||
       binding.githubRepoFullName.toLowerCase() !== `${primary.owner}/${primary.repo}`.toLowerCase() ||
       !teamIsSelected(config, teamId)
     ) {
@@ -155,7 +155,7 @@ async function resolveSlackLinearPolicy(
     return {
       ok: true,
       config,
-      tenant: { organizationId: connection.organizationId, installationId: primary.installationId, teamId },
+      tenant: { organizationId: connection.organizationId, installationId, teamId },
     }
   } catch {
     return { ok: false, reason: "unavailable" }
@@ -190,7 +190,7 @@ export async function runSlackAgent(env: Env, ctx: SlackMentionContext): Promise
   // NEXT mention (a friendly reply), never mid-work. Behind SIGILIX_USAGE_METER_MODE
   // (default shadow → never blocks). Fail-open.
   const now = Date.now()
-  const orgDecision = await checkUsagePool(env, { pool: "org", installationId: primary.installationId, nowMs: now })
+  const orgDecision = await checkUsagePool(env, { pool: "org", installationId: scope.installationId, nowMs: now })
   if (!orgDecision.allowed) {
     return {
       reply: formatSigilixReply(
@@ -205,7 +205,7 @@ export async function runSlackAgent(env: Env, ctx: SlackMentionContext): Promise
   if (orgDecision.mode !== "off") {
     await appendUsageEvent(env, {
       meter: "slack",
-      installationId: primary.installationId,
+      installationId: scope.installationId,
       userKey: `slack:${ctx.slackUserId}`,
       surface: "slack",
       nowIso: new Date(now).toISOString(),
@@ -241,17 +241,12 @@ export async function runSlackAgent(env: Env, ctx: SlackMentionContext): Promise
     return runLinearTriage(env, ctx, memScope, primary)
   }
 
-  return runQa(env, ctx, memScope, primary)
+  return runQa(env, ctx, memScope)
 }
 
 // ─── Q&A path ────────────────────────────────────────────────────────────────
 
-async function runQa(
-  env: Env,
-  ctx: SlackMentionContext,
-  memScope: SlackMemoryScope,
-  primary: SlackScope["repos"][number],
-): Promise<SlackAgentResult> {
+async function runQa(env: Env, ctx: SlackMentionContext, memScope: SlackMemoryScope): Promise<SlackAgentResult> {
   // Recall relevant prior context — soft-fails to [] on error.
   const recalled = await recallSlackMemory(env, memScope, ctx.mentionText)
 
@@ -259,7 +254,7 @@ async function runQa(
   const commentId = `slack:${ctx.channelId}:${ctx.slackUserId}`
 
   // Build the GitHub-scoped agent tools for this installation.
-  const tools = await buildSlackAgentTools(env, ctx, primary)
+  const tools = await buildSlackAgentTools(env, ctx)
 
   const initialUserMessage = buildInitialUserMessage(ctx, recalled)
 
@@ -267,7 +262,7 @@ async function runQa(
   // guidance appended to the system prompt. Resolution soft-fails to undefined
   // (and applySkillGuidance is the identity without a context), so the no-skill
   // path is byte-identical to today's prompt.
-  const skillContext = await loadAgentSkillContext(env, primary.installationId, ctx.mentionText, commentId)
+  const skillContext = await loadAgentSkillContext(env, ctx.scope.installationId, ctx.mentionText, commentId)
 
   const loopResult = await runAgentLoop({
     model,
@@ -345,7 +340,7 @@ async function runQa(
   await captureInstructiveLearning({
     env,
     scope: "org",
-    subjectId: String(primary.installationId),
+    subjectId: String(ctx.scope.installationId),
     surface: "chat",
     sourceKind: "chat",
     message: ctx.mentionText,
@@ -374,7 +369,7 @@ async function runLinearTriage(
     return { reply, action: { kind: "qa" } }
   }
 
-  const policy = await resolveSlackLinearPolicy(env, primary, scope.linearTeam)
+  const policy = await resolveSlackLinearPolicy(env, scope.installationId, primary, scope.linearTeam)
   if (!policy.ok) return slackLinearPolicyFailure(policy.reason)
 
   const { title, description } = await summarizeThreadToIssue(env, ctx)
@@ -436,7 +431,7 @@ async function runImplement(
     return { reply, action: { kind: "qa" } }
   }
 
-  const policy = await resolveSlackLinearPolicy(env, primary, scope.linearTeam)
+  const policy = await resolveSlackLinearPolicy(env, scope.installationId, primary, scope.linearTeam)
   if (!policy.ok) return slackLinearPolicyFailure(policy.reason)
 
   // Summarize the thread into a Linear issue title + description (same step as triage).
@@ -459,7 +454,7 @@ async function runImplement(
       ? await dispatchTicketImplementation(env, {
           owner: primary.owner,
           repo: primary.repo,
-          installationId: primary.installationId,
+          installationId: scope.installationId,
           ticket: { identifier: issue.identifier, title, body: description ?? "", url: issue.url },
           dedupeId: issue.id,
         })
@@ -507,7 +502,7 @@ async function runOfferFollowUp(
     const reply = formatSigilixReply("Okay — I'll leave it. Ping me if you change your mind.")
     return { reply, action: { kind: "implement-decline" } }
   }
-  return runOfferRevise(env, ctx, memScope, primary, offer)
+  return runOfferRevise(env, ctx, memScope, offer)
 }
 
 /**
@@ -535,7 +530,7 @@ async function runOfferConfirm(
     return { reply, action: { kind: "qa" } }
   }
 
-  const policy = await resolveSlackLinearPolicy(env, primary, scope.linearTeam)
+  const policy = await resolveSlackLinearPolicy(env, scope.installationId, primary, scope.linearTeam)
   if (!policy.ok) {
     await clearImplementOffer(env, ctx.channelId, ctx.threadTs)
     return slackLinearPolicyFailure(policy.reason)
@@ -558,7 +553,7 @@ async function runOfferConfirm(
       ? await dispatchTicketImplementation(env, {
           owner: primary.owner,
           repo: primary.repo,
-          installationId: primary.installationId,
+          installationId: scope.installationId,
           ticket: { identifier: issue.identifier, title: offer.title, body: offer.plan, url: issue.url },
           dedupeId: issue.id,
         })
@@ -591,17 +586,16 @@ async function runOfferRevise(
   env: Env,
   ctx: SlackMentionContext,
   memScope: SlackMemoryScope,
-  primary: SlackScope["repos"][number],
   offer: ImplementOffer,
 ): Promise<SlackAgentResult> {
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
   const commentId = `slack:${ctx.channelId}:${ctx.slackUserId}`
 
-  const tools = await buildSlackAgentTools(env, ctx, primary)
+  const tools = await buildSlackAgentTools(env, ctx)
   const initialUserMessage = buildReviseUserMessage(ctx, offer)
 
   // Same governed-skill seam as runQa — identity when nothing resolves.
-  const skillContext = await loadAgentSkillContext(env, primary.installationId, ctx.mentionText, commentId)
+  const skillContext = await loadAgentSkillContext(env, ctx.scope.installationId, ctx.mentionText, commentId)
 
   const loopResult = await runAgentLoop({
     model,
@@ -754,30 +748,19 @@ function parseTriageSummary(text: string): TriageSummary | null {
  * Build the GitHub-scoped agent tools for this Slack mention's installation.
  * Shared by the qa path and the B3c revise path so the tool wiring never drifts.
  */
-async function buildSlackAgentTools(
-  env: Env,
-  ctx: SlackMentionContext,
-  primary: SlackScope["repos"][number],
-): Promise<ReturnType<typeof createAgentTools>> {
-  const githubClient = await buildClient(env, primary.installationId)
-  // Cross-repo context: widen the retrieve-tool repo scope to the Linear team's
-  // EXPLICITLY configured set (multi-repo or use-all) on top of the channel's own
-  // mapping, so the assistant can pull evidence from sibling repos — same tenant
-  // (all resolved repos are under this installation). Fail-soft to the channel
-  // scope alone (`resolveLinearTeamRepoScope` returns [] with no Linear binding),
-  // i.e. unchanged single-repo behavior.
+async function buildSlackAgentTools(env: Env, ctx: SlackMentionContext): Promise<ReturnType<typeof createAgentTools>> {
+  const githubClient = await buildClient(env, ctx.scope.installationId)
+  // The channel binding is the Slack authorization boundary. Linear settings
+  // may identify a ticket destination but must never widen repository access.
   const channelRepos = ctx.scope.repos.map((r) => ({ owner: r.owner, repo: r.repo }))
-  const linearRepos = ctx.scope.linearTeam
-    ? await resolveLinearTeamRepoScope(env, primary.installationId, ctx.scope.linearTeam)
-    : []
   return createAgentTools({
     env,
     surface: "slack-mention",
     github: {
       githubClient,
-      allowedRepos: dedupeOwnerRepo([...channelRepos, ...linearRepos]),
+      allowedRepos: dedupeOwnerRepo(channelRepos),
       defaultRef: "main",
-      installationId: primary.installationId,
+      installationId: ctx.scope.installationId,
     },
   })
 }

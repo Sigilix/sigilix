@@ -2,10 +2,10 @@
 // counterpart of the Linear team→repo model. The OAuth callback records which
 // Sigilix org (GitHub App installation) owns a Slack workspace install, and the
 // portal's channel→repo picker persists per-channel repo bindings here. The
-// scope resolver (slack-scope.ts) reads these tables FIRST and falls back to
-// the SIGILIX_SLACK_SCOPE_MAP env var, so the founder's beta channel keeps
-// working while customers self-serve. Fail-closed: every read returns null /
-// [] when SIGILIX_PLATFORM_DB is unbound or the tables don't exist yet.
+// scope resolver (slack-scope.ts) reads these tables FIRST. It distinguishes a
+// healthy missing row from a schema/query failure so only genuine absence may
+// use the legacy env map; invalid or unavailable authority stays fail-closed.
+// Portal-facing list reads retain their documented null/[] soft-failure shape.
 
 import type { Env } from "@/src/shared/types/env"
 
@@ -229,46 +229,116 @@ export async function listSlackInstallationRepos(env: StoreEnv, installationId: 
   return rows.results.map((row) => ({ githubRepoId: row.repo_id, githubRepoFullName: row.full_name }))
 }
 
-export interface SlackChannelDbScope {
+export interface BoundSlackChannelDbScope {
+  kind: "bound"
   installationId: number
+  useAllRepos: boolean
   repos: SlackRepoRef[]
 }
 
-/** The effective repo set for one team:channel, or null when the channel has no
- *  DB binding (the resolver then falls back to the env scope map). Returns
- *  null — never throws — when the DB is unbound, the migration hasn't been
- *  applied yet, or the query fails, so the env fallback always stays reachable. */
+export type SlackChannelDbScopeResult =
+  | { kind: "unbound" }
+  | { kind: "absent" }
+  | { kind: "unavailable" }
+  | { kind: "invalid" }
+  | BoundSlackChannelDbScope
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0
+}
+
+function parsePositiveSafeIntegerText(value: unknown): number | null {
+  if (typeof value !== "string" || !/^[1-9]\d*$/u.test(value)) return null
+  const parsed = Number(value)
+  return isPositiveSafeInteger(parsed) ? parsed : null
+}
+
+function isValidGithubRepoFullName(value: unknown): value is string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 512 ||
+    value.trim() !== value ||
+    /[\s\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    return false
+  }
+  const slash = value.indexOf("/")
+  return slash > 0 && slash === value.lastIndexOf("/") && slash < value.length - 1
+}
+
+/** The effective repo authority for one team:channel. The discriminant is
+ *  load-bearing: only `unbound` and a healthy
+ *  `absent` result may use the legacy env map. Once a binding row is observed,
+ *  every workspace/repo installation must agree; corrupt data is authoritative
+ *  denial rather than an excuse to switch authority sources. Query failures are
+ *  also distinct from absence so a D1 outage cannot activate legacy scope. */
 export async function getSlackChannelDbScope(
   env: StoreEnv,
   args: { teamId: string; channelId: string },
-): Promise<SlackChannelDbScope | null> {
+): Promise<SlackChannelDbScopeResult> {
   const db = env.SIGILIX_PLATFORM_DB
-  if (!db) return null
+  if (!db) return { kind: "unbound" }
+  let binding: { installation_id_text: string; use_all_repos: number } | null
   try {
-    const binding = await db
-      .prepare("SELECT installation_id, use_all_repos FROM slack_channel_binding WHERE team_id = ? AND channel_id = ?")
+    binding = await db
+      .prepare(
+        "SELECT CAST(installation_id AS TEXT) AS installation_id_text, use_all_repos" +
+          " FROM slack_channel_binding WHERE team_id = ? AND channel_id = ?",
+      )
       .bind(args.teamId, args.channelId)
-      .first<{ installation_id: number; use_all_repos: number }>()
-    if (!binding) return null
-    if (binding.use_all_repos === 1) {
-      const repos = await listSlackInstallationRepos(env, binding.installation_id)
-      return { installationId: binding.installation_id, repos }
+      .first<{ installation_id_text: string; use_all_repos: number }>()
+  } catch {
+    return { kind: "unavailable" }
+  }
+  if (!binding) return { kind: "absent" }
+  const bindingInstallationId = parsePositiveSafeIntegerText(binding.installation_id_text)
+  if (bindingInstallationId === null || ![0, 1].includes(binding.use_all_repos)) {
+    return { kind: "invalid" }
+  }
+
+  try {
+    const workspace = await db
+      .prepare("SELECT CAST(installation_id AS TEXT) AS installation_id_text FROM slack_workspace WHERE team_id = ?")
+      .bind(args.teamId)
+      .first<{ installation_id_text: string }>()
+    const workspaceInstallationId = parsePositiveSafeIntegerText(workspace?.installation_id_text)
+    if (workspaceInstallationId === null || workspaceInstallationId !== bindingInstallationId) {
+      return { kind: "invalid" }
     }
     const rows = await db
       .prepare(
-        "SELECT github_repo_id, github_repo_full_name FROM slack_channel_repo" +
+        "SELECT CAST(installation_id AS TEXT) AS installation_id_text," +
+          " CAST(github_repo_id AS TEXT) AS github_repo_id_text, github_repo_full_name FROM slack_channel_repo" +
           " WHERE team_id = ? AND channel_id = ? ORDER BY lower(github_repo_full_name)",
       )
       .bind(args.teamId, args.channelId)
-      .all<{ github_repo_id: number; github_repo_full_name: string }>()
+      .all<{ installation_id_text: string; github_repo_id_text: string; github_repo_full_name: string }>()
+    for (const row of rows.results) {
+      const rowInstallationId = parsePositiveSafeIntegerText(row.installation_id_text)
+      const githubRepoId = parsePositiveSafeIntegerText(row.github_repo_id_text)
+      if (
+        rowInstallationId !== bindingInstallationId ||
+        githubRepoId === null ||
+        !isValidGithubRepoFullName(row.github_repo_full_name)
+      ) {
+        return { kind: "invalid" }
+      }
+    }
     return {
-      installationId: binding.installation_id,
-      repos: rows.results.map((row) => ({
-        githubRepoId: row.github_repo_id,
-        githubRepoFullName: row.github_repo_full_name,
-      })),
+      kind: "bound",
+      installationId: bindingInstallationId,
+      useAllRepos: binding.use_all_repos === 1,
+      repos:
+        binding.use_all_repos === 1
+          ? []
+          : rows.results.map((row) => {
+              const githubRepoId = parsePositiveSafeIntegerText(row.github_repo_id_text)
+              if (githubRepoId === null) throw new Error("validated repository id became invalid")
+              return { githubRepoId, githubRepoFullName: row.github_repo_full_name }
+            }),
     }
   } catch {
-    return null
+    return { kind: "unavailable" }
   }
 }

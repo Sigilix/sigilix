@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { GitHubHttpError } from "@/src/shared/adapters/github"
+import { GitHubClient, GitHubHttpError } from "@/src/shared/adapters/github"
 import type { PullRequestMeta, PrChangedFile } from "@/src/shared/types/github"
 
 const mockMethods = {
@@ -7,9 +7,10 @@ const mockMethods = {
   getPullRequestDiff: vi.fn(),
   listPullRequestFiles: vi.fn(),
 }
+const mockGetInstallationToken = vi.fn(async (_args: unknown) => "test-token")
 
 vi.mock("@/src/shared/adapters/github/github-app", () => ({
-  getInstallationToken: vi.fn(async () => "test-token"),
+  getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
 vi.mock("@/src/shared/adapters/github", async () => {
@@ -24,13 +25,17 @@ vi.mock("@/src/shared/adapters/github", async () => {
   }
 })
 
-import { fetchPullRequestContext } from "@/src/lib/github-pr-context"
+import {
+  fetchPullRequestContextFromEnv as fetchPullRequestContext,
+  fetchPullRequestContextWithClient,
+} from "@/src/lib/github-pr-context"
 import type { Env } from "@/src/shared/types/env"
 
 beforeEach(() => {
   mockMethods.getPullRequest.mockReset()
   mockMethods.getPullRequestDiff.mockReset()
   mockMethods.listPullRequestFiles.mockReset()
+  mockGetInstallationToken.mockReset().mockResolvedValue("test-token")
 })
 
 afterEach(() => {
@@ -80,7 +85,39 @@ function abortError(): Error {
   return e
 }
 
-describe("fetchPullRequestContext", () => {
+describe("fetchPullRequestContextWithClient", () => {
+  it("uses only the supplied installation client without env lookup, token minting, or client replacement", async () => {
+    mockMethods.getPullRequest.mockResolvedValue(makeMeta())
+    mockMethods.getPullRequestDiff.mockResolvedValue("diff --git a/x b/x\n+from-scoped-client")
+    mockMethods.listPullRequestFiles.mockResolvedValue([
+      { filename: "src/scoped.ts", status: "modified", additions: 1, deletions: 0 },
+    ] as PrChangedFile[])
+    const suppliedClient = {
+      getPullRequest: mockMethods.getPullRequest,
+      getPullRequestDiff: mockMethods.getPullRequestDiff,
+      listPullRequestFiles: mockMethods.listPullRequestFiles,
+    } as unknown as GitHubClient
+
+    const result = await fetchPullRequestContextWithClient({
+      owner: "Sigilix",
+      repo: "rema-portal",
+      number: 162,
+      client: suppliedClient,
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.context.diff).toContain("+from-scoped-client")
+    expect(result.context.filesChanged).toEqual({ items: ["src/scoped.ts"], total: 4 })
+    expect(mockMethods.getPullRequest).toHaveBeenCalledWith("Sigilix", "rema-portal", 162, {
+      signal: expect.any(AbortSignal),
+    })
+    expect(mockGetInstallationToken).not.toHaveBeenCalled()
+    expect(GitHubClient).not.toHaveBeenCalled()
+  })
+})
+
+describe("fetchPullRequestContextFromEnv", () => {
   it("returns ok with full context when all calls succeed", async () => {
     mockMethods.getPullRequest.mockResolvedValue(makeMeta())
     mockMethods.getPullRequestDiff.mockResolvedValue("diff --git a/x b/x\n+foo")

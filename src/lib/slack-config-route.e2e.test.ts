@@ -13,6 +13,21 @@ import { upsertSlackWorkspace } from "@/src/lib/slack/slack-binding-store"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import type { Env } from "@/src/shared/types/env"
 
+const { getInstallationTokenMock, listGithubAppInstallationReposMock } = vi.hoisted(() => ({
+  getInstallationTokenMock: vi.fn(),
+  listGithubAppInstallationReposMock: vi.fn(),
+}))
+
+vi.mock("@/src/shared/adapters/github/github-app", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/src/shared/adapters/github/github-app")>()),
+  getInstallationToken: getInstallationTokenMock,
+}))
+
+vi.mock("@/src/lib/github-user-repo-scope", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/src/lib/github-user-repo-scope")>()),
+  listGithubAppInstallationRepos: listGithubAppInstallationReposMock,
+}))
+
 const BASE_SQL = readFileSync(new URL("../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
 const SLACK_SQL = readFileSync(new URL("../../migrations/0019_create_slack_channel_repo.sql", import.meta.url), "utf8")
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(7))
@@ -141,7 +156,26 @@ function stubExternalAccess(): void {
 }
 
 describe("Slack config route tenant contract", () => {
-  beforeEach(stubExternalAccess)
+  beforeEach(() => {
+    stubExternalAccess()
+    getInstallationTokenMock.mockReset().mockImplementation(async (args: { installationId: number }) => {
+      return `token-${args.installationId}`
+    })
+    listGithubAppInstallationReposMock
+      .mockReset()
+      .mockImplementation(async (_token: string, installationId: number) => {
+        const repos =
+          installationId === 42
+            ? [
+                { repoId: 101, owner: "acme", repo: "api" },
+                { repoId: 102, owner: "acme", repo: "web" },
+              ]
+            : installationId === 111
+              ? [{ repoId: 301, owner: "sigilix", repo: "sigilix" }]
+              : []
+        return { ok: true, repos: repos.map((repo) => ({ installationId, ...repo })) }
+      })
+  })
   afterEach(() => vi.unstubAllGlobals())
 
   it("requires a session and exact-installation admin", async () => {
@@ -196,6 +230,8 @@ describe("Slack config route tenant contract", () => {
     // End-to-end: the DB binding now resolves the customer's channel…
     const scopeEnv = {
       ...env,
+      GITHUB_APP_ID: "1",
+      GITHUB_PRIVATE_KEY: "test-private-key",
       SIGILIX_SLACK_SCOPE_MAP: '{"T0AFVBGRDRD:C0BEL8ZAARE":{"repos":["sigilix/sigilix"]}}',
       OPENCLAW_GITHUB_INSTALLATION_MAP: '{"sigilix/sigilix":"111"}',
     } as Env
@@ -205,7 +241,8 @@ describe("Slack config route tenant contract", () => {
       scope: {
         teamId: "TACME",
         channelId: "C0CUSTOMER1",
-        repos: [{ owner: "acme", repo: "api", installationId: 42 }],
+        installationId: 42,
+        repos: [{ githubRepoId: 101, owner: "acme", repo: "api" }],
         linearTeam: null,
       },
     })
@@ -213,7 +250,7 @@ describe("Slack config route tenant contract", () => {
     expect(allRepos.ok && allRepos.scope.repos.map((r) => r.repo)).toEqual(["api", "web"])
     // …while the founder's env-mapped beta channel still resolves untouched…
     const beta = await resolveSlackScope(scopeEnv, { teamId: "T0AFVBGRDRD", channelId: "C0BEL8ZAARE" })
-    expect(beta.ok && beta.scope.repos).toEqual([{ owner: "sigilix", repo: "sigilix", installationId: 111 }])
+    expect(beta.ok && beta.scope.repos).toEqual([{ githubRepoId: 301, owner: "sigilix", repo: "sigilix" }])
     // …and an unmapped channel still gets no-config.
     expect(await resolveSlackScope(scopeEnv, { teamId: "TACME", channelId: "C0UNMAPPED9" })).toEqual({
       ok: false,

@@ -1,142 +1,266 @@
-// SIG-196: Sigilix Slack agent — EXACT-match channel→repo scope resolver.
+// Slack channel repository authorization.
 //
-// Resolution order (customer self-serve, founder-safe):
-//   1. D1 binding (slack_channel_binding / slack_channel_repo, migration 0019) —
-//      written by the portal's channel→repo picker. When a binding row exists
-//      for the team:channel, the DB is AUTHORITATIVE (no env fallthrough).
-//   2. SIGILIX_SLACK_SCOPE_MAP env map — the original hardcoded beta config.
-//      Still fully honored when no DB row matches (and when the DB is unbound,
-//      the migration isn't applied yet, or the query fails), so the founder's
-//      beta channel never breaks.
-//
-// Scope-safety rule for the env path (load-bearing boundary):
-//   A configured owner/repo is accepted ONLY if OPENCLAW_GITHUB_INSTALLATION_MAP
-//   has an EXACT "owner/repo" key with a numeric installation id. An owner-only
-//   entry (e.g. "acme" → "222") does NOT authorize any repo under that owner.
-//   Repos without an exact entry are silently dropped. Fail-closed throughout.
-//   The DB path carries its own installation id per row, validated at bind time
-//   against the org's exact GitHub installation (slack-config-route.ts).
+// D1 is the customer-managed authority. A healthy missing row or an unbound D1
+// may use the operator-controlled exact team:channel legacy map; corrupt rows or
+// query failures deny and never switch authority. Both sources converge on one
+// installation id, then reconcile against the complete current GitHub App
+// installation repository list before any Slack agent work can run.
 
+import { listGithubAppInstallationRepos } from "@/src/lib/github-user-repo-scope"
 import { getSlackChannelDbScope } from "@/src/lib/slack/slack-binding-store"
+import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import type { Env } from "@/src/shared/types/env"
+
+export interface SlackScopedRepo {
+  githubRepoId: number
+  owner: string
+  repo: string
+}
 
 export interface SlackScope {
   teamId: string
   channelId: string
-  repos: Array<{ owner: string; repo: string; installationId: number }>
+  installationId: number
+  repos: SlackScopedRepo[]
   linearTeam: string | null
 }
 
 export type SlackScopeResult =
   | { ok: true; scope: SlackScope }
-  | { ok: false; reason: "no-config" | "no-installation" | "parse-error" }
+  | {
+      ok: false
+      reason: "no-config" | "no-installation" | "parse-error" | "invalid-binding" | "scope-unavailable"
+    }
 
 interface ScopeMapEntry {
   repos: string[]
   linearTeam?: string | null
 }
 
-type ScopeEnv = Pick<Env, "SIGILIX_SLACK_SCOPE_MAP" | "OPENCLAW_GITHUB_INSTALLATION_MAP" | "SIGILIX_PLATFORM_DB">
+type ScopeEnv = Pick<
+  Env,
+  | "SIGILIX_SLACK_SCOPE_MAP"
+  | "OPENCLAW_GITHUB_INSTALLATION_MAP"
+  | "SIGILIX_PLATFORM_DB"
+  | "OPENCLAW_STATE"
+  | "GITHUB_APP_ID"
+  | "GITHUB_PRIVATE_KEY"
+>
+
+type PendingSelection =
+  | { kind: "all" }
+  | { kind: "ids"; repositoryIds: number[] }
+  | { kind: "legacy-names"; fullNames: string[] }
+
+interface PendingSlackScope {
+  installationId: number
+  selection: PendingSelection
+  linearTeam: string | null
+}
+
+type PendingScopeResult = { ok: true; pending: PendingSlackScope } | Extract<SlackScopeResult, { ok: false }>
 
 export async function resolveSlackScope(
   env: ScopeEnv,
   args: { teamId: string; channelId: string },
 ): Promise<SlackScopeResult> {
   const dbScope = await getSlackChannelDbScope(env, args)
-  if (dbScope !== null) {
-    // A DB binding exists — it is authoritative for this channel. Split each
-    // stored full name on the FIRST "/" only; drop malformed names fail-closed.
-    const repos: SlackScope["repos"] = []
-    for (const repo of dbScope.repos) {
-      const slashIdx = repo.githubRepoFullName.indexOf("/")
-      if (slashIdx === -1) continue
-      repos.push({
-        owner: repo.githubRepoFullName.slice(0, slashIdx),
-        repo: repo.githubRepoFullName.slice(slashIdx + 1),
-        installationId: dbScope.installationId,
-      })
-    }
-    if (repos.length === 0) {
-      return { ok: false, reason: "no-installation" }
-    }
-    return {
+  let pending: PendingScopeResult
+
+  if (dbScope.kind === "bound") {
+    pending = {
       ok: true,
-      scope: { teamId: args.teamId, channelId: args.channelId, repos, linearTeam: null },
+      pending: {
+        installationId: dbScope.installationId,
+        selection: dbScope.useAllRepos
+          ? { kind: "all" }
+          : { kind: "ids", repositoryIds: dbScope.repos.map((repo) => repo.githubRepoId) },
+        linearTeam: null,
+      },
     }
+  } else if (dbScope.kind === "invalid") {
+    return { ok: false, reason: "invalid-binding" }
+  } else if (dbScope.kind === "unavailable") {
+    return { ok: false, reason: "scope-unavailable" }
+  } else {
+    console.log(
+      JSON.stringify({
+        event: "slack-scope-authority",
+        authority: "legacy-env",
+        dbState: dbScope.kind,
+        teamId: args.teamId,
+        channelId: args.channelId,
+      }),
+    )
+    pending = resolveLegacyPendingScope(env, args)
   }
-  return resolveSlackScopeFromEnv(env, args)
+
+  if (!pending.ok) return pending
+  return authorizePendingScope(env, args, pending.pending)
 }
 
-/** The original env-map resolver — the fallback path behind the DB binding. */
-function resolveSlackScopeFromEnv(
+function resolveLegacyPendingScope(
   env: Pick<Env, "SIGILIX_SLACK_SCOPE_MAP" | "OPENCLAW_GITHUB_INSTALLATION_MAP">,
   args: { teamId: string; channelId: string },
-): SlackScopeResult {
-  // Step 1: parse the scope map — fail with parse-error on malformed JSON.
-  let scopeMap: Record<string, ScopeMapEntry>
+): PendingScopeResult {
+  let scopeMap: Record<string, unknown>
   try {
-    scopeMap = JSON.parse(env.SIGILIX_SLACK_SCOPE_MAP ?? "{}") as Record<string, ScopeMapEntry>
+    const parsed = JSON.parse(env.SIGILIX_SLACK_SCOPE_MAP ?? "{}") as unknown
+    if (!isRecord(parsed)) return { ok: false, reason: "parse-error" }
+    scopeMap = parsed
   } catch {
     return { ok: false, reason: "parse-error" }
   }
 
-  // Look up the channel config — prototype-safe.
   const key = `${args.teamId}:${args.channelId}`
-  if (!Object.hasOwn(scopeMap, key)) {
-    return { ok: false, reason: "no-config" }
+  if (!Object.hasOwn(scopeMap, key)) return { ok: false, reason: "no-config" }
+  const rawChannel = scopeMap[key]
+  if (!isRecord(rawChannel) || !Array.isArray(rawChannel.repos)) {
+    return { ok: false, reason: "parse-error" }
   }
-  const channelCfg = scopeMap[key]
-  if (channelCfg === undefined || channelCfg === null) {
-    return { ok: false, reason: "no-config" }
-  }
-
-  // Guard non-array repos — fail closed instead of throwing.
-  if (!Array.isArray(channelCfg.repos)) {
+  const channel = rawChannel as unknown as ScopeMapEntry
+  if (
+    channel.linearTeam !== undefined &&
+    channel.linearTeam !== null &&
+    (typeof channel.linearTeam !== "string" || channel.linearTeam.length === 0)
+  ) {
     return { ok: false, reason: "parse-error" }
   }
 
-  // Step 2: parse the installation map — fail-closed to {} on bad JSON.
-  let installMap: Record<string, unknown>
+  let installationMap: Record<string, unknown>
   try {
-    installMap = JSON.parse(env.OPENCLAW_GITHUB_INSTALLATION_MAP ?? "{}") as Record<string, unknown>
+    const parsed = JSON.parse(env.OPENCLAW_GITHUB_INSTALLATION_MAP ?? "{}") as unknown
+    installationMap = isRecord(parsed) ? parsed : {}
   } catch {
-    installMap = {}
+    installationMap = {}
   }
 
-  // For each configured repo, require an EXACT "owner/repo" key in installMap.
-  // Split on the FIRST "/" only; drop repos that fail lookup or produce a non-positive id.
-  const repos: SlackScope["repos"] = []
-  for (const ownerRepo of channelCfg.repos) {
-    const slashIdx = ownerRepo.indexOf("/")
-    if (slashIdx === -1) continue
-
-    const owner = ownerRepo.slice(0, slashIdx)
-    const repo = ownerRepo.slice(slashIdx + 1)
-
-    // EXACT key lookup — no owner-only fallback. Prototype-safe.
-    if (!Object.hasOwn(installMap, ownerRepo)) continue
-    const rawId = installMap[ownerRepo]
-    if (rawId === undefined || rawId === null) continue
-
-    const installationId = Number(rawId)
-    // Drop zero, negative, NaN, or Infinity — must be a finite positive integer.
-    if (!Number.isFinite(installationId) || installationId <= 0) continue
-
-    repos.push({ owner, repo, installationId })
+  const installationIds = new Set<number>()
+  const fullNames: string[] = []
+  for (const ownerRepo of channel.repos) {
+    if (typeof ownerRepo !== "string" || !splitFullName(ownerRepo)) {
+      return { ok: false, reason: "parse-error" }
+    }
+    if (!Object.hasOwn(installationMap, ownerRepo)) continue
+    const installationId = parsePositiveSafeInteger(installationMap[ownerRepo])
+    if (installationId === null) {
+      return { ok: false, reason: "no-installation" }
+    }
+    installationIds.add(installationId)
+    fullNames.push(ownerRepo)
   }
 
-  // Step 3: empty intersection → no-installation.
-  if (repos.length === 0) {
+  if (installationIds.size !== 1 || fullNames.length === 0) {
     return { ok: false, reason: "no-installation" }
   }
+  const [installationId] = installationIds
+  if (installationId === undefined) return { ok: false, reason: "no-installation" }
+  return {
+    ok: true,
+    pending: {
+      installationId,
+      selection: { kind: "legacy-names", fullNames },
+      linearTeam: channel.linearTeam ?? null,
+    },
+  }
+}
 
+async function authorizePendingScope(
+  env: Pick<Env, "OPENCLAW_STATE" | "GITHUB_APP_ID" | "GITHUB_PRIVATE_KEY">,
+  args: { teamId: string; channelId: string },
+  pending: PendingSlackScope,
+): Promise<SlackScopeResult> {
+  if (!env.OPENCLAW_STATE || !env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
+    return { ok: false, reason: "scope-unavailable" }
+  }
+
+  let token: string
+  try {
+    token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId: pending.installationId,
+    })
+  } catch {
+    return { ok: false, reason: "scope-unavailable" }
+  }
+
+  let listed: Awaited<ReturnType<typeof listGithubAppInstallationRepos>>
+  try {
+    listed = await listGithubAppInstallationRepos(token, pending.installationId)
+  } catch {
+    return { ok: false, reason: "scope-unavailable" }
+  }
+  if (!listed.ok) return { ok: false, reason: "scope-unavailable" }
+  if (
+    listed.repos.some((repo) => repo.installationId !== pending.installationId || !isPositiveSafeInteger(repo.repoId))
+  ) {
+    return { ok: false, reason: "scope-unavailable" }
+  }
+
+  let selected: SlackScopedRepo[]
+  if (pending.selection.kind === "all") {
+    selected = listed.repos.map(toScopedRepo)
+  } else if (pending.selection.kind === "ids") {
+    const liveById = new Map(listed.repos.map((repo) => [repo.repoId, repo]))
+    selected = pending.selection.repositoryIds.flatMap((repositoryId) => {
+      const repo = liveById.get(repositoryId)
+      return repo ? [toScopedRepo(repo)] : []
+    })
+  } else {
+    const liveByName = new Map(listed.repos.map((repo) => [`${repo.owner}/${repo.repo}`.toLowerCase(), repo]))
+    selected = pending.selection.fullNames.flatMap((fullName) => {
+      const repo = liveByName.get(fullName.toLowerCase())
+      return repo ? [toScopedRepo(repo)] : []
+    })
+  }
+
+  selected = dedupeRepos(selected)
+  if (selected.length === 0) return { ok: false, reason: "no-installation" }
   return {
     ok: true,
     scope: {
       teamId: args.teamId,
       channelId: args.channelId,
-      repos,
-      linearTeam: channelCfg.linearTeam ?? null,
+      installationId: pending.installationId,
+      repos: selected,
+      linearTeam: pending.linearTeam,
     },
   }
+}
+
+function toScopedRepo(repo: { repoId: number; owner: string; repo: string }): SlackScopedRepo {
+  return { githubRepoId: repo.repoId, owner: repo.owner, repo: repo.repo }
+}
+
+function dedupeRepos(repos: SlackScopedRepo[]): SlackScopedRepo[] {
+  const seen = new Set<number>()
+  return repos.filter((repo) => {
+    if (seen.has(repo.githubRepoId)) return false
+    seen.add(repo.githubRepoId)
+    return true
+  })
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0
+}
+
+function parsePositiveSafeInteger(value: unknown): number | null {
+  if (typeof value === "number") return isPositiveSafeInteger(value) ? value : null
+  if (typeof value !== "string" || !/^[1-9]\d*$/u.test(value)) return null
+  const parsed = Number(value)
+  return isPositiveSafeInteger(parsed) ? parsed : null
+}
+
+function splitFullName(fullName: string): { owner: string; repo: string } | null {
+  if (fullName.length === 0 || fullName.length > 512 || fullName.trim() !== fullName) return null
+  const parts = fullName.split("/")
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null
+  return { owner: parts[0], repo: parts[1] }
 }

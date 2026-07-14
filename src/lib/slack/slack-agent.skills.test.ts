@@ -132,7 +132,8 @@ function makeCtx(overrides: Partial<SlackMentionContext> = {}): SlackMentionCont
     scope: {
       teamId: "T001",
       channelId: "C001",
-      repos: [{ owner: "sigilix", repo: "sigilix", installationId: INSTALLATION_ID }],
+      installationId: INSTALLATION_ID,
+      repos: [{ githubRepoId: 101, owner: "sigilix", repo: "sigilix" }],
       linearTeam: null,
     },
     slackUserId: "U001",

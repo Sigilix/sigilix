@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   generate: vi.fn(),
   runAgentLoop: vi.fn(),
   retrieveChunks: vi.fn(),
-  fetchPullRequestContext: vi.fn(),
+  fetchPullRequestContextFromEnv: vi.fn(),
   getCommentWithIssue: vi.fn(),
   createComment: vi.fn(),
   getLinearConfig: vi.fn(),
@@ -19,7 +19,9 @@ vi.mock("@/src/lib/retrieval", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/src/lib/retrieval")>()
   return { ...actual, retrieveChunks: mocks.retrieveChunks }
 })
-vi.mock("@/src/lib/github-pr-context", () => ({ fetchPullRequestContext: mocks.fetchPullRequestContext }))
+vi.mock("@/src/lib/github-pr-context", () => ({
+  fetchPullRequestContextFromEnv: mocks.fetchPullRequestContextFromEnv,
+}))
 vi.mock("@/src/shared/adapters/github/github-app", () => ({ getInstallationToken: mocks.getInstallationToken }))
 vi.mock("@/src/shared/adapters/github", () => ({
   GitHubClient: vi.fn().mockImplementation(() => ({
@@ -122,7 +124,7 @@ beforeEach(() => {
     repos: [{ githubRepoId: 101, githubRepoFullName: "acme/api" }],
   })
   mocks.retrieveChunks.mockResolvedValue([])
-  mocks.fetchPullRequestContext.mockResolvedValue({ ok: false, reason: "not_found" })
+  mocks.fetchPullRequestContextFromEnv.mockResolvedValue({ ok: false, reason: "not_found" })
   mocks.getInstallationToken.mockResolvedValue("github-token")
   mocks.getFileContent.mockResolvedValue("one\ntwo\nthree")
   mocks.generate.mockResolvedValue({
@@ -147,7 +149,7 @@ describe("handleMention tenant Linear settings", () => {
     await handleMention("comment-a", env, { tenant: TENANT })
 
     expect(mocks.retrieveChunks).not.toHaveBeenCalled()
-    expect(mocks.fetchPullRequestContext).not.toHaveBeenCalled()
+    expect(mocks.fetchPullRequestContextFromEnv).not.toHaveBeenCalled()
     expect(mocks.generate).not.toHaveBeenCalled()
     expect(mocks.runAgentLoop).not.toHaveBeenCalled()
     expect(mocks.createComment).not.toHaveBeenCalled()
@@ -165,7 +167,7 @@ describe("handleMention tenant Linear settings", () => {
 
     expect(get).not.toHaveBeenCalledWith("repo-index-manifest:acme/api")
     expect(mocks.retrieveChunks).not.toHaveBeenCalled()
-    expect(mocks.fetchPullRequestContext).not.toHaveBeenCalled()
+    expect(mocks.fetchPullRequestContextFromEnv).not.toHaveBeenCalled()
     expect(mocks.runAgentLoop).not.toHaveBeenCalled()
     expect(mocks.getInstallationToken).not.toHaveBeenCalled()
     expect(mocks.generate).toHaveBeenCalledOnce()
@@ -179,7 +181,7 @@ describe("handleMention tenant Linear settings", () => {
     await handleMention("comment-a", env, { tenant: TENANT })
 
     expect(mocks.retrieveChunks).toHaveBeenCalledOnce()
-    expect(mocks.fetchPullRequestContext).toHaveBeenCalledOnce()
+    expect(mocks.fetchPullRequestContextFromEnv).toHaveBeenCalledOnce()
     expect(mocks.runAgentLoop).not.toHaveBeenCalled()
     expect(mocks.generate).toHaveBeenCalledOnce()
     expect(mocks.getInstallationToken).not.toHaveBeenCalled()
@@ -287,7 +289,7 @@ describe("handleMention tenant Linear settings", () => {
 
     await handleMention("comment-a", env, { tenant: TENANT })
 
-    expect(mocks.fetchPullRequestContext).toHaveBeenCalledWith(
+    expect(mocks.fetchPullRequestContextFromEnv).toHaveBeenCalledWith(
       expect.objectContaining({ owner: "acme", repo: "web", number: 12 }),
     )
     const args = mocks.runAgentLoop.mock.calls[0]?.[0] as {
@@ -345,7 +347,7 @@ describe("handleMention tenant Linear settings", () => {
     const args = mocks.runAgentLoop.mock.calls[0]?.[0] as { initialUserMessage: string }
     expect(args.initialUserMessage).toContain("'acme/api'")
     expect(args.initialUserMessage).not.toContain("'acme/web'")
-    expect(mocks.fetchPullRequestContext).toHaveBeenCalledWith(
+    expect(mocks.fetchPullRequestContextFromEnv).toHaveBeenCalledWith(
       expect.objectContaining({ owner: "acme", repo: "web", number: 12 }),
     )
   })

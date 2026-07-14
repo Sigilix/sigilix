@@ -18,6 +18,7 @@ const SESSION_COOKIE = "__Host-sigilix_session"
 const PORTAL_ORIGIN = "https://app.sigilix.ai"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(41))
 const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
+const wrangler = readFileSync(new URL("../../wrangler.toml", import.meta.url), "utf8")
 const migration = readFileSync(new URL("../../migrations/0024_create_repository_context.sql", import.meta.url), "utf8")
 const orgMembershipMigration = readFileSync(
   new URL("../../migrations/0022_create_org_workspace_access.sql", import.meta.url),
@@ -240,7 +241,6 @@ describe("repository-context route", () => {
     vi.stubGlobal("fetch", fetchMock)
     let dbReads = 0
     const env = {
-      OPENCLAW_REPOSITORY_CONTEXT_API: "off",
       get OPENCLAW_STATE() {
         throw new Error("auth must not run")
       },
@@ -292,6 +292,24 @@ describe("repository-context route", () => {
     expect(kvGet).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
     expect(dbPrepare).not.toHaveBeenCalled()
+  })
+
+  it("ships enabled through committed SIGILIX config, normalization, and worker.fetch", async () => {
+    const configuredMode = /SIGILIX_REPOSITORY_CONTEXT_API\s*=\s*"([^"]*)"/.exec(wrangler)?.[1]
+    expect(configuredMode, "SIGILIX_REPOSITORY_CONTEXT_API in wrangler.toml").toBe("on")
+
+    const response = await worker.fetch(
+      new Request(`https://api.sigilix.ai/v1/org/${INSTALLATION_ID}/repository-context`, {
+        headers: { origin: PORTAL_ORIGIN },
+      }),
+      { SIGILIX_REPOSITORY_CONTEXT_API: configuredMode } as unknown as Env,
+      ctx,
+    )
+
+    expect(response.status).toBe(401)
+    expect(response.headers.get("cache-control")).toBe("private, no-store")
+    expect(response.headers.get("access-control-allow-origin")).toBe(PORTAL_ORIGIN)
+    await expect(response.json()).resolves.toEqual({ error: "unauthorized" })
   })
 
   it("requires an exact-installation admin before reading the PUT body or D1", async () => {

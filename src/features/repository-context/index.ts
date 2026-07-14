@@ -5,6 +5,11 @@ export {
   type RepositoryContextReviewReadResult,
 } from "./adapters/review-context-read"
 export {
+  readRepositoryContextForScopedRepositories,
+  type RepositoryContextScopedReadOutcome,
+  type RepositoryContextScopedReadResult,
+} from "./adapters/scoped-context-read"
+export {
   MAX_REPOSITORY_CONTEXT_CHARS,
   MAX_REPOSITORY_CONTEXT_CONVENTIONS_CHARS,
   MAX_REPOSITORY_CONTEXT_LABEL_CHARS,
@@ -27,6 +32,17 @@ export {
   type RepositoryContextReviewMode,
   type RepositoryContextReviewRenderResult,
 } from "./domain/review-context"
+export {
+  MAX_REPOSITORY_CONTEXT_SCOPED_CHARS,
+  REPOSITORY_CONTEXT_SCOPED_FORMAT,
+  makeGitHubRepositoryContextScopedIdentity,
+  parseRepositoryContextScopedMode,
+  renderRepositoryContextForScopedRepositories,
+  type RepositoryContextScopedIdentity,
+  type RepositoryContextScopedMode,
+  type RepositoryContextScopedRenderResult,
+  type RepositoryContextScopedRepositoryIdentity,
+} from "./domain/scoped-context"
 export type {
   PurgeRepositoryContextArgs,
   ReplaceRepositoryContextArgs,

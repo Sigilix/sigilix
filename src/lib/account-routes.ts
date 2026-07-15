@@ -24,6 +24,7 @@ import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
 import { clearSessionCookie } from "@/src/lib/auth-session"
 import { hasJsonContentType, handlePortalPreflight, withPortalCors } from "@/src/lib/portal-cors"
 import {
+  AccountDeleteConflictError,
   AccountSubjectIntegrityError,
   gatherAccountExport,
   purgeUserAccount,
@@ -48,6 +49,20 @@ function confirmationMatches(confirm: string, session: AuthedSession): boolean {
   return email != null && needle === email.trim().toLowerCase()
 }
 
+async function rejectLegacyAccountSession(env: Env, session: AuthedSession): Promise<Response> {
+  try {
+    await env.OPENCLAW_STATE.delete(`auth_session:${session.sessionId}`)
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "account-legacy-session-revoke-failed",
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+  }
+  return json({ error: "reauthentication_required" }, 401, { "set-cookie": clearSessionCookie() })
+}
+
 /** DELETE /v1/account — delete + purge the caller's account. Typed-confirmation gated. */
 async function handleDeleteAccount(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   // NO ctx here (deliberate): passing it would schedule a fire-and-forget
@@ -57,6 +72,12 @@ async function handleDeleteAccount(request: Request, env: Env, ctx: ExecutionCon
   void ctx
   const session = await requireSession(request, env)
   if (!session) return json({ error: "unauthenticated" }, 401)
+  // A legacy GitHub session has no durable account UUID. After delete +
+  // recreation, it cannot distinguish the old account from the new UUID bound
+  // to the same GitHub id, so destructive account controls require reauth.
+  if (session.record.userId == null) {
+    return rejectLegacyAccountSession(env, session)
+  }
   if (!hasJsonContentType(request)) return json({ error: "content-type must be application/json" }, 415)
   if (!env.SIGILIX_PLATFORM_DB) return json({ error: "platform_db_not_configured" }, 503)
 
@@ -79,6 +100,9 @@ async function handleDeleteAccount(request: Request, env: Env, ctx: ExecutionCon
     if (error instanceof AccountSubjectIntegrityError) {
       return json({ error: "unauthenticated" }, 401, { "set-cookie": clearSessionCookie() })
     }
+    if (error instanceof AccountDeleteConflictError) {
+      return json({ error: "account_delete_conflict", reason: error.reason }, 409)
+    }
     console.error(
       JSON.stringify({
         event: "account-delete-purge-failed",
@@ -98,8 +122,14 @@ async function handleDeleteAccount(request: Request, env: Env, ctx: ExecutionCon
 
 /** GET /v1/account/export — JSON download of the caller's OWN data. */
 async function handleExportAccount(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const session = await requireSession(request, env, ctx)
+  // Skip the sliding-TTL touch: a legacy session rejected below is actively
+  // revoked and must not be recreated by a queued touch after deletion.
+  void ctx
+  const session = await requireSession(request, env)
   if (!session) return json({ error: "unauthenticated" }, 401)
+  if (session.record.userId == null) {
+    return rejectLegacyAccountSession(env, session)
+  }
   if (!env.SIGILIX_PLATFORM_DB) return json({ error: "platform_db_not_configured" }, 503)
 
   const subject = subjectFromSession(session.record)

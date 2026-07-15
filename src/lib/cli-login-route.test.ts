@@ -790,6 +790,7 @@ describe("handleCliExchangeRoute (POST /v1/cli/exchange)", () => {
   })
 
   it("cannot redeem an old grant after the account is deleted and recreated", async () => {
+    await applyOrgAccessSchema(db)
     const { code, verifier, state } = await authorize()
     await expect(db.prepare("SELECT COUNT(*) AS n FROM account_tenant").first<{ n: number }>()).resolves.toEqual({
       n: 1,

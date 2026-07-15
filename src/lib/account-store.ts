@@ -1,9 +1,9 @@
 // sig-settings-backends — account lifecycle store (delete / export / logout-all).
 //
 // The data layer behind the portal Danger Zone (account-routes.ts):
-//   • purgeUserAccount  — hard-delete every D1 row that IS this user (identity,
-//                         credential, profile, tenant links, api keys, and
-//                         caller-owned app memories).
+//   • purgeUserAccount  — hard-delete every personal D1 row that IS this user,
+//                         tombstone exact managed-org access, unassign managed
+//                         seats, and retain immutable organization audit.
 //   • revokeUserSessions— delete every KV session record this user holds (the
 //                         "sign out everywhere" sweep; also runs inside delete).
 //   • gatherAccountExport — assemble the user's OWN data for a JSON download.
@@ -43,6 +43,16 @@ export class AccountSubjectIntegrityError extends Error {
   }
 }
 
+export type AccountDeleteConflictReason = "last_admin" | "billing_operation_active"
+
+/** A managed-org invariant that must be resolved before account deletion can proceed. */
+export class AccountDeleteConflictError extends Error {
+  constructor(readonly reason: AccountDeleteConflictReason) {
+    super(`account deletion blocked: ${reason}`)
+    this.name = "AccountDeleteConflictError"
+  }
+}
+
 /** Derive the caller's {@link AccountSubject} from a live session record. */
 export function subjectFromSession(record: SessionRecord): AccountSubject {
   return {
@@ -54,19 +64,30 @@ export function subjectFromSession(record: SessionRecord): AccountSubject {
 }
 
 /**
- * Re-resolve a GitHub session through the durable identity table. Legacy
- * sessions predate SessionRecord.userId but can still own newer personal data;
- * filling that id here keeps export/delete complete. A stored mismatch is a
- * session-integrity fault and fails closed before any row is read or deleted.
+ * Re-resolve both durable identity directions. Legacy GitHub sessions predate
+ * SessionRecord.userId, while linked Google/password sessions may omit the
+ * GitHub id; filling either key keeps export/delete complete. Any stored
+ * mismatch is a session-integrity fault and fails closed.
  */
 async function resolveDurableSubject(db: D1Database, subject: AccountSubject): Promise<AccountSubject> {
-  if (subject.githubUserId === null) return subject
-  const identity = await findByGithubUserId(db, subject.githubUserId)
-  if (!identity) return subject
-  if (subject.userId !== null && subject.userId !== identity.userId) {
+  const byUserId = subject.userId === null ? null : await findByUserId(db, subject.userId)
+  const byGithubUserId = subject.githubUserId === null ? null : await findByGithubUserId(db, subject.githubUserId)
+
+  if (
+    (byUserId !== null && subject.githubUserId !== null && byUserId.githubUserId !== subject.githubUserId) ||
+    (byGithubUserId !== null && subject.userId !== null && byGithubUserId.userId !== subject.userId) ||
+    (byUserId !== null && byGithubUserId !== null && byUserId.userId !== byGithubUserId.userId)
+  ) {
     throw new AccountSubjectIntegrityError()
   }
-  return { ...subject, userId: identity.userId }
+
+  const identity = byUserId ?? byGithubUserId
+  if (identity === null) return subject
+  return {
+    ...subject,
+    userId: identity.userId,
+    githubUserId: identity.githubUserId ?? subject.githubUserId,
+  }
 }
 
 /**
@@ -130,6 +151,8 @@ export async function revokeUserSessions(kv: KVNamespace, subject: AccountSubjec
 
 /** Row counts deleted per store — telemetry + the delete response body. */
 export interface PurgeCounts {
+  orgWorkspaceAccess: number
+  orgWorkspaceSeat: number
   userIdentity: number
   userCredential: number
   userProfile: number
@@ -145,6 +168,8 @@ function changes(result: D1Result | undefined): number {
 }
 
 const EMPTY_PURGE: PurgeCounts = {
+  orgWorkspaceAccess: 0,
+  orgWorkspaceSeat: 0,
   userIdentity: 0,
   userCredential: 0,
   userProfile: 0,
@@ -155,8 +180,56 @@ const EMPTY_PURGE: PurgeCounts = {
   appMemory: 0,
 }
 
+interface AccountDeleteConflictRow {
+  last_admin: number
+  billing_operation_active: number
+}
+
+async function readAccountDeleteConflict(
+  db: D1Database,
+  githubUserId: string,
+): Promise<AccountDeleteConflictReason | null> {
+  const row = await db
+    .prepare(
+      `SELECT
+         EXISTS (
+           SELECT 1 FROM org_workspace_access AS target
+            WHERE target.github_user_id = ? AND target.revoked_at IS NULL AND target.role = 'admin'
+              AND NOT EXISTS (
+                SELECT 1 FROM org_workspace_access AS other
+                 WHERE other.installation_id = target.installation_id
+                   AND other.github_user_id <> target.github_user_id
+                   AND other.role = 'admin' AND other.revoked_at IS NULL
+              )
+         ) AS last_admin,
+         EXISTS (
+           SELECT 1 FROM org_seat_billing_operation AS operation
+            WHERE operation.state IN ('pending', 'stripe_applied')
+              AND (
+                (operation.target_identity_kind = 'managed_github' AND operation.target_github_user_id = ?)
+                OR EXISTS (
+                  SELECT 1 FROM org_workspace_access AS access
+                   WHERE access.installation_id = operation.installation_id
+                     AND access.github_user_id = ? AND access.revoked_at IS NULL
+                )
+                OR EXISTS (
+                  SELECT 1 FROM org_workspace_seat_assignment AS seat
+                   WHERE seat.installation_id = operation.installation_id
+                     AND seat.github_user_id = ? AND seat.assigned = 1
+                )
+              )
+         ) AS billing_operation_active`,
+    )
+    .bind(githubUserId, githubUserId, githubUserId, githubUserId)
+    .first<AccountDeleteConflictRow>()
+  if (row?.last_admin === 1) return "last_admin"
+  if (row?.billing_operation_active === 1) return "billing_operation_active"
+  return null
+}
+
 /**
- * Hard-delete EVERY D1 row that IS this user, in ONE batch (atomic on D1):
+ * Remove every caller-owned row in ONE D1 batch (atomic on D1):
+ *   • app-managed access is tombstoned (never deleted) and exact managed seats are unassigned
  *   • user_credential / user_identity / email_verification_token / personal app memory — keyed by `userId`
  *   • user_profile / account_tenant / api_key — keyed by `githubUserId`
  *   • usage_events — keyed by the seat key `gh:<githubUserId>`
@@ -167,6 +240,77 @@ const EMPTY_PURGE: PurgeCounts = {
 export async function purgeUserAccount(db: D1Database, subject: AccountSubject): Promise<PurgeCounts> {
   subject = await resolveDurableSubject(db, subject)
   const statements: D1PreparedStatement[] = []
+  const hasIdentityGuard = subject.userId != null && subject.githubUserId != null
+  if (hasIdentityGuard) {
+    // Identity reads happen before the transactional batch. Abort if a
+    // concurrent delete + recreation rebound this GitHub account to a new UUID
+    // after resolution, so a stale session can never purge the new account.
+    // Migration 0022 rejects the sentinel via both installation_id > 0 and the
+    // canonical positive GitHub-id CHECKs.
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO org_workspace_access
+            (installation_id, github_user_id, role, created_at, updated_at, revoked_at,
+             updated_by, last_audit_id, last_action)
+           SELECT 0, '0', 'member', '', '', NULL,
+                  'account-delete-identity-guard', 'account-delete-identity-guard', 'access_removed'
+            WHERE EXISTS (
+              SELECT 1 FROM user_identity
+               WHERE github_user_id = ? AND user_id <> ?
+            ) OR EXISTS (
+              SELECT 1 FROM user_identity
+               WHERE user_id = ? AND github_user_id IS NOT ?
+            )`,
+        )
+        .bind(subject.githubUserId, subject.userId, subject.userId, subject.githubUserId),
+    )
+  }
+  if (subject.githubUserId != null) {
+    const conflict = await readAccountDeleteConflict(db, subject.githubUserId)
+    if (conflict !== null) throw new AccountDeleteConflictError(conflict)
+
+    const nowIso = new Date().toISOString()
+    const auditId = crypto.randomUUID()
+    const updatedBy = `github:${subject.githubUserId}`
+    statements.push(
+      db
+        .prepare(
+          `UPDATE org_workspace_access AS target
+              SET revoked_at = ?, updated_at = ?, updated_by = ?,
+                  last_audit_id = ?, last_action = 'access_removed'
+            WHERE target.github_user_id = ? AND target.revoked_at IS NULL
+              AND (
+                target.role <> 'admin' OR EXISTS (
+                  SELECT 1 FROM org_workspace_access AS other
+                   WHERE other.installation_id = target.installation_id
+                     AND other.github_user_id <> target.github_user_id
+                     AND other.role = 'admin' AND other.revoked_at IS NULL
+                )
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM org_seat_billing_operation AS operation
+                 WHERE operation.installation_id = target.installation_id
+                   AND operation.state IN ('pending', 'stripe_applied')
+              )`,
+        )
+        .bind(nowIso, nowIso, updatedBy, auditId, subject.githubUserId),
+    )
+    statements.push(
+      db
+        .prepare(
+          `UPDATE org_workspace_seat_assignment AS target
+              SET assigned = 0, updated_at = ?, updated_by = ?
+            WHERE target.github_user_id = ? AND target.assigned = 1
+              AND NOT EXISTS (
+                SELECT 1 FROM org_seat_billing_operation AS operation
+                 WHERE operation.installation_id = target.installation_id
+                   AND operation.state IN ('pending', 'stripe_applied')
+              )`,
+        )
+        .bind(nowIso, updatedBy, subject.githubUserId),
+    )
+  }
   // Order: credential before identity (credential FK-conceptually depends on
   // identity), though D1 has no enforced FK here — batch runs atomically anyway.
   if (subject.userId != null) {
@@ -186,12 +330,56 @@ export async function purgeUserAccount(db: D1Database, subject: AccountSubject):
     statements.push(db.prepare("DELETE FROM api_key WHERE created_by = ?").bind(subject.githubUserId))
     // usage_events attribute a seat via `gh:<githubUserId>` (see the usage writers).
     statements.push(db.prepare("DELETE FROM usage_events WHERE user_key = ?").bind(`gh:${subject.githubUserId}`))
+    // The deliberately-invalid INSERT runs only if a raced org mutation left
+    // authorization, a billed seat, or exact-target billing work behind. Its
+    // CHECK failure rolls the entire D1 batch back instead of acknowledging a
+    // partially deleted account. Migration 0022's positive-id CHECKs make the
+    // sentinel unconditionally invalid whenever the residual predicate is true.
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO org_workspace_access
+            (installation_id, github_user_id, role, created_at, updated_at, revoked_at,
+             updated_by, last_audit_id, last_action)
+           SELECT 0, '0', 'member', '', '', NULL,
+                  'account-delete-guard', 'account-delete-guard', 'access_removed'
+            WHERE EXISTS (
+              SELECT 1 FROM org_workspace_access
+               WHERE github_user_id = ? AND revoked_at IS NULL
+            ) OR EXISTS (
+              SELECT 1 FROM org_workspace_seat_assignment
+               WHERE github_user_id = ? AND assigned = 1
+            ) OR EXISTS (
+              SELECT 1 FROM org_seat_billing_operation
+               WHERE target_identity_kind = 'managed_github' AND target_github_user_id = ?
+                 AND state IN ('pending', 'stripe_applied')
+            )`,
+        )
+        .bind(subject.githubUserId, subject.githubUserId, subject.githubUserId),
+    )
   }
   if (statements.length === 0) return { ...EMPTY_PURGE }
-  const results = await db.batch(statements)
+  let results: D1Result[]
+  try {
+    results = await db.batch(statements)
+  } catch (error) {
+    // Re-run the durable cross-check after rollback so an identity race is
+    // reported as authentication failure rather than a generic delete fault.
+    await resolveDurableSubject(db, subject)
+    if (subject.githubUserId != null) {
+      const racedConflict = await readAccountDeleteConflict(db, subject.githubUserId).catch(() => null)
+      if (racedConflict !== null) throw new AccountDeleteConflictError(racedConflict)
+    }
+    throw error
+  }
   // Map results back positionally in the order pushed above.
   let i = 0
   const counts: PurgeCounts = { ...EMPTY_PURGE }
+  if (hasIdentityGuard) i++
+  if (subject.githubUserId != null) {
+    counts.orgWorkspaceAccess = changes(results[i++])
+    counts.orgWorkspaceSeat = changes(results[i++])
+  }
   if (subject.userId != null) {
     counts.userCredential = changes(results[i++])
     counts.appMemory = changes(results[i++])
@@ -229,6 +417,28 @@ export interface AccountExport {
     appId: string
     scope: "personal"
     content: string
+    createdAt: string
+  }>
+  organizationAccess: Array<{
+    installationId: number
+    role: string
+    createdAt: string
+    updatedAt: string
+    revokedAt: string | null
+    lastAction: string
+  }>
+  organizationSeats: Array<{
+    installationId: number
+    assigned: boolean
+    lastKnownLogin: string | null
+    createdAt: string
+    updatedAt: string
+  }>
+  organizationAccessAudit: Array<{
+    installationId: number
+    action: string
+    previousRole: string | null
+    nextRole: string | null
     createdAt: string
   }>
 }
@@ -341,6 +551,69 @@ export async function gatherAccountExport(db: D1Database, subject: AccountSubjec
         )
       : []
 
+  // Managed organization lifecycle is scoped by the same immutable GitHub id
+  // used for authorization. Actor/updater fields are deliberately omitted:
+  // those identify another organization member, not the exporting caller.
+  const organizationAccess =
+    subject.githubUserId != null
+      ? await safeAll<{
+          installation_id: number
+          role: string
+          created_at: string
+          updated_at: string
+          revoked_at: string | null
+          last_action: string
+        }>(
+          db,
+          `SELECT installation_id, role, created_at, updated_at, revoked_at, last_action
+             FROM org_workspace_access
+            WHERE github_user_id = ?
+            ORDER BY updated_at DESC, installation_id DESC`,
+          subject.githubUserId,
+        )
+      : []
+
+  const organizationSeats =
+    subject.githubUserId != null
+      ? await safeAll<{
+          installation_id: number
+          assigned: number
+          last_known_login: string | null
+          created_at: string
+          updated_at: string
+        }>(
+          db,
+          `SELECT installation_id, assigned, last_known_login, created_at, updated_at
+             FROM org_workspace_seat_assignment
+            WHERE github_user_id = ?
+            ORDER BY updated_at DESC, installation_id DESC`,
+          subject.githubUserId,
+        )
+      : []
+
+  const organizationAccessAudit =
+    subject.githubUserId != null
+      ? await safeAll<{
+          installation_id: number
+          action: string
+          previous_role: string | null
+          next_role: string | null
+          created_at: string
+        }>(
+          db,
+          `SELECT installation_id, action, previous_role, next_role, created_at
+             FROM org_workspace_access_audit
+            WHERE target_github_user_id = ?
+            ORDER BY created_at DESC, installation_id DESC`,
+          subject.githubUserId,
+        )
+      : []
+
+  // All export sections above are separate reads. Re-check the resolved pair
+  // after the final read so a delete + recreation that raced the export cannot
+  // return rows from the newly bound account to a stale session.
+  await resolveDurableSubject(db, subject)
+
   return {
     exportedAt: new Date().toISOString(),
     subject: {
@@ -384,6 +657,28 @@ export async function gatherAccountExport(db: D1Database, subject: AccountSubjec
       scope: "personal",
       content: r.content,
       createdAt: new Date(r.created_at_ms).toISOString(),
+    })),
+    organizationAccess: organizationAccess.map((r) => ({
+      installationId: r.installation_id,
+      role: r.role,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      revokedAt: r.revoked_at,
+      lastAction: r.last_action,
+    })),
+    organizationSeats: organizationSeats.map((r) => ({
+      installationId: r.installation_id,
+      assigned: r.assigned === 1,
+      lastKnownLogin: r.last_known_login,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    })),
+    organizationAccessAudit: organizationAccessAudit.map((r) => ({
+      installationId: r.installation_id,
+      action: r.action,
+      previousRole: r.previous_role,
+      nextRole: r.next_role,
+      createdAt: r.created_at,
     })),
   }
 }

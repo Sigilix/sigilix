@@ -231,10 +231,7 @@ export async function runSlackAgent(env: Env, ctx: SlackMentionContext): Promise
     })
   }
 
-  const memScope: SlackMemoryScope = {
-    teamId: scope.teamId,
-    repoId: `${primary.owner}/${primary.repo}`,
-  }
+  const memScope: SlackMemoryScope = scope
 
   // B3c: a pending implementation offer in this thread takes precedence over
   // fresh intent detection — a follow-up @mention IS the reply to that offer

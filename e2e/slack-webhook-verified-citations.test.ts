@@ -345,8 +345,8 @@ describe("signed Slack webhook verified citations", () => {
       }),
     }
     const memoryIndex = {
-      query: vi.fn(async () => ({ matches: [] })),
-      upsert: vi.fn(async () => undefined),
+      query: vi.fn(async (_vector: number[], _options: { topK?: number; namespace?: string }) => ({ matches: [] })),
+      upsert: vi.fn(async (_vectors: Array<{ namespace: string }>) => undefined),
       deleteByIds: vi.fn(async () => undefined),
     }
     const ai = {
@@ -568,6 +568,7 @@ describe("signed Slack webhook verified citations", () => {
       OLLAMA_API_KEY: "ollama-test-key",
       OPENCLAW_MODEL: "glm-5.1:cloud",
       OPENCLAW_SLACK_CODE_CITATIONS_MODE: "on",
+      OPENCLAW_SLACK_MEMORY_SCOPE_MODE: "on",
       SIGILIX_USAGE_METER_MODE: "off",
       OPENCLAW_ENTITLEMENTS_MODE: "off",
       OPENCLAW_REPOSITORY_CONTEXT_SLACK_MODE: "off",
@@ -711,5 +712,24 @@ describe("signed Slack webhook verified citations", () => {
     expect(slackText).not.toContain(`/pull/${PR_NUMBER}`)
     expect(kv.values.has(`slack-event:EvVerifiedCitation`)).toBe(true)
     expect([...kv.values.keys()].some((key) => key.startsWith("agent-loop-telemetry:"))).toBe(true)
+
+    expect(memoryIndex.query).toHaveBeenCalledOnce()
+    expect(memoryIndex.upsert).toHaveBeenCalledOnce()
+    const queryOptions = memoryIndex.query.mock.calls[0]?.[1]
+    const upserted = memoryIndex.upsert.mock.calls[0]?.[0]
+    const queryNamespace = queryOptions?.namespace
+    const writeNamespace = upserted?.[0]?.namespace
+    expect(queryOptions).toMatchObject({ topK: 5, returnMetadata: "all" })
+    expect(queryNamespace).toBe(writeNamespace)
+    expect(queryNamespace).toMatch(/^slack:v2:[0-9a-f]{26}\/s-[0-9a-f]{26}$/)
+    expect(new TextEncoder().encode(queryNamespace)).toHaveLength(64)
+    expect(queryNamespace).not.toBe("slack:t0citation/acme/api")
+
+    const memoryKeys = [...kv.values.keys()].filter((key) => key.startsWith("agent-memory"))
+    expect(memoryKeys.some((key) => key.startsWith("agent-memory:slack:v2:") && key.includes(":s-"))).toBe(true)
+    expect(memoryKeys.some((key) => key.startsWith("agent-memory-hash:slack:v2:") && key.includes(":s-"))).toBe(true)
+    expect(memoryKeys.some((key) => key.startsWith("agent-memory:slack:t0citation:"))).toBe(false)
+    expect(memoryKeys.some((key) => key.startsWith("agent-memory-hash:slack:t0citation:"))).toBe(false)
+    expect(memoryKeys.some((key) => key.includes(API_NAMESPACE) || key.includes(WEB_NAMESPACE))).toBe(false)
   })
 })

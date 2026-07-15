@@ -80,9 +80,27 @@ Defaults: **5 h window, 3 actions**. In `on` mode an over-cap mention gets a bri
 ## Memory
 
 Slack recalls from and captures to the **same SIG-522 agent-memory store** (Vectorize + KV), scoped
-to `userId = "slack:<teamId>"`, `repoId = "<owner>/<repo>"` (the channel's primary repo). The
-`repoId` namespace is the privacy boundary — two channels mapped to different repos cannot see each
-other's memory. Thread text is **capped + secret-redacted** before it reaches the model or the store.
+by a versioned hash of the exact authorized Slack workspace, GitHub App installation, channel, and
+complete set of immutable GitHub repository IDs. Repository order and renameable owner/repo names do
+not affect the scope; changing the channel, installation, or authorized repository set does. Thread
+text is **capped + secret-redacted** before it reaches the model or the store.
+
+`SIGILIX_SLACK_MEMORY_SCOPE_MODE` controls the cutover:
+
+- `off` (default for missing or unknown values) — uses the legacy workspace + mutable primary-repo
+  namespace only.
+- `shadow` (production rollout) — returns the legacy recall/write result, performs the exact read and
+  write as a fail-soft sidecar with a 500 ms deadline, and emits content-free digest-parity and
+  storage-health telemetry (including timeouts).
+- `on` — reads and writes only the exact versioned namespace. It never unions or falls back to legacy
+  memory because doing so would reopen the cross-channel and stale-installation boundary.
+
+Shadow is observation and warming, **not an atomic migration guarantee**. Legacy-only records are not
+automatically copied because they cannot be safely attributed to one channel, installation, and
+repository set. Promotion requires sustained digest parity on warmed scopes, healthy exact KV and
+Vectorize writes, and no correlated memory-query failures. Exact records remain stored during a
+rollback, but switching to `off` or `shadow` temporarily hides facts written only while `on`; roll
+back exact-path code with the exact mode still enabled rather than attempting a destructive copy.
 
 > Privacy note: persistent channel memory is enabled for the **gated beta** with redaction + scope
 > isolation. Broad GA is gated on the SOC 2 work (SIG-188) — keep `SIGILIX_SLACK_MODE` limited to the

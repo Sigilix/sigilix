@@ -1219,6 +1219,12 @@ SIGILIX_REPOSITORY_CONTEXT_SLACK_MODE = "shadow"
 # is on and the proof telemetry is clean.
 SIGILIX_SLACK_CODE_CITATIONS_MODE = "shadow"
 
+# Versioned Slack memory isolation. Shadow keeps the legacy primary-repo result
+# authoritative while dual-writing and comparing the exact installation +
+# channel + immutable repository-set namespace. Promote only after parity and
+# exact write/query health stay clean; "on" never falls back to legacy memory.
+SIGILIX_SLACK_MEMORY_SCOPE_MODE = "shadow"
+
 # Giant-PR total-context ceiling (estimated INPUT tokens across the whole review).
 # Recall-safe cost cap on the SIG-418 multi-batch spillover above: the posted
 # batch[0] (risk-ordered, full context) is ALWAYS reviewed, and spillover batches

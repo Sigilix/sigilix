@@ -1303,6 +1303,7 @@ export interface Env extends AwsBedrockEnv {
   OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE?: string // off | shadow; unknown/unset (including on) → off.
   OPENCLAW_REPOSITORY_CONTEXT_SLACK_MODE?: string // off | shadow | on; unknown/unset → off.
   OPENCLAW_SLACK_CODE_CITATIONS_MODE?: string // off | shadow | on; unknown/unset → off.
+  OPENCLAW_SLACK_MEMORY_SCOPE_MODE?: string // off | shadow | on; unknown/unset → off.
   // SIG-303 full usage metering (two independent pools: ORG + SEAT). Own flag +
   // tunable per-(pool × window) caps, independent of the SIG-38 PR-review gate.
   //   SIGILIX_USAGE_METER_MODE      "shadow" (default/unknown) | "off" | "enforce".
@@ -1467,7 +1468,6 @@ export interface Env extends AwsBedrockEnv {
   /** SIG-242 dogfood-only cutover: the GitHub installation allowed to migrate/read the pre-tenant singleton. Both this and the
    * allowed Linear org id must match; unset disables the legacy seam. */
   OPENCLAW_LINEAR_LEGACY_INSTALLATION_ID?: string
-
   // SIG-144 (Linear unification cutover, slice 4): flag-gates `buildLinearAuth`'s
   // credential choice (src/lib/linear.ts).
   //   "off" (default/unset/unknown) — buildLinearAuth is byte-identical to its

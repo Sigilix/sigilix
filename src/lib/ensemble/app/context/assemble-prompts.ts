@@ -1,21 +1,8 @@
-// SIG-318 (PR 12g-3) — the ASSEMBLE-PROMPTS seam of the PR-review orchestrator
-// (app layer, context-build phase). Carved verbatim from `handlePrReviewEnsemble`,
-// between the coverage-ingest gather and the specialists call site: the prompt
-// fact-blocks (deterministic / secret / docs / perf-budget / coverage-gap), the
-// SIG-108 `buildSecurityFactManifest`, the SIG-317 asymmetry/toctou hint blocks,
-// the role-scoped `factsByRole`, the ARC-181 `maybePostAstAutoInline` deferred-
-// poster closure (RETURNED, not exploded), the ARC-182 stack detection, the SIG-113
-// testing-evidence pack (incl. the bounded cross-file fetch + repo-tree fallback),
-// the dynamic review-evidence block, and the SIG-108 per-role `messageForRole`
-// closure (RETURNED — it hides ~16 captures so the call site stays a thin map).
-//
-// The moved statements are byte-identical apart from the plumbing (`args.X` →
-// params, declarations → returns). The two returned closures capture only consts /
-// by-value params (no orchestrator state leaks). ZERO behavior change.
-//
-// Dependency rule: every dependency imports from its canonical NON-god-file home
-// (incl. the relocated dynamic-evidence-block domain). It never imports the
-// orchestrator god-file.
+// SIG-318 (PR 12g-3) — the ASSEMBLE-PROMPTS app-layer seam between evidence
+// gathering and specialist dispatch. It owns the bounded fact/context blocks,
+// manifests, testing pack, stack detection, and primary/spillover message
+// closures. Dependencies come from canonical non-god-file homes; this module
+// never imports the orchestrator.
 
 import type { Env } from "@/src/shared/types/env"
 import { GitHubClient } from "@/src/shared/adapters/github"
@@ -135,6 +122,7 @@ export interface AssemblePromptsArgs {
   secretHits: SecretHit[]
   depVulnFindings: DepVulnFindings
   depVulnBlock: string
+  repositoryContextBlock: string
   retrievalSnapshot: string
   perfRetrievalSnapshot: string
   logicSymbolSnapshot: string
@@ -939,6 +927,7 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
         ? { graphContext: graphCtxForPrompt }
         : {}),
       ...(dynamicEvidenceBlockForPrompt.length > 0 ? { dynamicEvidenceBlock: dynamicEvidenceBlockForPrompt } : {}),
+      ...(a.repositoryContextBlock.length > 0 ? { repositoryContextBlock: a.repositoryContextBlock } : {}),
       ...(learningsBlock.length > 0 ? { learningsBlock } : {}),
       ...(sdkGuidanceBlock.length > 0 ? { sdkGuidanceBlock } : {}),
       ...(customRulesBlock.length > 0 ? { customRulesBlock } : {}),
@@ -968,6 +957,7 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
       ...(graphCtxForPrompt.length > 0 && (role === "logic" || role === "tests")
         ? { graphContext: graphCtxForPrompt }
         : {}),
+      ...(a.repositoryContextBlock.length > 0 ? { repositoryContextBlock: a.repositoryContextBlock } : {}),
       ...(learningsBlock.length > 0 ? { learningsBlock } : {}),
       ...(sdkGuidanceBlock.length > 0 ? { sdkGuidanceBlock } : {}),
       ...(customRulesBlock.length > 0 ? { customRulesBlock } : {}),

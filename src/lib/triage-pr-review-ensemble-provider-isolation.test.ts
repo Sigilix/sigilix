@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const {
@@ -17,6 +18,7 @@ const {
   mockRecordRunnerEvidenceMetric,
   mockResolveDashboardConfigLayers,
   mockCollectPrReviewAppEvidence,
+  mockReadRepositoryContextForReview,
 } = vi.hoisted(() => ({
   mockChat: vi.fn(),
   mockRetrieveChunks: vi.fn(),
@@ -34,7 +36,21 @@ const {
   mockRecordRunnerEvidenceMetric: vi.fn(),
   mockResolveDashboardConfigLayers: vi.fn(),
   mockCollectPrReviewAppEvidence: vi.fn(),
+  mockReadRepositoryContextForReview: vi.fn(),
 }))
+
+vi.mock("@/src/features/repository-context", async () => {
+  const actual = await vi.importActual<typeof import("@/src/features/repository-context")>(
+    "@/src/features/repository-context",
+  )
+  return {
+    ...actual,
+    readRepositoryContextForReview: (...args: Parameters<typeof actual.readRepositoryContextForReview>) => {
+      mockReadRepositoryContextForReview(...args)
+      return actual.readRepositoryContextForReview(...args)
+    },
+  }
+})
 
 vi.mock("@/src/shared/adapters/model", async () => {
   const actual = await vi.importActual<typeof import("@/src/shared/adapters/model")>("@/src/shared/adapters/model")
@@ -127,12 +143,32 @@ vi.mock("@/src/features/pr-review-app-evidence", async () => {
 import { handlePrReviewEnsemble } from "@/src/lib/triage-pr-review-ensemble"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { Env } from "@/src/shared/types/env"
+import {
+  activateGitLabRepositoryAuthority,
+  claimGitLabRepositoryAuthority,
+  replaceRepositoryContext,
+} from "@/src/features/repository-context"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 
 const HEAD_SHA = "deadbeef1234567890abcdef1234567890abcdef"
 const BASE_SHA = "basesha000000000000000000000000000000000"
 const MERGE_SHA = "mergeabc1234567890abcdef1234567890abcdef"
 const GITHUB_SENTINEL = "GITHUB_ACME_API_CONTEXT_MUST_NOT_REACH_GITLAB"
+const GITLAB_REPOSITORY_CONTEXT_IDENTITY = {
+  provider: "gitlab" as const,
+  scopeId: "user-a",
+  repositoryExternalId: `gl:v1:${"a".repeat(43)}`,
+  authorityClaimToken: "b".repeat(43),
+}
 const RUNNER_SARIF = JSON.stringify({ version: "2.1.0", runs: [] })
+const REPOSITORY_CONTEXT_MIGRATION = readFileSync(
+  new URL("../../migrations/0024_create_repository_context.sql", import.meta.url),
+  "utf8",
+)
+const REPOSITORY_AUTHORITY_MIGRATION = readFileSync(
+  new URL("../../migrations/0026_create_repository_context_authority.sql", import.meta.url),
+  "utf8",
+)
 const DIFF = `diff --git a/src/api.ts b/src/api.ts
 index abc1234..def5678 100644
 --- a/src/api.ts
@@ -280,6 +316,93 @@ afterEach(() => {
 })
 
 describe("GitLab review provider isolation", () => {
+  it("injects exact active GitLab multi-repository context into specialists but never synth", async () => {
+    const db = makeD1()
+    await db.exec(REPOSITORY_CONTEXT_MIGRATION)
+    await db.exec(REPOSITORY_AUTHORITY_MIGRATION)
+    const current = await claimGitLabRepositoryAuthority(db, {
+      scopeId: "user-a",
+      instanceOrigin: "https://gitlab.com",
+      sourceId: 101,
+      fullName: "group/api",
+    })
+    const related = await claimGitLabRepositoryAuthority(db, {
+      scopeId: "user-a",
+      instanceOrigin: "https://gitlab.com",
+      sourceId: 202,
+      fullName: "group/worker",
+    })
+    if (current.status !== "claimed" || related.status !== "claimed") {
+      throw new Error("expected GitLab authority claims")
+    }
+    for (const claim of [current, related]) {
+      await expect(
+        activateGitLabRepositoryAuthority(db, {
+          scopeId: "user-a",
+          externalId: claim.repository.externalId,
+          claimToken: claim.claimToken,
+        }),
+      ).resolves.toMatchObject({ status: "activated" })
+    }
+    await expect(
+      replaceRepositoryContext(db, {
+        provider: "gitlab",
+        scopeId: "user-a",
+        expectedRevision: 0,
+        repositories: [
+          { ...current.repository, context: "GitLab API service", position: 0 },
+          { ...related.repository, context: "GitLab background worker", position: 1 },
+        ],
+        relationships: [
+          {
+            fromExternalId: current.repository.externalId,
+            toExternalId: related.repository.externalId,
+            label: "publishes jobs",
+            normalizedLabel: "publishes jobs",
+            position: 0,
+          },
+        ],
+        conventions: "GitLab shared convention",
+        nowIso: "2026-07-15T00:00:00.000Z",
+        updatedBy: "gitlab:user-a",
+      }),
+    ).resolves.toMatchObject({ status: "updated" })
+
+    const { client } = makeGitLabClient()
+    const env = makeEnv()
+    env.OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE = "post"
+    env.SIGILIX_PLATFORM_DB = db
+    const result = await handlePrReviewEnsemble({
+      scmProvider: "gitlab",
+      owner: "group",
+      repo: "api",
+      prNumber: 42,
+      headSha: HEAD_SHA,
+      installationId: 0,
+      env,
+      repositoryContextIdentity: {
+        provider: "gitlab",
+        scopeId: "user-a",
+        repositoryExternalId: current.repository.externalId,
+        authorityClaimToken: current.claimToken,
+      },
+      githubClient: client,
+    })
+
+    expect(result.status).toBe("posted")
+    const specialistCalls = mockChat.mock.calls.filter((call) => JSON.stringify(call[0]).includes("specialist**"))
+    const synthCalls = mockChat.mock.calls.filter((call) => !JSON.stringify(call[0]).includes("specialist**"))
+    expect(specialistCalls).toHaveLength(4)
+    for (const call of specialistCalls) {
+      const prompt = JSON.stringify(call[0])
+      expect(prompt).toContain("[REPOSITORY CONTEXT — UNTRUSTED DATA]")
+      expect(prompt).toContain("GitLab API service")
+      expect(prompt).toContain("GitLab background worker")
+    }
+    expect(synthCalls).toHaveLength(1)
+    expect(JSON.stringify(synthCalls[0]?.[0])).not.toContain("[REPOSITORY CONTEXT — UNTRUSTED DATA]")
+  })
+
   it("never reads colliding GitHub context while preserving the GitLab review path", async () => {
     const { client, submitReview } = makeGitLabClient()
     const statusReporter = { report: vi.fn(), flush: vi.fn(async () => undefined) }
@@ -331,12 +454,51 @@ describe("GitLab review provider isolation", () => {
     expect(mockRecordRunnerEvidenceMetric).not.toHaveBeenCalled()
     expect(mockResolveDashboardConfigLayers).not.toHaveBeenCalled()
     expect(mockCollectPrReviewAppEvidence).not.toHaveBeenCalled()
+    expect(mockReadRepositoryContextForReview).toHaveBeenCalledWith({
+      mode: "shadow",
+      db: env.SIGILIX_PLATFORM_DB,
+    })
+    expect(Object.hasOwn(mockReadRepositoryContextForReview.mock.calls.at(-1)?.[0] ?? {}, "identity")).toBe(false)
     expect(repositoryContextPrepare).not.toHaveBeenCalled()
     expect(statusReporter.report).not.toHaveBeenCalled()
     expect(statusReporter.flush).not.toHaveBeenCalled()
     expect(mockRunSarifEvidence).toHaveBeenCalled()
     expect(client.getFileContent).toHaveBeenCalledWith("acme", "api", "sigilix.json", HEAD_SHA)
     expect(client.getFileContent).toHaveBeenCalledWith("acme", "api", "src/api.ts", HEAD_SHA)
+  })
+
+  it("never reads GitLab context when a GitHub review receives a GitLab identity", async () => {
+    const { client } = makeGitLabClient()
+    const repositoryContextPrepare = vi.fn(() => {
+      throw new Error("GitHub must never read GitLab repository context")
+    })
+    const env = makeEnv()
+    env.OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE = "shadow"
+    env.SIGILIX_PLATFORM_DB = { prepare: repositoryContextPrepare } as unknown as D1Database
+    env.OPENCLAW_RUNNER_EVIDENCE_MODE = "off"
+    env.OPENCLAW_RECEIPTJOIN_MODE = "off"
+
+    const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
+      owner: "acme",
+      repo: "api",
+      prNumber: 42,
+      headSha: HEAD_SHA,
+      installationId: 99,
+      repoId: 123,
+      env,
+      repositoryContextIdentity: GITLAB_REPOSITORY_CONTEXT_IDENTITY,
+      githubClient: client,
+      dryRun: true,
+    })
+
+    expect(result.status).toBe("skipped")
+    expect(mockReadRepositoryContextForReview).toHaveBeenCalledWith({
+      mode: "shadow",
+      db: env.SIGILIX_PLATFORM_DB,
+    })
+    expect(Object.hasOwn(mockReadRepositoryContextForReview.mock.calls.at(-1)?.[0] ?? {}, "identity")).toBe(false)
+    expect(repositoryContextPrepare).not.toHaveBeenCalled()
   })
 
   it("keeps the GitHub retrieval path enabled as a positive control", async () => {

@@ -40,6 +40,51 @@ export type LearningLifespanAnchor =
   | { kind: "pr"; prNumber: number }
   | { kind: "branch"; name: string }
 
+/**
+ * Execution-/tool-verification evidence class captured for a learning at write
+ * time (SIG-600). Mirrors the deterministic-evidence vocabulary the suppress
+ * gate reads (see `suppress.ts`): AST matches, CWE ids, scanner evidence-ids
+ * (`secret:`/`depvuln:`/`sarif:`), test/coverage refs, and specialist provenance.
+ * `none` = no runnable check backed it (a plain human decision).
+ */
+export type LearningEvidenceKind = "ast" | "cwe" | "sarif" | "secret" | "depvuln" | "test" | "specialist" | "none"
+
+export const LEARNING_EVIDENCE_KINDS: ReadonlySet<LearningEvidenceKind> = new Set<LearningEvidenceKind>([
+  "ast",
+  "cwe",
+  "sarif",
+  "secret",
+  "depvuln",
+  "test",
+  "specialist",
+  "none",
+])
+
+/**
+ * Whether a learning was execution-/tool-verified at capture time (SIG-600):
+ *   - `verified`   — backed by deterministic evidence when written.
+ *   - `unverified` — a human decision (dismissal, routing, convention) with
+ *                    nothing runnable to check.
+ *   - `unknown`    — back-compat default for records persisted before this field.
+ */
+export type LearningVerificationStatus = "verified" | "unverified" | "unknown"
+
+export const LEARNING_VERIFICATION_STATUSES: ReadonlySet<LearningVerificationStatus> =
+  new Set<LearningVerificationStatus>(["verified", "unverified", "unknown"])
+
+/**
+ * Verification provenance for a learning (SIG-600). SHADOW-SAFE: this slice only
+ * defines + persists the shape; capture wiring (PR2), retrieval/trust-weighting,
+ * and training-label export (later slices) do not read it yet.
+ */
+export interface LearningVerification {
+  status: LearningVerificationStatus
+  /** Evidence classes that grounded it — empty (or `["none"]`) when unverified. */
+  evidence: LearningEvidenceKind[]
+  /** Source finding/evidence ids that carried the evidence (attribution). */
+  sourceFindingIds?: string[]
+}
+
 export interface LearningSource {
   kind: LearningSourceKind
   prNumber?: number
@@ -66,6 +111,12 @@ export interface LearningEntry {
   type?: LearningMemoryType
   /** What this memory's lifespan is anchored to. OPTIONAL for backward compatibility. */
   lifespanAnchor?: LearningLifespanAnchor
+  /**
+   * Execution-/tool-verification provenance captured at write time (SIG-600).
+   * OPTIONAL for backward compatibility: records persisted before this field
+   * existed load without it (treat as `unknown`).
+   */
+  verification?: LearningVerification
 }
 
 export interface LearningStore {

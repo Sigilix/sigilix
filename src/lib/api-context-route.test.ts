@@ -241,6 +241,24 @@ describe("handleAgentContextRoute — retrieval", () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ status: "grounded", context: "GROUNDED", telemetry: okResult.telemetry })
   })
+  it("logs an agent-context-served observability event with the grounding status + chunkCount", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    try {
+      await handleAgentContextRoute(req(validBody), appEnv())
+      const served = logSpy.mock.calls
+        .map((c) => String(c[0]))
+        .find((line) => line.includes('"event":"agent-context-served"'))
+      expect(served).toBeDefined()
+      const parsed = JSON.parse(served!)
+      expect(parsed).toMatchObject({
+        event: "agent-context-served",
+        status: "grounded",
+        chunkCount: okResult.telemetry.chunkCount,
+      })
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
   it("200 with null context when nothing grounded (honest, NOT an error)", async () => {
     mockGather.mockResolvedValue({
       context: null,

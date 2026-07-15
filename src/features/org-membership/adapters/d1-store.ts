@@ -1,5 +1,7 @@
 import {
+  isCompleteInstallationRosterSnapshot,
   isOrgWorkspaceGithubUserId,
+  type CompleteInstallationRosterSnapshot,
   type OrgWorkspaceAccess,
   type OrgWorkspaceRole,
   type RemoveOrgWorkspaceAccessResult,
@@ -23,11 +25,15 @@ interface MutationArgs {
   updatedBy: string
 }
 
-interface RoleMutationArgs extends MutationArgs {
+interface RosterMutationArgs extends MutationArgs {
+  rosterSnapshot: CompleteInstallationRosterSnapshot
+}
+
+interface RoleMutationArgs extends RosterMutationArgs {
   role: OrgWorkspaceRole
 }
 
-interface RemoveArgs extends MutationArgs {
+interface RemoveArgs extends RosterMutationArgs {
   /** Current roster login, when still available; used solely to clear the
    * legacy login-keyed seat row. Access/key revocation never depends on it. */
   login?: string
@@ -74,29 +80,38 @@ export async function listOrgWorkspaceAccess(db: D1Database, installationId: num
   return results.map(decodeAccess)
 }
 
-export async function hasActiveOrgAdmin(db: D1Database, installationId: number): Promise<boolean> {
+export async function hasActiveOrgAdmin(
+  db: D1Database,
+  installationId: number,
+  rosterSnapshot: CompleteInstallationRosterSnapshot,
+): Promise<boolean> {
   if (!validInstallationId(installationId)) throw new Error("invalid installation id")
+  validateRosterSnapshot(rosterSnapshot)
   const row = await db
     .prepare(
       "SELECT 1 AS present FROM org_workspace_access" +
-        " WHERE installation_id = ? AND role = 'admin' AND revoked_at IS NULL LIMIT 1",
+        " WHERE installation_id = ? AND role = 'admin' AND revoked_at IS NULL" +
+        " AND instr(?, '|' || github_user_id || '|') > 0 LIMIT 1",
     )
-    .bind(installationId)
+    .bind(installationId, rosterSnapshot.sqlTokenSet)
     .first<{ present: number }>()
   return row !== null
 }
 
 /**
- * Atomically seed the first Sigilix admin. D1 executes one database's queries
- * serially; the INSERT...SELECT predicate and conflict update are one statement,
- * so concurrent GitHub admins cannot both observe an admin-less workspace.
- * A revoked target is deliberately never resurrected here.
+ * Atomically seed a roster-current Sigilix admin when the pinned complete
+ * roster has no reachable stored admin. Stale stored admins outside that
+ * snapshot deliberately do not block recovery. D1 serialization means callers
+ * sharing one snapshot cannot both win; callers with different complete
+ * snapshots may each seed a roster-proven admin, which is safe because the
+ * invariant is reachability (at least one), not singleton ownership. A revoked
+ * target is deliberately never resurrected here.
  */
 export async function bootstrapFirstOrgAdmin(
   db: D1Database,
-  args: MutationArgs,
+  args: RosterMutationArgs,
 ): Promise<"bootstrapped" | "not_bootstrapped"> {
-  validateMutation(args)
+  validateRosterMutation(args)
   const auditId = auditKey()
   const result = await db
     .prepare(
@@ -104,9 +119,11 @@ export async function bootstrapFirstOrgAdmin(
           (installation_id, github_user_id, role, revoked_at, created_at, updated_at,
            updated_by, last_audit_id, last_action)
          SELECT ?, ?, 'admin', NULL, ?, ?, ?, ?, 'bootstrap_admin'
-          WHERE NOT EXISTS (
+          WHERE instr(?, '|' || ? || '|') > 0
+            AND NOT EXISTS (
             SELECT 1 FROM org_workspace_access
              WHERE installation_id = ? AND role = 'admin' AND revoked_at IS NULL
+               AND instr(?, '|' || github_user_id || '|') > 0
           )
             AND NOT EXISTS (
               SELECT 1 FROM org_workspace_access
@@ -120,6 +137,7 @@ export async function bootstrapFirstOrgAdmin(
              SELECT 1 FROM org_workspace_access AS other
               WHERE other.installation_id = excluded.installation_id
                 AND other.role = 'admin' AND other.revoked_at IS NULL
+                AND instr(?, '|' || other.github_user_id || '|') > 0
            )`,
     )
     .bind(
@@ -129,9 +147,13 @@ export async function bootstrapFirstOrgAdmin(
       args.nowIso,
       args.updatedBy,
       auditId,
+      args.rosterSnapshot.sqlTokenSet,
+      args.githubUserId,
       args.installationId,
+      args.rosterSnapshot.sqlTokenSet,
       args.installationId,
       args.githubUserId,
+      args.rosterSnapshot.sqlTokenSet,
     )
     .run()
   return changes(result) === 1 ? "bootstrapped" : "not_bootstrapped"
@@ -164,8 +186,9 @@ export async function addOrgWorkspaceMember(db: D1Database, args: MutationArgs):
 
 /** Change a stored role while atomically preserving at least one active admin. */
 export async function setOrgWorkspaceRole(db: D1Database, args: RoleMutationArgs): Promise<SetOrgWorkspaceRoleResult> {
-  validateMutation(args)
+  validateRosterMutation(args)
   if (!validRole(args.role)) throw new Error("invalid organization role")
+  if (!args.rosterSnapshot.memberIds.includes(args.githubUserId)) throw new Error("member absent from roster snapshot")
   const result = await db
     .prepare(
       `UPDATE org_workspace_access
@@ -178,10 +201,20 @@ export async function setOrgWorkspaceRole(db: D1Database, args: RoleMutationArgs
                  WHERE other.installation_id = org_workspace_access.installation_id
                    AND other.github_user_id <> org_workspace_access.github_user_id
                    AND other.role = 'admin' AND other.revoked_at IS NULL
+                   AND instr(?, '|' || other.github_user_id || '|') > 0
               )
             )`,
     )
-    .bind(args.role, args.nowIso, args.updatedBy, auditKey(), args.installationId, args.githubUserId, args.role)
+    .bind(
+      args.role,
+      args.nowIso,
+      args.updatedBy,
+      auditKey(),
+      args.installationId,
+      args.githubUserId,
+      args.role,
+      args.rosterSnapshot.sqlTokenSet,
+    )
     .run()
   if (changes(result) === 1) {
     return {
@@ -204,7 +237,7 @@ export async function removeOrgWorkspaceAccess(
   db: D1Database,
   args: RemoveArgs,
 ): Promise<RemoveOrgWorkspaceAccessResult> {
-  validateMutation(args)
+  validateRosterMutation(args)
   const loginKey = args.login === undefined ? null : normalizeLogin(args.login)
   if (args.login !== undefined && loginKey === null) throw new Error("invalid member login")
   const auditId = auditKey()
@@ -228,7 +261,7 @@ export async function removeOrgWorkspaceAccessWithSeatBillingFence(
   args: RemoveArgs,
   fence: OrgWorkspaceSeatBillingFence,
 ): Promise<RemoveOrgWorkspaceAccessResult> {
-  validateMutation(args)
+  validateRosterMutation(args)
   validateSeatBillingFence(fence)
   const loginKey = args.login === undefined ? null : normalizeLogin(args.login)
   if (args.login !== undefined && loginKey === null) throw new Error("invalid member login")
@@ -280,11 +313,13 @@ function removalMutationStatements(
                 last_audit_id = ?, last_action = 'access_removed'
           WHERE installation_id = ? AND github_user_id = ? AND revoked_at IS NULL
             AND (
-              role <> 'admin' OR EXISTS (
+              role <> 'admin'
+              OR EXISTS (
                 SELECT 1 FROM org_workspace_access AS other
                  WHERE other.installation_id = org_workspace_access.installation_id
                    AND other.github_user_id <> org_workspace_access.github_user_id
                    AND other.role = 'admin' AND other.revoked_at IS NULL
+                   AND instr(?, '|' || other.github_user_id || '|') > 0
               )
             )${fenceSql}`,
       )
@@ -295,6 +330,7 @@ function removalMutationStatements(
         auditId,
         args.installationId,
         args.githubUserId,
+        args.rosterSnapshot.sqlTokenSet,
         ...fenceBindings,
       ),
     db
@@ -384,15 +420,20 @@ function removalEligibilityGuard(
   const targetSql =
     existingTombstone === null
       ? `target.revoked_at IS NULL AND (
-          target.role <> 'admin' OR EXISTS (
+          target.role <> 'admin'
+          OR EXISTS (
             SELECT 1 FROM org_workspace_access AS other
              WHERE other.installation_id = target.installation_id
                AND other.github_user_id <> target.github_user_id
                AND other.role = 'admin' AND other.revoked_at IS NULL
+               AND instr(?, '|' || other.github_user_id || '|') > 0
           )
         )`
       : "target.revoked_at = ? AND target.last_audit_id = ?"
-  const targetBindings = existingTombstone === null ? [] : [existingTombstone.revokedAt, existingTombstone.auditId]
+  const targetBindings =
+    existingTombstone === null
+      ? [args.rosterSnapshot.sqlTokenSet]
+      : [existingTombstone.revokedAt, existingTombstone.auditId]
   // The leased installation already occupies its primary key, so the true
   // branch no-ops. The false branch selects installation 0, which cannot
   // conflict because the schema CHECK (> 0) makes such a row impossible; its
@@ -492,20 +533,20 @@ async function readExistingRemovalTombstone(
 
 async function classifyRemovalMiss(
   db: D1Database,
-  args: Pick<RemoveArgs, "installationId" | "githubUserId">,
+  args: Pick<RemoveArgs, "installationId" | "githubUserId" | "rosterSnapshot">,
 ): Promise<RemoveOrgWorkspaceAccessResult> {
   const current = await readOrgWorkspaceAccess(db, args.installationId, args.githubUserId)
   if (current === null || current.revokedAt !== null) return { status: "not_found" }
-  if (current.role === "admin" && (await isLastActiveAdmin(db, args))) return { status: "last_admin" }
+  if (current.role === "admin" && (await isLastRosterAdmin(db, args))) return { status: "last_admin" }
   throw new Error("organization access removal was fenced")
 }
 
 async function classifyFencedRemovalFailure(
   db: D1Database,
-  args: Pick<RemoveArgs, "installationId" | "githubUserId">,
+  args: Pick<RemoveArgs, "installationId" | "githubUserId" | "rosterSnapshot">,
 ): Promise<RemoveOrgWorkspaceAccessResult> {
   const current = await readOrgWorkspaceAccess(db, args.installationId, args.githubUserId)
-  if (current?.revokedAt === null && current.role === "admin" && (await isLastActiveAdmin(db, args))) {
+  if (current?.revokedAt === null && current.role === "admin" && (await isLastRosterAdmin(db, args))) {
     return { status: "last_admin" }
   }
   const activeOperation = await db
@@ -520,16 +561,17 @@ async function classifyFencedRemovalFailure(
   throw new Error("organization access removal was fenced")
 }
 
-async function isLastActiveAdmin(
+async function isLastRosterAdmin(
   db: D1Database,
-  args: Pick<RemoveArgs, "installationId" | "githubUserId">,
+  args: Pick<RemoveArgs, "installationId" | "githubUserId" | "rosterSnapshot">,
 ): Promise<boolean> {
   const other = await db
     .prepare(
       `SELECT 1 AS present FROM org_workspace_access
-        WHERE installation_id = ? AND github_user_id <> ? AND role = 'admin' AND revoked_at IS NULL LIMIT 1`,
+        WHERE installation_id = ? AND github_user_id <> ? AND role = 'admin' AND revoked_at IS NULL
+          AND instr(?, '|' || github_user_id || '|') > 0 LIMIT 1`,
     )
-    .bind(args.installationId, args.githubUserId)
+    .bind(args.installationId, args.githubUserId, args.rosterSnapshot.sqlTokenSet)
     .first<{ present: number }>()
   return other === null
 }
@@ -596,6 +638,15 @@ function validateMutation(args: MutationArgs): void {
   validateIdentity(args.installationId, args.githubUserId)
   if (typeof args.nowIso !== "string" || args.nowIso.length === 0) throw new Error("invalid mutation time")
   if (typeof args.updatedBy !== "string" || args.updatedBy.length === 0) throw new Error("invalid mutation actor")
+}
+
+function validateRosterMutation(args: RosterMutationArgs): void {
+  validateMutation(args)
+  validateRosterSnapshot(args.rosterSnapshot)
+}
+
+function validateRosterSnapshot(snapshot: CompleteInstallationRosterSnapshot): void {
+  if (!isCompleteInstallationRosterSnapshot(snapshot)) throw new Error("invalid installation roster snapshot")
 }
 
 function validateSeatBillingFence(fence: OrgWorkspaceSeatBillingFence): void {

@@ -301,6 +301,7 @@ async function resolveSessionScope(
     githubUserId,
     liveRole: resolved.role,
     requiredRole: "member",
+    account: resolved.account,
   })
   if (!policy.ok) return { response: policy.response }
 

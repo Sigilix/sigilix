@@ -126,6 +126,9 @@ function stubGitHub(options: { visibleInstallationId?: number; liveRole?: "admin
           status: 200,
         })
       }
+      if (url.startsWith("https://api.github.com/orgs/acme/members?")) {
+        return new Response(JSON.stringify([{ id: 111, login: "octocat" }]), { status: 200 })
+      }
       throw new Error(`unexpected fetch: ${url}`)
     }),
   )
@@ -146,7 +149,13 @@ describe("handleCreateApiKeyRoute (POST /v1/keys)", () => {
       OPENCLAW_STATE: kv,
       SIGILIX_PLATFORM_DB: db,
       OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      GITHUB_APP_ID: "123",
+      GITHUB_PRIVATE_KEY: "cached-token",
     } as unknown as Env
+    await kv.put(
+      "gh-installation-token:42",
+      JSON.stringify({ token: "ghs_roster", expiresAt: Date.now() + 60 * 60 * 1000 }),
+    )
   })
 
   it("401 without a session", async () => {

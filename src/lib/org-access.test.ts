@@ -8,6 +8,7 @@ const SESSION_COOKIE = "__Host-sigilix_session"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(17))
 const INSTALLATION_ID = 42
 const GITHUB_USER_ID = "111"
+const TENANT_SQL = readFileSync(new URL("../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
 const ACCOUNT_SQL = readFileSync(
   new URL("../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
   "utf8",
@@ -32,8 +33,16 @@ function makeKV(): KVNamespace {
 
 async function makeDb(): Promise<D1Database> {
   const db = makeD1()
+  await db.exec(TENANT_SQL)
   await db.exec(ACCOUNT_SQL)
   await db.exec(ACCESS_SQL)
+  await db
+    .prepare(
+      "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
+        " VALUES (?, 'acme', 'Organization', 't', 't')",
+    )
+    .bind(INSTALLATION_ID)
+    .run()
   return db
 }
 
@@ -49,6 +58,10 @@ async function seedSession(
     accessToken: "ghu_test",
     encryptionKeyB64url: ENC_KEY,
   })
+  await kv.put(
+    `gh-installation-token:${INSTALLATION_ID}`,
+    JSON.stringify({ token: "ghs_roster", expiresAt: Date.now() + 60 * 60 * 1000 }),
+  )
 }
 
 async function seedStoredAccess(
@@ -93,15 +106,26 @@ function env(kv: KVNamespace, options: { db?: D1Database; mode?: "off" | "on" | 
   const out = {
     OPENCLAW_STATE: kv,
     OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+    GITHUB_APP_ID: "123",
+    GITHUB_PRIVATE_KEY: "cached-token",
   } as unknown as OrgAccessEnv
   if (options.db !== undefined) out.SIGILIX_PLATFORM_DB = options.db
   if (options.mode !== null) out.OPENCLAW_ORG_MEMBERSHIP_MODE = options.mode ?? "on"
   return out
 }
 
-function stubGitHub(options: { visibleInstallationId?: number; liveRole?: "admin" | "member" } = {}): void {
+function stubGitHub(
+  options: {
+    visibleInstallationId?: number
+    liveRole?: "admin" | "member"
+    rosterMembers?: Array<{ id: number; login: string }>
+    rosterStatus?: number
+  } = {},
+): void {
   const visibleInstallationId = options.visibleInstallationId ?? INSTALLATION_ID
   const liveRole = options.liveRole ?? "member"
+  const rosterMembers = options.rosterMembers ?? [{ id: Number(GITHUB_USER_ID), login: "octocat" }]
+  const rosterStatus = options.rosterStatus ?? 200
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -119,6 +143,11 @@ function stubGitHub(options: { visibleInstallationId?: number; liveRole?: "admin
         const memberships =
           liveRole === "admin" ? [{ role: "admin", state: "active", organization: { login: "acme" } }] : []
         return new Response(JSON.stringify(memberships), { status: 200 })
+      }
+      if (url.startsWith("https://api.github.com/orgs/acme/members?")) {
+        return new Response(JSON.stringify(rosterStatus === 200 ? rosterMembers : { error: "roster unavailable" }), {
+          status: rosterStatus,
+        })
       }
       throw new Error(`unexpected fetch: ${url}`)
     }),
@@ -256,6 +285,67 @@ describe("requireOrgAccess", () => {
         .bind(INSTALLATION_ID, GITHUB_USER_ID)
         .first(),
     ).resolves.toEqual({ role: "admin", revoked_at: null })
+  })
+
+  it("ignores an unreachable stored admin when bootstrapping the reachable live admin", async () => {
+    const kv = makeKV()
+    const db = await makeDb()
+    await seedSession(kv, { githubUserId: 111 })
+    await seedStoredAccess(db, { githubUserId: "222", role: "admin" })
+    stubGitHub({ liveRole: "admin", rosterMembers: [{ id: 111, login: "octocat" }] })
+
+    const result = await requireOrgAccess(request(), env(kv, { db }), undefined, INSTALLATION_ID, {
+      requiredRole: "admin",
+    })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result).toMatchObject({ githubUserId: GITHUB_USER_ID, role: "admin" })
+    await expect(
+      db
+        .prepare("SELECT role, revoked_at FROM org_workspace_access WHERE installation_id = ? AND github_user_id = ?")
+        .bind(INSTALLATION_ID, GITHUB_USER_ID)
+        .first(),
+    ).resolves.toEqual({ role: "admin", revoked_at: null })
+  })
+
+  it("fails bootstrap closed when the exact App roster is incomplete and writes no access row", async () => {
+    const kv = makeKV()
+    const db = await makeDb()
+    await seedSession(kv, { githubUserId: 111 })
+    stubGitHub({ liveRole: "admin", rosterStatus: 500 })
+
+    const result = await requireOrgAccess(request(), env(kv, { db }), undefined, INSTALLATION_ID, {
+      requiredRole: "admin",
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.response.status).toBe(503)
+    await expect(
+      db
+        .prepare("SELECT COUNT(*) AS n FROM org_workspace_access WHERE installation_id = ?")
+        .bind(INSTALLATION_ID)
+        .first<{ n: number }>(),
+    ).resolves.toEqual({ n: 0 })
+  })
+
+  it("denies bootstrap when a complete exact App roster does not contain the caller and writes nothing", async () => {
+    const kv = makeKV()
+    const db = await makeDb()
+    await seedSession(kv, { githubUserId: 111 })
+    stubGitHub({ liveRole: "admin", rosterMembers: [{ id: 222, login: "other-admin" }] })
+
+    const result = await requireOrgAccess(request(), env(kv, { db }), undefined, INSTALLATION_ID, {
+      requiredRole: "admin",
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.response.status).toBe(403)
+    await expect(
+      db
+        .prepare("SELECT COUNT(*) AS n FROM org_workspace_access WHERE installation_id = ?")
+        .bind(INSTALLATION_ID)
+        .first<{ n: number }>(),
+    ).resolves.toEqual({ n: 0 })
   })
 
   it("serializes a first-admin conflict and authorizes only the exact stored winner", async () => {

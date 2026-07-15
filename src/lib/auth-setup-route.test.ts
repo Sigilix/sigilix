@@ -83,6 +83,12 @@ function stubUserInstallations(ids: number[], options: { liveRole?: "admin" | "m
           headers: { "content-type": "application/json" },
         })
       }
+      if (url.startsWith("https://api.github.com/orgs/org-42/members?")) {
+        return new Response(JSON.stringify([{ id: 111, login: "octocat" }]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
       throw new Error(`unexpected fetch: ${url}`)
     }),
   )
@@ -159,6 +165,12 @@ describe("handleSetupRoute (GET /setup)", () => {
   async function enableManagedMembership(): Promise<void> {
     await db.exec(ACCESS_MIGRATION_SQL)
     env.OPENCLAW_ORG_MEMBERSHIP_MODE = "on"
+    env.GITHUB_APP_ID = "123"
+    env.GITHUB_PRIVATE_KEY = "cached-token"
+    await kv.put(
+      "gh-installation-token:42",
+      JSON.stringify({ token: "ghs_roster", expiresAt: Date.now() + 60 * 60 * 1000 }),
+    )
   }
 
   async function seedStoredAccess(options: {
@@ -409,7 +421,7 @@ describe("handleSetupRoute (GET /setup)", () => {
       })
     })
 
-    it("denies a later live GitHub admin who is absent from the managed roster", async () => {
+    it("bootstraps a later live GitHub admin when the stored admin has left the exact roster", async () => {
       await enableManagedMembership()
       await seedStoredAccess({ githubUserId: "222", role: "admin" })
       stubUserInstallations([42], { liveRole: "admin" })
@@ -417,11 +429,11 @@ describe("handleSetupRoute (GET /setup)", () => {
 
       const res = await dispatchSetup(state)
 
-      expect(res.status).toBe(403)
-      await expect(db.prepare("SELECT COUNT(*) AS n FROM api_key").first()).resolves.toEqual({ n: 0 })
+      expect(res.status).toBe(200)
+      await expect(db.prepare("SELECT COUNT(*) AS n FROM api_key").first()).resolves.toEqual({ n: 1 })
       await expect(
-        db.prepare("SELECT COUNT(*) AS n FROM org_workspace_access WHERE github_user_id = '111'").first(),
-      ).resolves.toEqual({ n: 0 })
+        db.prepare("SELECT role, revoked_at FROM org_workspace_access WHERE github_user_id = '111'").first(),
+      ).resolves.toEqual({ role: "admin", revoked_at: null })
     })
   })
 

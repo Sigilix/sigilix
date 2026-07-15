@@ -359,6 +359,77 @@ export interface AppInstallation {
 }
 
 /**
+ * A single installation whose identity and account fields were validated from
+ * GitHub's App-JWT endpoint. Unlike the fail-soft paginated listing, this shape
+ * is safe to use as authority for an exact installation-scoped write.
+ */
+export interface ExactAppInstallation {
+  id: number
+  accountId: number
+  accountLogin: string
+  accountType: "Organization" | "User"
+}
+
+/**
+ * Resolve one exact App installation with an App JWT
+ * (`GET /app/installations/{installation_id}`). A 404 means the installation
+ * is not owned by this App. Provider, network, and malformed-payload failures
+ * throw so write paths can fail closed rather than treating them as absence.
+ */
+export async function getAppInstallation(
+  appId: string,
+  privateKeyPem: string,
+  installationId: number,
+): Promise<ExactAppInstallation | null> {
+  if (!Number.isSafeInteger(installationId) || installationId <= 0) {
+    throw new Error("getAppInstallation: invalid installationId")
+  }
+
+  const jwt = await signGitHubAppJwt(appId, privateKeyPem)
+  const res = await fetch(`https://api.github.com/app/installations/${installationId}`, {
+    headers: GH_API_HEADERS(`Bearer ${jwt}`),
+  })
+  if (res.status === 404) return null
+  if (!res.ok) {
+    throw new Error(`GitHub exact installation fetch failed: HTTP ${res.status}`)
+  }
+
+  let value: unknown
+  try {
+    value = await res.json()
+  } catch {
+    throw new Error("GitHub exact installation response was not valid JSON")
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("GitHub exact installation response was malformed")
+  }
+  const row = value as Record<string, unknown>
+  const account =
+    typeof row.account === "object" && row.account !== null && !Array.isArray(row.account)
+      ? (row.account as Record<string, unknown>)
+      : null
+  if (
+    !Number.isSafeInteger(row.id) ||
+    row.id !== installationId ||
+    account === null ||
+    !Number.isSafeInteger(account.id) ||
+    Number(account.id) <= 0 ||
+    typeof account.login !== "string" ||
+    account.login.trim() === "" ||
+    (account.type !== "Organization" && account.type !== "User")
+  ) {
+    throw new Error("GitHub exact installation response was malformed")
+  }
+
+  return {
+    id: installationId,
+    accountId: Number(account.id),
+    accountLogin: account.login,
+    accountType: account.type,
+  }
+}
+
+/**
  * sig-cli-login-org: list every App installation WITH its account (id + login +
  * type) via the App JWT (`GET /app/installations`, paginated). Same server-to-
  * server credential + fail-soft `complete` contract as {@link listAppInstallationIds}
@@ -526,10 +597,30 @@ export async function listOrgMembers(
         return { items: [...byId.values()], complete: false }
       }
       const arr = (await res.json()) as unknown
-      if (!Array.isArray(arr) || arr.length === 0) return { items: [...byId.values()], complete: true }
+      if (!Array.isArray(arr)) {
+        console.warn(
+          JSON.stringify({
+            event: "list-org-members-invalid-page",
+            installation_id: installationId,
+            page,
+          }),
+        )
+        return { items: [...byId.values()], complete: false }
+      }
+      if (arr.length === 0) return { items: [...byId.values()], complete: true }
       for (const m of arr) {
         const member = parseGitHubMember(m)
-        if (member && !byId.has(member.githubUserId)) byId.set(member.githubUserId, member)
+        if (!member) {
+          console.warn(
+            JSON.stringify({
+              event: "list-org-members-invalid-row",
+              installation_id: installationId,
+              page,
+            }),
+          )
+          return { items: [...byId.values()], complete: false }
+        }
+        if (!byId.has(member.githubUserId)) byId.set(member.githubUserId, member)
       }
       if (arr.length < 100) return { items: [...byId.values()], complete: true }
       if (page === MAX_PAGES) {
@@ -556,8 +647,9 @@ export async function listOrgMembers(
  * installation-token auth). Used for a PERSONAL (`account.type: "User"`) install
  * where there is no org roster — the "members" are the people who can touch the
  * installed repos. Deduped by immutable GitHub user ID (first-seen display
- * fields win). Fail-soft + `complete` flag: any repo enumeration / page error
- * marks the result partial but keeps whatever was collected.
+ * fields win). Repository enumeration must complete before collaborator
+ * traversal begins. A later collaborator page error marks the result partial
+ * while keeping whatever valid collaborators were already collected.
  */
 export async function listInstallationCollaborators(
   kv: KVNamespace,
@@ -567,7 +659,8 @@ export async function listInstallationCollaborators(
 ): Promise<ListingResult<GitHubMember>> {
   const byId = new Map<string, GitHubMember>()
   const repos = await listInstallationRepoFullNames(kv, appId, privateKey, installationId)
-  let complete = repos.complete
+  if (!repos.complete) return { items: [], complete: false }
+  let complete = true
   try {
     const token = await getInstallationToken({ kv, appId, privateKey, installationId })
     for (const fullName of repos.items) {
@@ -588,12 +681,32 @@ export async function listInstallationCollaborators(
           break
         }
         const arr = (await res.json()) as unknown
-        if (!Array.isArray(arr) || arr.length === 0) break
+        if (!Array.isArray(arr)) {
+          console.warn(
+            JSON.stringify({
+              event: "list-collaborators-invalid-page",
+              installation_id: installationId,
+              repo: fullName,
+              page,
+            }),
+          )
+          return { items: [...byId.values()], complete: false }
+        }
+        if (arr.length === 0) break
         for (const c of arr) {
           const collaborator = parseGitHubMember(c)
-          if (collaborator && !byId.has(collaborator.githubUserId)) {
-            byId.set(collaborator.githubUserId, collaborator)
+          if (!collaborator) {
+            console.warn(
+              JSON.stringify({
+                event: "list-collaborators-invalid-row",
+                installation_id: installationId,
+                repo: fullName,
+                page,
+              }),
+            )
+            return { items: [...byId.values()], complete: false }
           }
+          if (!byId.has(collaborator.githubUserId)) byId.set(collaborator.githubUserId, collaborator)
         }
         if (arr.length < 100) break
         if (page === MAX_PAGES) complete = false
@@ -644,10 +757,39 @@ export async function listInstallationRepoFullNames(
         )
         return { items, complete: false }
       }
-      const json = (await res.json()) as { repositories?: Array<{ full_name?: unknown }> }
-      const repos = json.repositories
-      if (!Array.isArray(repos) || repos.length === 0) return { items, complete: true }
-      for (const r of repos) if (typeof r.full_name === "string") items.push(r.full_name)
+      const json = (await res.json()) as unknown
+      const repos =
+        typeof json === "object" && json !== null && !Array.isArray(json)
+          ? (json as Record<string, unknown>).repositories
+          : undefined
+      if (!Array.isArray(repos)) {
+        console.warn(
+          JSON.stringify({
+            event: "list-installation-repos-invalid-page",
+            installation_id: installationId,
+            page,
+          }),
+        )
+        return { items, complete: false }
+      }
+      if (repos.length === 0) return { items, complete: true }
+      for (const repo of repos) {
+        const fullName =
+          typeof repo === "object" && repo !== null && !Array.isArray(repo)
+            ? (repo as Record<string, unknown>).full_name
+            : undefined
+        if (typeof fullName !== "string" || !/^[^/?#]+\/[^/?#]+$/.test(fullName)) {
+          console.warn(
+            JSON.stringify({
+              event: "list-installation-repos-invalid-row",
+              installation_id: installationId,
+              page,
+            }),
+          )
+          return { items, complete: false }
+        }
+        items.push(fullName)
+      }
       if (repos.length < 100) return { items, complete: true }
       if (page === MAX_PAGES) {
         console.warn(

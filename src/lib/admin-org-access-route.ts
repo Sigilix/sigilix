@@ -7,6 +7,7 @@ import { recoverOrgWorkspaceAdmin } from "@/src/features/org-membership"
 import { requireBearerToken } from "@/src/lib/auth-bearer"
 import { fetchInstallationRoster } from "@/src/lib/org-members-roster"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
+import { getAppInstallation } from "@/src/shared/adapters/github/github-app"
 import type { Env } from "@/src/shared/types/env"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 
@@ -17,9 +18,8 @@ interface RecoveryBody {
   githubUserId: string
 }
 
-interface TenantAccountRow {
-  account_login: unknown
-  account_type: unknown
+interface TenantInstallationRow {
+  installation_id: unknown
 }
 
 export async function handleAdminOrgAccessRecoveryRoute(request: Request, env: Env): Promise<Response> {
@@ -35,28 +35,32 @@ export async function handleAdminOrgAccessRecoveryRoute(request: Request, env: E
   if (body instanceof Response) return body
   if (!env.SIGILIX_PLATFORM_DB) return json({ error: "org_access_unavailable" }, 503)
 
-  let account: { login: string; type: "Organization" | "User" }
   try {
-    const row = await env.SIGILIX_PLATFORM_DB.prepare(
-      "SELECT account_login, account_type FROM tenant WHERE installation_id = ?",
-    )
+    const row = await env.SIGILIX_PLATFORM_DB.prepare("SELECT installation_id FROM tenant WHERE installation_id = ?")
       .bind(body.installationId)
-      .first<TenantAccountRow>()
-    if (
-      row === null ||
-      typeof row.account_login !== "string" ||
-      row.account_login.length === 0 ||
-      (row.account_type !== "Organization" && row.account_type !== "User")
-    ) {
-      return json({ error: "installation_not_found" }, 404)
-    }
-    account = { login: row.account_login, type: row.account_type }
+      .first<TenantInstallationRow>()
+    if (row === null) return json({ error: "installation_not_found" }, 404)
+    if (row.installation_id !== body.installationId) throw new Error("tenant installation binding was malformed")
   } catch (error) {
     emitFailure("org-access-recovery-tenant-read-failed", error, body.installationId)
     return json({ error: "org_access_unavailable" }, 503)
   }
 
-  const roster = await fetchInstallationRoster(env, body.installationId, account.login, account.type)
+  let installation: Awaited<ReturnType<typeof getAppInstallation>>
+  try {
+    installation = await getAppInstallation(env.GITHUB_APP_ID ?? "", env.GITHUB_PRIVATE_KEY ?? "", body.installationId)
+  } catch (error) {
+    emitFailure("org-access-recovery-installation-lookup-failed", error, body.installationId)
+    return json({ error: "org_access_unavailable" }, 503)
+  }
+  if (installation === null) return json({ error: "installation_not_found" }, 404)
+
+  const roster = await fetchInstallationRoster(
+    env,
+    body.installationId,
+    installation.accountLogin,
+    installation.accountType,
+  )
   if (!roster.complete) return json({ error: "org_roster_unavailable" }, 503)
   if (!roster.members.some((member) => member.githubUserId === body.githubUserId)) {
     return json({ error: "member_not_found" }, 404)

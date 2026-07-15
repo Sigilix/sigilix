@@ -18,7 +18,10 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock("@/src/lib/org-access", () => ({ requireOrgAccess: mocks.requireOrgAccess }))
-vi.mock("@/src/lib/org-members-roster", () => ({ fetchInstallationRoster: mocks.fetchInstallationRoster }))
+vi.mock("@/src/lib/org-members-roster", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/src/lib/org-members-roster")>()),
+  fetchInstallationRoster: mocks.fetchInstallationRoster,
+}))
 
 const INSTALLATION_ID = 42
 const ACTOR_ID = "111"
@@ -66,6 +69,7 @@ function adminAccess() {
     installationId: INSTALLATION_ID,
     githubUserId: ACTOR_ID,
     login: "owner",
+    account: { login: "acme", type: "Organization" },
     role: "admin",
   }
 }
@@ -105,6 +109,10 @@ function request(
 }
 
 async function seedAccess(db: D1Database, githubUserId: string, role: "admin" | "member"): Promise<void> {
+  const rosterSnapshot = {
+    memberIds: [ACTOR_ID, TARGET_ID, "333"].sort(),
+    sqlTokenSet: `|${[ACTOR_ID, TARGET_ID, "333"].sort().join("|")}|`,
+  }
   await addOrgWorkspaceMember(db, {
     installationId: INSTALLATION_ID,
     githubUserId,
@@ -118,6 +126,7 @@ async function seedAccess(db: D1Database, githubUserId: string, role: "admin" | 
       role: "admin",
       nowIso: "2026-07-13T04:01:00.000Z",
       updatedBy: "owner",
+      rosterSnapshot,
     })
     expect(promoted.status).toBe("updated")
   }
@@ -547,6 +556,10 @@ describe("DELETE /v1/org/:installationId/members/:githubUserId", () => {
         login: "target",
         nowIso: "2026-07-13T03:59:00.000Z",
         updatedBy: "legacy-removal",
+        rosterSnapshot: {
+          memberIds: [ACTOR_ID, TARGET_ID].sort(),
+          sqlTokenSet: `|${[ACTOR_ID, TARGET_ID].sort().join("|")}|`,
+        },
       }),
     ).resolves.toEqual({ status: "removed" })
     await db
@@ -593,6 +606,10 @@ describe("DELETE /v1/org/:installationId/members/:githubUserId", () => {
       login: "target",
       nowIso: "2026-07-13T03:59:00.000Z",
       updatedBy: "legacy-removal",
+      rosterSnapshot: {
+        memberIds: [ACTOR_ID, TARGET_ID].sort(),
+        sqlTokenSet: `|${[ACTOR_ID, TARGET_ID].sort().join("|")}|`,
+      },
     })
     await db
       .prepare(

@@ -64,7 +64,37 @@ describe("processSlice", () => {
     expect(records[0]!.metadata).toMatchObject({
       headSha: "abc123456789",
       runId: "run-abc",
+      citationChunkVersion: 1,
+      fragmentIndex: -1,
     })
+  })
+
+  it("writes each hard-split fragment's citation identity metadata", async () => {
+    const { env, upsert } = graphEnv()
+    const hardSplitClient = {
+      getFileContent: async () => "=".repeat(2_800),
+    } as never
+
+    await processSlice({
+      client: hardSplitClient,
+      env,
+      owner: "Sigilix",
+      repo: "sigilix",
+      stateRepo: "sigilix",
+      namespace: "sigilix/sigilix",
+      headSha: "abc123456789",
+      runId: "run-abc",
+      files: [{ path: "src/generated.ts", size: 2_800 }],
+      astChunking: false,
+      writeGraph: false,
+    })
+
+    const records = upsert.mock.calls.flatMap((call) => call[0] as Array<{ metadata: Record<string, unknown> }>)
+    expect(records).toHaveLength(2)
+    expect(records.map((record) => record.metadata)).toEqual([
+      expect.objectContaining({ citationChunkVersion: 1, fragmentIndex: 0 }),
+      expect.objectContaining({ citationChunkVersion: 1, fragmentIndex: 1 }),
+    ])
   })
 
   // SIG-423: the full-tree path (writeGraph defaults to true) still writes graph

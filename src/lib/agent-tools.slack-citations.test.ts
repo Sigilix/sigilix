@@ -6,6 +6,10 @@ import type { Env } from "@/src/shared/types/env"
 
 const retrieveChunksMock = vi.fn()
 const enclosingSymbolsMock = vi.fn()
+const fetchPullRequestContextWithClientMock = vi.fn()
+const fetchPullRequestSnapshotWithClientMock = vi.fn()
+const getInstallationTokenMock = vi.fn(async (_args: unknown) => "test-token")
+const readFileContentMock = vi.fn()
 
 vi.mock("@/src/lib/retrieval", async () => {
   const actual = await vi.importActual<typeof import("@/src/lib/retrieval")>("@/src/lib/retrieval")
@@ -17,6 +21,29 @@ vi.mock("@/src/lib/repo-graph-client", async () => {
   return {
     ...actual,
     enclosingSymbolsForHitsFor: (...args: unknown[]) => enclosingSymbolsMock(...args),
+  }
+})
+
+vi.mock("@/src/lib/github-pr-context", async () => {
+  const actual = await vi.importActual<typeof import("@/src/lib/github-pr-context")>("@/src/lib/github-pr-context")
+  return {
+    ...actual,
+    fetchPullRequestContextWithClient: (args: unknown) => fetchPullRequestContextWithClientMock(args),
+    fetchPullRequestSnapshotWithClient: (args: unknown) => fetchPullRequestSnapshotWithClientMock(args),
+  }
+})
+
+vi.mock("@/src/shared/adapters/github/github-app", () => ({
+  getInstallationToken: (args: unknown) => getInstallationTokenMock(args),
+}))
+
+vi.mock("@/src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("@/src/shared/adapters/github")>("@/src/shared/adapters/github")
+  return {
+    ...actual,
+    GitHubClient: vi.fn().mockImplementation(() => ({
+      getFileContent: (...args: unknown[]) => readFileContentMock(...args),
+    })),
   }
 })
 
@@ -61,17 +88,14 @@ function policy(mode: "shadow" | "on") {
       chunks.map((value) => ({
         chunk: value,
         citation: {
-          githubRepoId: 101,
-          repo: "Acme/Api",
-          path: value.path,
-          lineStart: value.lineStart,
-          lineEnd: value.lineEnd,
-          ref: "c".repeat(40),
-          runId: "d".repeat(16),
-          chunkId: value.id!,
+          kind: "code" as const,
+          id: `code-${value.path}`,
         },
       })),
     ),
+    prepareFileRead: vi.fn(async () => ({ ok: true as const, ref: "c".repeat(40) })),
+    issueFileLines: vi.fn(async () => ({ kind: "file_lines" as const, id: "file-lines-1" })),
+    issuePullRequest: vi.fn(async () => ({ kind: "pull_request" as const, id: "pull-request-1" })),
   }
 }
 
@@ -94,6 +118,41 @@ beforeEach(() => {
     callerRows: [],
     importRows: [],
   })
+  fetchPullRequestContextWithClientMock.mockResolvedValue({
+    ok: true,
+    context: {
+      owner: "Acme",
+      repo: "Api",
+      number: 7,
+      title: "Pin citation snapshots",
+      body: "",
+      diff: "diff --git a/src/a.ts b/src/a.ts",
+      filesChanged: { items: ["src/a.ts"], total: 1 },
+      state: "open",
+      mergedAt: null,
+    },
+  })
+  fetchPullRequestSnapshotWithClientMock.mockResolvedValue({
+    ok: true,
+    context: {
+      owner: "Acme",
+      repo: "Api",
+      number: 7,
+      title: "Pin citation snapshots",
+      body: "",
+      diff: "diff --git a/src/a.ts b/src/a.ts",
+      filesChanged: { items: ["src/a.ts"], total: 1 },
+      state: "open",
+      mergedAt: null,
+    },
+    proof: {
+      source: "github_compare",
+      baseSha: "b".repeat(40),
+      headSha: "c".repeat(40),
+    },
+  })
+  getInstallationTokenMock.mockResolvedValue("test-token")
+  readFileContentMock.mockResolvedValue("first\nsecond\nthird")
 })
 
 describe("retrieve_codebase — verified Slack citations", () => {
@@ -167,14 +226,8 @@ describe("retrieve_codebase — verified Slack citations", () => {
       {
         chunk: second,
         citation: {
-          githubRepoId: 101,
-          repo: "Acme/Api",
-          path: "src/live.ts",
-          lineStart: 1,
-          lineEnd: 1,
-          ref: "c".repeat(40),
-          runId: "d".repeat(16),
-          chunkId: second.id!,
+          kind: "code",
+          id: "code-src/live.ts",
         },
       },
     ])
@@ -196,14 +249,8 @@ describe("retrieve_codebase — verified Slack citations", () => {
       expect.objectContaining({
         path: "src/live.ts",
         citation: {
-          githubRepoId: 101,
-          repo: "Acme/Api",
-          path: "src/live.ts",
-          lineStart: 1,
-          lineEnd: 1,
-          ref: "c".repeat(40),
-          runId: "d".repeat(16),
-          chunkId: second.id!,
+          kind: "code",
+          id: "code-src/live.ts",
         },
       }),
     ])
@@ -231,5 +278,97 @@ describe("retrieve_codebase — verified Slack citations", () => {
     expect(result.symbolContext).toBeUndefined()
     expect(enclosingSymbolsMock).not.toHaveBeenCalled()
     expect(getFileContent).not.toHaveBeenCalled()
+  })
+})
+
+describe("direct GitHub tools — verified Slack citations", () => {
+  it("attaches an issued ref to an immutable compare-backed PR snapshot in on mode", async () => {
+    const on = policy("on")
+    const tools = createAgentTools({
+      env: env(),
+      surface: "slack-mention",
+      github: github(),
+      slackCodeCitations: on,
+    })
+    const tool = tools.find((candidate) => candidate.name === "fetch_pr")!
+
+    const result = (await tool.execute(
+      { owner: "Acme", repo: "Api", number: 7 },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; pr?: unknown; citation?: unknown }
+
+    expect(result).toMatchObject({
+      ok: true,
+      pr: { number: 7 },
+      citation: { kind: "pull_request", id: "pull-request-1" },
+    })
+    expect(fetchPullRequestSnapshotWithClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: "Acme", repo: "Api", number: 7, client: github().githubClient }),
+    )
+    expect(fetchPullRequestContextWithClientMock).not.toHaveBeenCalled()
+    expect(on.issuePullRequest).toHaveBeenCalledWith({
+      namespace: "acme/api",
+      number: 7,
+      baseSha: "b".repeat(40),
+      headSha: "c".repeat(40),
+      source: "github_compare",
+    })
+  })
+
+  it("pins a default-branch file read to the active full SHA before exposing content", async () => {
+    const on = policy("on")
+    const tools = createAgentTools({
+      env: env(),
+      surface: "slack-mention",
+      github: github(),
+      slackCodeCitations: on,
+    })
+    const tool = tools.find((candidate) => candidate.name === "read_file_lines")!
+
+    const result = (await tool.execute(
+      { owner: "Acme", repo: "Api", path: "src/config.ts", lineStart: 2, lineEnd: 2 },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; ref?: string; content?: string; citation?: unknown }
+
+    expect(on.prepareFileRead).toHaveBeenCalledWith("acme/api", "", expect.any(AbortSignal))
+    expect(readFileContentMock).toHaveBeenCalledWith("Acme", "Api", "src/config.ts", "c".repeat(40))
+    expect(on.issueFileLines).toHaveBeenCalledWith({
+      namespace: "acme/api",
+      path: "src/config.ts",
+      lineStart: 2,
+      lineEnd: 2,
+      ref: "c".repeat(40),
+      content: "second",
+    })
+    expect(result).toMatchObject({
+      ok: true,
+      ref: "c".repeat(40),
+      content: "second",
+      citation: { kind: "file_lines", id: "file-lines-1" },
+    })
+  })
+
+  it("keeps direct-tool shadow results byte-identical and free of refs", async () => {
+    const baselineTools = createAgentTools({ env: env(), surface: "slack-mention", github: github() })
+    const shadow = policy("shadow")
+    const shadowTools = createAgentTools({
+      env: env(),
+      surface: "slack-mention",
+      github: github(),
+      slackCodeCitations: shadow,
+    })
+    const baseline = await baselineTools
+      .find((candidate) => candidate.name === "fetch_pr")!
+      .execute({ owner: "Acme", repo: "Api", number: 7 }, new AbortController().signal, new Map())
+    const observed = await shadowTools
+      .find((candidate) => candidate.name === "fetch_pr")!
+      .execute({ owner: "Acme", repo: "Api", number: 7 }, new AbortController().signal, new Map())
+
+    expect(observed).toEqual(baseline)
+    expect(observed).not.toHaveProperty("citation")
+    expect(fetchPullRequestSnapshotWithClientMock).not.toHaveBeenCalled()
+    expect(shadow.issuePullRequest).not.toHaveBeenCalled()
   })
 })

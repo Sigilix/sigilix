@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import { CITATION_CHUNK_VERSION, splitOversizedWindowV1 } from "@/src/lib/chunk-core"
 import { chunkId } from "@/src/lib/indexer-internals"
 import { repoTenantKey, type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
 import {
@@ -45,6 +46,7 @@ function manifest(args: {
   runId: string
   path: string
   chunkId: string
+  chunkIds?: string[]
   builtMode?: "shadow" | "on"
 }): RepoIndexManifestV1 {
   return {
@@ -69,7 +71,7 @@ function manifest(args: {
       version: 1,
       githubRepoId: args.githubRepoId,
       builtMode: args.builtMode ?? "on",
-      byPath: { [args.path]: [args.chunkId] },
+      byPath: { [args.path]: args.chunkIds ?? [args.chunkId] },
     },
   }
 }
@@ -157,6 +159,8 @@ async function fixture(mode: "shadow" | "on" = "on") {
       lineEnd: 3,
       content: CONTENT,
       score: 0.9,
+      citationChunkVersion: CITATION_CHUNK_VERSION,
+      fragmentIndex: -1,
       indexedHeadSha: SHA_A,
       indexRunId: RUN_A,
     },
@@ -167,6 +171,8 @@ async function fixture(mode: "shadow" | "on" = "on") {
       lineEnd: 3,
       content: CONTENT,
       score: 0.8,
+      citationChunkVersion: CITATION_CHUNK_VERSION,
+      fragmentIndex: -1,
       indexedHeadSha: SHA_B,
       indexRunId: RUN_B,
     },
@@ -191,6 +197,10 @@ describe("Slack code citation mode and schema", () => {
     expect(parseSlackCodeCitationMode("shadow")).toBe("shadow")
     expect(parseSlackCodeCitationMode("on")).toBe("on")
     expect(SLACK_CODE_CITATION_SCHEMA.required).not.toContain("citations")
+    expect(SLACK_CODE_CITATION_SCHEMA.properties.citations.items).toMatchObject({
+      required: ["id", "kind"],
+      additionalProperties: false,
+    })
   })
 
   it("extracts only the bounded model sidecar without changing the answer", () => {
@@ -211,23 +221,151 @@ describe("Slack code citation mode and schema", () => {
 })
 
 describe("createSlackCodeCitationSession", () => {
+  it("issues and revalidates an exact versioned hard-split fragment", async () => {
+    const path = "src/generated.ts"
+    const source = "=".repeat(2_800)
+    const fragments = splitOversizedWindowV1([source], 1).map((chunk) => ({ ...chunk, path }))
+    expect(fragments).toHaveLength(2)
+    expect(fragments[0]?.content).toBe(fragments[1]?.content)
+    const ids = await Promise.all(fragments.map((chunk) => chunkId("acme/api", chunk)))
+    expect(ids[0]).not.toBe(ids[1])
+
+    const store = new Map<string, string>([
+      [
+        repoTenantKey(101),
+        JSON.stringify(
+          manifest({
+            githubRepoId: 101,
+            repo: "api",
+            headSha: SHA_A,
+            runId: RUN_A,
+            path,
+            chunkId: ids[1]!,
+            chunkIds: ids,
+          }),
+        ),
+      ],
+    ])
+    const client = makeClient()
+    client.getFileContent.mockResolvedValue(source)
+    const session = createSlackCodeCitationSession({
+      mode: "on",
+      env: { OPENCLAW_STATE: makeKv(store) } as Env,
+      scope: scope(),
+      githubClient: client as unknown as GitHubClient,
+      resolveCurrentScope: async () => scope(),
+    })
+    const fragment = fragments[1]!
+    const issued = await session.filterAndIssue("acme/api", [
+      {
+        id: ids[1]!,
+        path,
+        lineStart: fragment.lineStart,
+        lineEnd: fragment.lineEnd,
+        content: fragment.content,
+        fragmentIndex: fragment.fragmentIndex!,
+        citationChunkVersion: CITATION_CHUNK_VERSION,
+        score: 0.9,
+        indexedHeadSha: SHA_A,
+        indexRunId: RUN_A,
+      },
+    ])
+
+    expect(issued).toHaveLength(1)
+    expect(issued[0]?.citation).toEqual({ kind: "code", id: expect.any(String) })
+    await expect(session.verifyAndRender("The generated guard is present.", [issued[0]!.citation])).resolves.toContain(
+      `https://github.com/Acme/Api/blob/${SHA_A}/src/generated.ts#L1`,
+    )
+  })
+
+  it("keeps every legacy or unknown citation-chunk metadata row ineligible", async () => {
+    const { session, chunks } = await fixture()
+    await session.preflight("acme/api", "")
+    const legacy: RetrievedChunk = { ...chunks.api! }
+    delete legacy.citationChunkVersion
+    delete legacy.fragmentIndex
+
+    await expect(session.filterAndIssue("acme/api", [legacy])).resolves.toEqual([])
+    await expect(
+      session.filterAndIssue("acme/api", [{ ...chunks.api!, citationChunkVersion: 999, fragmentIndex: -1 }]),
+    ).resolves.toEqual([])
+    await expect(session.verifyAndRender("No citable evidence was returned.", [])).resolves.toBe(
+      "No citable evidence was returned.",
+    )
+  })
+
+  it("issues exact file-line and immutable PR snapshot references through the same request-local registry", async () => {
+    const { session, client } = await fixture()
+    client.getFileContent.mockResolvedValue("first\nsecond\nthird")
+
+    const prepared = await session.prepareFileRead("acme/api", "")
+    expect(prepared).toEqual({ ok: true, ref: SHA_A })
+    if (!prepared.ok) throw new Error("expected prepared exact file read")
+    const fileCitation = await session.issueFileLines({
+      namespace: "acme/api",
+      path: "src/auth.ts",
+      lineStart: 2,
+      lineEnd: 2,
+      ref: prepared.ref,
+      content: "second",
+    })
+    const prCitation = await session.issuePullRequest({
+      namespace: "acme/api",
+      number: 7,
+      baseSha: SHA_B,
+      headSha: SHA_A,
+      source: "github_compare",
+    })
+
+    expect(fileCitation).toEqual({ kind: "file_lines", id: expect.any(String) })
+    expect(prCitation).toEqual({ kind: "pull_request", id: expect.any(String) })
+    const rendered = await session.verifyAndRender("Both sources support this answer.", [fileCitation, prCitation])
+    expect(rendered).toContain(`github.com/Acme/Api/blob/${SHA_A}/src/auth.ts#L2`)
+    expect(rendered).toContain(`github.com/Acme/Api/compare/${SHA_B}...${SHA_A}`)
+  })
+
+  it("rejects a selected id under the wrong citation kind without verification IO", async () => {
+    const { session, client } = await fixture()
+    const citation = await session.issuePullRequest({
+      namespace: "acme/api",
+      number: 7,
+      baseSha: SHA_B,
+      headSha: SHA_A,
+      source: "github_compare",
+    })
+    if (!citation) throw new Error("expected issued PR citation")
+
+    await expect(session.verifyAndRender("Do not leak this answer.", [{ ...citation, kind: "code" }])).resolves.toBe(
+      SLACK_CODE_CITATION_REVALIDATION_FAILED,
+    )
+    expect(client.getFileContent).not.toHaveBeenCalled()
+  })
+
+  it("revokes an issued PR snapshot when the live channel loses that repository", async () => {
+    const { session, setCurrentScope } = await fixture()
+    const citation = await session.issuePullRequest({
+      namespace: "acme/api",
+      number: 7,
+      baseSha: SHA_B,
+      headSha: SHA_A,
+      source: "github_compare",
+    })
+    if (!citation) throw new Error("expected issued PR citation")
+    setCurrentScope({ ...scope(), repos: [{ githubRepoId: 102, owner: "Acme", repo: "Web" }] })
+
+    await expect(session.verifyAndRender("Do not disclose the snapshot.", [citation])).resolves.toBe(
+      SLACK_CODE_CITATION_REVALIDATION_FAILED,
+    )
+  })
+
   it("issues only an exact active-snapshot chunk with immutable repo, head, and run proof", async () => {
-    const { session, chunks, apiChunkId } = await fixture()
+    const { session, chunks } = await fixture()
     await expect(session.preflight("acme/api", "")).resolves.toEqual({ ok: true })
 
     const issued = await session.filterAndIssue("acme/api", [chunks.api!])
 
     expect(issued).toHaveLength(1)
-    expect(issued[0]?.citation).toEqual({
-      githubRepoId: 101,
-      repo: "Acme/Api",
-      path: "src/auth.ts",
-      lineStart: 1,
-      lineEnd: 3,
-      ref: SHA_A,
-      runId: RUN_A,
-      chunkId: apiChunkId,
-    })
+    expect(issued[0]?.citation).toEqual({ kind: "code", id: expect.any(String) })
   })
 
   it("fails closed without rejecting the tool when chunk identity computation is unavailable", async () => {
@@ -312,13 +450,13 @@ describe("createSlackCodeCitationSession", () => {
     expect(client.getFileContent).not.toHaveBeenCalled()
   })
 
-  it("fails closed when retrieval was attempted but no chunk passed citation proof", async () => {
+  it("does not require a citation when retrieval returned no proven evidence", async () => {
     const { session, chunks, client } = await fixture()
     await session.preflight("acme/api", "")
     await expect(session.filterAndIssue("acme/api", [{ ...chunks.api!, id: "f".repeat(48) }])).resolves.toEqual([])
 
-    await expect(session.verifyAndRender("Unsupported current-code claim", [])).resolves.toBe(
-      SLACK_CODE_CITATION_REVALIDATION_FAILED,
+    await expect(session.verifyAndRender("No retrieved evidence was used.", [])).resolves.toBe(
+      "No retrieved evidence was used.",
     )
     expect(client.getFileContent).not.toHaveBeenCalled()
   })

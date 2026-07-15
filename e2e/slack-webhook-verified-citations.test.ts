@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { MAX_CHUNK_CHARS } from "@/src/lib/chunk-core"
 import { chunkId } from "@/src/lib/indexer-internals"
 import { repoTenantKey, type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
 import { handleSlackRequest } from "@/src/index-slack-webhook"
@@ -26,15 +27,23 @@ const WEB_HEAD_SHA = "b".repeat(40)
 const API_RUN_ID = "1".repeat(16)
 const WEB_RUN_ID = "2".repeat(16)
 const FILE_PATH = "src/auth.ts"
-const API_FILE_CONTENT = ["export function canCallApi(role: string): boolean {", '  return role === "admin"', "}"].join(
-  "\n",
-)
+const API_FRAGMENT_PATH = "src/generated.ts"
+const API_FRAGMENT_SOURCE = "=".repeat(MAX_CHUNK_CHARS * 2)
+const API_FRAGMENT_CONTENT = API_FRAGMENT_SOURCE.slice(MAX_CHUNK_CHARS)
+const API_FRAGMENT_INDEX = 1
 const WEB_FILE_CONTENT = [
   "export function canOpenDashboard(role: string): boolean {",
   '  return role === "member" || role === "admin"',
   "}",
 ].join("\n")
-const ANSWER = "The API requires an admin, while the web dashboard permits members and admins."
+const READ_FILE_PATH = "src/config.ts"
+const READ_FILE_CONTENT = ["export const config = {", '  apiRole: "admin",', '  webRole: "member",', "}"].join("\n")
+const READ_LINE_START = 2
+const READ_LINE_END = 3
+const PR_NUMBER = 7
+const PR_BASE_SHA = "c".repeat(40)
+const PR_HEAD_SHA = "d".repeat(40)
+const ANSWER = "The generated guard, dashboard policy, exact config lines, and PR snapshot support this comparison."
 
 interface FakeKv extends KVNamespace {
   values: Map<string, string>
@@ -107,7 +116,7 @@ async function signedMention(): Promise<Request> {
       type: "app_mention",
       user: SLACK_USER_ID,
       channel: CHANNEL_ID,
-      text: "<@U0SIGILIX> compare authorization in the API and web dashboard",
+      text: "<@U0SIGILIX> compare authorization in the API and web dashboard, including config lines and PR #7",
       ts: THREAD_TS,
     },
   })
@@ -195,8 +204,9 @@ function makeManifest(args: {
   namespace: string
   headSha: string
   runId: string
-  chunkId: string
+  byPath: Record<string, string[]>
 }): RepoIndexManifestV1 {
+  const chunkCount = Object.values(args.byPath).reduce((total, ids) => total + ids.length, 0)
   return {
     v: 1,
     owner: "acme",
@@ -206,8 +216,8 @@ function makeManifest(args: {
     defaultBranch: "main",
     headSha: args.headSha,
     runId: args.runId,
-    fileCount: 1,
-    chunkCount: 1,
+    fileCount: Object.keys(args.byPath).length,
+    chunkCount,
     shardCount: 1,
     indexedAt: "2026-07-14T00:00:00.000Z",
     modelId: "@cf/baai/bge-base-en-v1.5",
@@ -219,7 +229,7 @@ function makeManifest(args: {
       version: 1,
       githubRepoId: args.githubRepoId,
       builtMode: "on",
-      byPath: { [FILE_PATH]: [args.chunkId] },
+      byPath: args.byPath,
     },
   }
 }
@@ -229,20 +239,27 @@ afterEach(() => {
 })
 
 describe("signed Slack webhook verified citations", () => {
-  it("retrieves and posts two immutable repo-qualified citations for identical paths", async () => {
+  it("posts versioned code, exact file-line, and immutable PR citations from one tool turn", async () => {
     const db = await makePlatformDb()
     const kv = makeKv()
     const apiChunkId = await chunkId(API_NAMESPACE, {
-      path: FILE_PATH,
+      path: API_FRAGMENT_PATH,
       lineStart: 1,
-      lineEnd: 3,
-      content: API_FILE_CONTENT,
+      lineEnd: 1,
+      content: API_FRAGMENT_CONTENT,
+      fragmentIndex: API_FRAGMENT_INDEX,
     })
     const webChunkId = await chunkId(WEB_NAMESPACE, {
       path: FILE_PATH,
       lineStart: 1,
       lineEnd: 3,
       content: WEB_FILE_CONTENT,
+    })
+    const readFileChunkId = await chunkId(API_NAMESPACE, {
+      path: READ_FILE_PATH,
+      lineStart: 1,
+      lineEnd: 4,
+      content: READ_FILE_CONTENT,
     })
     kv.values.set(
       `gh-installation-token:${INSTALLATION_ID}`,
@@ -258,7 +275,10 @@ describe("signed Slack webhook verified citations", () => {
           namespace: API_NAMESPACE,
           headSha: API_HEAD_SHA,
           runId: API_RUN_ID,
-          chunkId: apiChunkId,
+          byPath: {
+            [API_FRAGMENT_PATH]: [apiChunkId],
+            [READ_FILE_PATH]: [readFileChunkId],
+          },
         }),
       ),
     )
@@ -271,7 +291,7 @@ describe("signed Slack webhook verified citations", () => {
           namespace: WEB_NAMESPACE,
           headSha: WEB_HEAD_SHA,
           runId: WEB_RUN_ID,
-          chunkId: webChunkId,
+          byPath: { [FILE_PATH]: [webChunkId] },
         }),
       ),
     )
@@ -287,12 +307,14 @@ describe("signed Slack webhook verified citations", () => {
           score: 0.99,
           metadata: {
             repo: API_NAMESPACE,
-            path: FILE_PATH,
+            path: API_FRAGMENT_PATH,
             lineStart: 1,
-            lineEnd: 3,
-            content: API_FILE_CONTENT,
+            lineEnd: 1,
+            content: API_FRAGMENT_CONTENT,
             headSha: API_HEAD_SHA,
             runId: API_RUN_ID,
+            citationChunkVersion: 1,
+            fragmentIndex: API_FRAGMENT_INDEX,
           },
         },
       ],
@@ -309,6 +331,8 @@ describe("signed Slack webhook verified citations", () => {
             content: WEB_FILE_CONTENT,
             headSha: WEB_HEAD_SHA,
             runId: WEB_RUN_ID,
+            citationChunkVersion: 1,
+            fragmentIndex: -1,
           },
         },
       ],
@@ -330,15 +354,15 @@ describe("signed Slack webhook verified citations", () => {
     }
 
     const ollamaBodies: Array<Record<string, unknown>> = []
-    const githubPaths: string[] = []
+    const githubRequests: Array<{ path: string; accept: string }> = []
     const slackPosts: Array<Record<string, unknown>> = []
-    const observedToolResults: Array<Record<string, unknown>> = []
+    const observedToolResults = new Map<string, { toolName: string; result: Record<string, unknown> }>()
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = new URL(input instanceof Request ? input.url : input.toString())
       const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
 
       if (url.hostname === "api.github.com") {
-        githubPaths.push(`${url.pathname}${url.search}`)
+        githubRequests.push({ path: `${url.pathname}${url.search}`, accept: headers.get("accept") ?? "" })
         expect(headers.get("authorization")).toBe(`token ${GITHUB_TOKEN}`)
         if (url.pathname === "/installation/repositories") {
           return new Response(
@@ -364,8 +388,20 @@ describe("signed Slack webhook verified citations", () => {
             headers: { "content-type": "application/json" },
           })
         }
-        if (url.pathname === `/repos/acme/api/contents/${FILE_PATH}` && url.searchParams.get("ref") === API_HEAD_SHA) {
-          return new Response(JSON.stringify({ content: btoa(API_FILE_CONTENT), encoding: "base64" }), {
+        if (
+          url.pathname === `/repos/acme/api/contents/${API_FRAGMENT_PATH}` &&
+          url.searchParams.get("ref") === API_HEAD_SHA
+        ) {
+          return new Response(JSON.stringify({ content: btoa(API_FRAGMENT_SOURCE), encoding: "base64" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        if (
+          url.pathname === `/repos/acme/api/contents/${READ_FILE_PATH}` &&
+          url.searchParams.get("ref") === API_HEAD_SHA
+        ) {
+          return new Response(JSON.stringify({ content: btoa(READ_FILE_CONTENT), encoding: "base64" }), {
             status: 200,
             headers: { "content-type": "application/json" },
           })
@@ -375,6 +411,43 @@ describe("signed Slack webhook verified citations", () => {
             status: 200,
             headers: { "content-type": "application/json" },
           })
+        }
+        if (url.pathname === `/repos/acme/api/pulls/${PR_NUMBER}`) {
+          if (headers.get("accept")?.includes("diff")) {
+            return new Response("mutable pull-request diff is forbidden in citation mode", { status: 409 })
+          }
+          return new Response(
+            JSON.stringify({
+              number: PR_NUMBER,
+              title: "Pin authorization context",
+              body: "Use immutable authorization evidence.",
+              state: "open",
+              merged_at: null,
+              changed_files: 1,
+              base: { sha: PR_BASE_SHA, ref: "main" },
+              head: { sha: PR_HEAD_SHA, ref: "feat/pin-auth-context" },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          )
+        }
+        if (url.pathname === `/repos/acme/api/pulls/${PR_NUMBER}/files`) {
+          return new Response("mutable pull-request files are forbidden in citation mode", { status: 409 })
+        }
+        if (url.pathname === `/repos/acme/api/compare/${PR_BASE_SHA}...${PR_HEAD_SHA}`) {
+          if (headers.get("accept")?.includes("diff")) {
+            return new Response(`diff --git a/${READ_FILE_PATH} b/${READ_FILE_PATH}\n+immutable snapshot`, {
+              status: 200,
+              headers: { "content-type": "text/plain" },
+            })
+          }
+          return new Response(
+            JSON.stringify({
+              status: "ahead",
+              total_commits: 1,
+              files: [{ status: "modified", filename: READ_FILE_PATH, previous_filename: null }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          )
         }
       }
 
@@ -402,25 +475,61 @@ describe("signed Slack webhook verified citations", () => {
                   arguments: JSON.stringify({ query: "web authorization guard", repo: WEB_NAMESPACE }),
                 },
               },
+              {
+                id: "fetch-api-pr",
+                function: {
+                  name: "fetch_pr",
+                  arguments: JSON.stringify({ owner: "acme", repo: "api", number: PR_NUMBER }),
+                },
+              },
+              {
+                id: "read-api-config",
+                function: {
+                  name: "read_file_lines",
+                  arguments: JSON.stringify({
+                    owner: "acme",
+                    repo: "api",
+                    path: READ_FILE_PATH,
+                    lineStart: READ_LINE_START,
+                    lineEnd: READ_LINE_END,
+                  }),
+                },
+              },
             ],
           })
         }
 
         const toolMessages = messages.filter((message) => message.role === "tool")
-        observedToolResults.push(
-          ...toolMessages.map((message) => JSON.parse(String(message.content)) as Record<string, unknown>),
-        )
-        const citations = observedToolResults.flatMap((result) => {
-          const chunks = result.chunks
-          if (!Array.isArray(chunks)) return []
-          const citation = (chunks[0] as Record<string, unknown> | undefined)?.citation
-          return citation ? [citation] : []
-        })
-        if (citations.length !== 2) {
-          throw new Error(
-            `retrieve_codebase omitted one of the issued citations: ${JSON.stringify(observedToolResults)}`,
-          )
+        for (const message of toolMessages) {
+          observedToolResults.set(String(message.tool_call_id), {
+            toolName: String(message.tool_name),
+            result: JSON.parse(String(message.content)) as Record<string, unknown>,
+          })
         }
+        const citationFor = (callId: string): Record<string, unknown> | null => {
+          const observed = observedToolResults.get(callId)?.result
+          const chunks = observed?.chunks
+          const raw = Array.isArray(chunks)
+            ? (chunks[0] as Record<string, unknown> | undefined)?.citation
+            : observed?.citation
+          if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null
+          const citation = raw as Record<string, unknown>
+          if (
+            Object.keys(citation).sort().join(",") !== "id,kind" ||
+            typeof citation.id !== "string" ||
+            citation.id.length === 0 ||
+            typeof citation.kind !== "string"
+          ) {
+            return null
+          }
+          return citation
+        }
+        const citations = [
+          citationFor("retrieve-api"),
+          citationFor("retrieve-web"),
+          citationFor("fetch-api-pr"),
+          citationFor("read-api-config"),
+        ].filter((citation): citation is Record<string, unknown> => citation !== null)
         return ollamaStream({
           role: "assistant",
           content: JSON.stringify({ answer: ANSWER, confidence: 5, abstain: false, citations }),
@@ -479,26 +588,6 @@ describe("signed Slack webhook verified citations", () => {
     expect(ctx.pendingCount()).toBe(1)
     await ctx.flush()
 
-    const apiCitation = {
-      githubRepoId: API_REPO_ID,
-      repo: API_NAMESPACE,
-      path: FILE_PATH,
-      lineStart: 1,
-      lineEnd: 3,
-      ref: API_HEAD_SHA,
-      runId: API_RUN_ID,
-      chunkId: apiChunkId,
-    }
-    const webCitation = {
-      githubRepoId: WEB_REPO_ID,
-      repo: WEB_NAMESPACE,
-      path: FILE_PATH,
-      lineStart: 1,
-      lineEnd: 3,
-      ref: WEB_HEAD_SHA,
-      runId: WEB_RUN_ID,
-      chunkId: webChunkId,
-    }
     expect(codeIndex.query).toHaveBeenCalledTimes(2)
     expect(codeIndex.query).toHaveBeenCalledWith(
       expect.any(Array),
@@ -508,36 +597,98 @@ describe("signed Slack webhook verified citations", () => {
       expect.any(Array),
       expect.objectContaining({ namespace: WEB_NAMESPACE }),
     )
-    expect(observedToolResults).toHaveLength(2)
-    expect(observedToolResults[0]).toMatchObject({
-      ok: true,
-      repo: API_NAMESPACE,
-      count: 1,
-      chunks: [expect.objectContaining({ citation: expect.objectContaining(apiCitation) })],
+    expect(observedToolResults.size).toBe(4)
+    expect(observedToolResults.get("retrieve-api")).toMatchObject({
+      toolName: "retrieve_codebase",
+      result: {
+        ok: true,
+        repo: API_NAMESPACE,
+        count: 1,
+        chunks: [expect.objectContaining({ citation: { kind: "code", id: expect.any(String) } })],
+      },
     })
-    expect(observedToolResults[1]).toMatchObject({
+    expect(observedToolResults.get("retrieve-web")).toMatchObject({
+      toolName: "retrieve_codebase",
+      result: {
+        ok: true,
+        repo: WEB_NAMESPACE,
+        count: 1,
+        chunks: [expect.objectContaining({ citation: { kind: "code", id: expect.any(String) } })],
+      },
+    })
+    expect(observedToolResults.get("fetch-api-pr")).toMatchObject({
+      toolName: "fetch_pr",
+      result: {
+        ok: true,
+        citation: { kind: "pull_request", id: expect.any(String) },
+      },
+    })
+    expect(observedToolResults.get("read-api-config")).toMatchObject({
+      toolName: "read_file_lines",
+      result: {
+        ok: true,
+        ref: API_HEAD_SHA,
+        lineStart: READ_LINE_START,
+        lineEnd: READ_LINE_END,
+        citation: { kind: "file_lines", id: expect.any(String) },
+      },
+    })
+    for (const callId of ["retrieve-api", "retrieve-web", "fetch-api-pr", "read-api-config"]) {
+      const result = observedToolResults.get(callId)?.result
+      const chunks = result?.chunks
+      const citation = Array.isArray(chunks)
+        ? (chunks[0] as Record<string, unknown> | undefined)?.citation
+        : result?.citation
+      expect(Object.keys(citation as Record<string, unknown>).sort()).toEqual(["id", "kind"])
+    }
+    expect(observedToolResults.get("retrieve-api")?.result).toMatchObject({
       ok: true,
-      repo: WEB_NAMESPACE,
-      count: 1,
-      chunks: [expect.objectContaining({ citation: expect.objectContaining(webCitation) })],
+      chunks: [
+        expect.objectContaining({
+          path: API_FRAGMENT_PATH,
+          lineStart: 1,
+          lineEnd: 1,
+          content: API_FRAGMENT_CONTENT,
+        }),
+      ],
     })
     expect(ollamaBodies).toHaveLength(2)
     expect(ollamaBodies[0]?.tools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ function: expect.objectContaining({ name: "retrieve_codebase" }) }),
+        expect.objectContaining({ function: expect.objectContaining({ name: "fetch_pr" }) }),
+        expect.objectContaining({ function: expect.objectContaining({ name: "read_file_lines" }) }),
       ]),
     )
+    const githubPaths = githubRequests.map((request) => request.path)
     expect(githubPaths).toEqual(
       expect.arrayContaining([
         "/installation/repositories?per_page=100&page=1",
         "/repos/acme/api",
         "/repos/acme/web",
-        `/repos/acme/api/contents/${FILE_PATH}?ref=${API_HEAD_SHA}`,
+        `/repos/acme/api/contents/${API_FRAGMENT_PATH}?ref=${API_HEAD_SHA}`,
+        `/repos/acme/api/contents/${READ_FILE_PATH}?ref=${API_HEAD_SHA}`,
         `/repos/acme/web/contents/${FILE_PATH}?ref=${WEB_HEAD_SHA}`,
+        `/repos/acme/api/pulls/${PR_NUMBER}`,
+        `/repos/acme/api/compare/${PR_BASE_SHA}...${PR_HEAD_SHA}`,
       ]),
     )
-    expect(githubPaths.filter((path) => path === "/repos/acme/api")).toHaveLength(2)
-    expect(githubPaths.filter((path) => path === "/repos/acme/web")).toHaveLength(2)
+    expect(githubPaths).not.toContain(`/repos/acme/api/contents/${READ_FILE_PATH}?ref=main`)
+    expect(
+      githubRequests.some(
+        (request) => request.path === `/repos/acme/api/pulls/${PR_NUMBER}` && request.accept.includes("diff"),
+      ),
+    ).toBe(false)
+    expect(githubPaths.filter((path) => path === `/repos/acme/api/pulls/${PR_NUMBER}`)).toHaveLength(1)
+    expect(githubPaths.some((path) => path.startsWith(`/repos/acme/api/pulls/${PR_NUMBER}/files`))).toBe(false)
+    const compareRequests = githubRequests.filter(
+      (request) => request.path === `/repos/acme/api/compare/${PR_BASE_SHA}...${PR_HEAD_SHA}`,
+    )
+    expect(compareRequests.length).toBeGreaterThanOrEqual(2)
+    expect(compareRequests.some((request) => request.accept.includes("diff"))).toBe(true)
+    expect(compareRequests.some((request) => !request.accept.includes("diff"))).toBe(true)
+    expect(githubPaths.filter((path) => path === "/repos/acme/api").length).toBeGreaterThanOrEqual(2)
+    expect(githubPaths.filter((path) => path === "/repos/acme/web").length).toBeGreaterThanOrEqual(2)
     expect(kv.get).toHaveBeenCalledWith(repoTenantKey(API_REPO_ID))
     expect(kv.get).toHaveBeenCalledWith(repoTenantKey(WEB_REPO_ID))
     for (const key of mutableManifestKeys) {
@@ -545,18 +696,19 @@ describe("signed Slack webhook verified citations", () => {
       expect(kv.values.has(key)).toBe(false)
     }
 
-    const apiUrl = `https://github.com/acme/api/blob/${API_HEAD_SHA}/${FILE_PATH}#L1-L3`
+    const apiUrl = `https://github.com/acme/api/blob/${API_HEAD_SHA}/${API_FRAGMENT_PATH}#L1`
     const webUrl = `https://github.com/acme/web/blob/${WEB_HEAD_SHA}/${FILE_PATH}#L1-L3`
-    expect(slackPosts).toEqual([
-      {
-        channel: CHANNEL_ID,
-        thread_ts: THREAD_TS,
-        text:
-          `${ANSWER}\n\nSources:\n` +
-          `- <${apiUrl}|acme/api · src/auth.ts:1-3>\n` +
-          `- <${webUrl}|acme/web · src/auth.ts:1-3>`,
-      },
-    ])
+    const fileUrl = `https://github.com/acme/api/blob/${API_HEAD_SHA}/${READ_FILE_PATH}#L${READ_LINE_START}-L${READ_LINE_END}`
+    const compareUrl = `https://github.com/acme/api/compare/${PR_BASE_SHA}...${PR_HEAD_SHA}`
+    expect(slackPosts).toHaveLength(1)
+    expect(slackPosts[0]).toMatchObject({ channel: CHANNEL_ID, thread_ts: THREAD_TS })
+    const slackText = String(slackPosts[0]?.text)
+    expect(slackText).toContain(ANSWER)
+    expect(slackText).toContain(apiUrl)
+    expect(slackText).toContain(webUrl)
+    expect(slackText).toContain(fileUrl)
+    expect(slackText).toContain(compareUrl)
+    expect(slackText).not.toContain(`/pull/${PR_NUMBER}`)
     expect(kv.values.has(`slack-event:EvVerifiedCitation`)).toBe(true)
     expect([...kv.values.keys()].some((key) => key.startsWith("agent-loop-telemetry:"))).toBe(true)
   })

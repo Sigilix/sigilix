@@ -1527,6 +1527,13 @@ SIGILIX_AGENT_EVENTS_ENDPOINT = "https://api.sigilix.ai"
 # credentials remain in the Worker-owned vault.
 SIGILIX_AGENT_MCP_ENDPOINT = "https://api.sigilix.ai"
 
+# SIG-545 B2: the Worker's OWN public base for the container's sigilix-grounding
+# plugin (calls {this}/v1/context + /v1/memory). Bearer = OPENCLAW_SIGILIX_API_KEY
+# (already a set secret). Unset → the full agent runs BLIND (never grounds); set →
+# the runner's full CLI agent grounds on the hybrid retrieval path (SIG-133) and
+# multi-hops via retrieve_codebase/read_file_lines. Revertible: remove this line.
+OPENCLAW_AGENT_GROUNDING_ENDPOINT = "https://api.sigilix.ai"
+
 # Public origin used to build the Linear OAuth redirect_uri. MUST be the same
 # site as the portal (app.sigilix.ai) so the callback carries the portal session
 # cookie — a workers.dev redirect drops the .sigilix.ai cookie and the callback

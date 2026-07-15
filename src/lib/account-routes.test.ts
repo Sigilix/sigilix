@@ -5,7 +5,7 @@
 // (returns ONLY the caller's data), POST /v1/account/logout-all (revokes every
 // session the caller holds, and nobody else's).
 
-import { describe, it, expect, beforeEach } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import worker from "@/src/index"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
@@ -17,6 +17,7 @@ import type { SessionRecord } from "@/src/lib/auth-session"
 import type { Env } from "@/src/shared/types/env"
 
 const SESSION_COOKIE = "__Host-sigilix_session"
+const TEST_PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----\nMA==\n-----END PRIVATE KEY-----"
 
 function migration(name: string): string {
   return readFileSync(new URL(`../../migrations/${name}`, import.meta.url), "utf8")
@@ -226,6 +227,11 @@ async function seedOrganizationAppMemory(db: D1Database): Promise<void> {
     .run()
 }
 
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
+
 /** Seed a full account footprint for a GitHub user (identity, profile, tenant, key, usage). */
 async function seedAccount(
   db: D1Database,
@@ -428,7 +434,7 @@ describe("DELETE /v1/account", () => {
     await seedManagedAccess(db, {
       installationId: 84,
       githubUserId: "111",
-      role: "admin",
+      role: "member",
       assigned: true,
       login: "octocat-renamed",
     })
@@ -506,6 +512,30 @@ describe("DELETE /v1/account", () => {
       login: "octocat",
     })
     await seedSession(kv, "last-admin")
+    env.GITHUB_APP_ID = "123"
+    env.GITHUB_PRIVATE_KEY = TEST_PRIVATE_KEY
+    await kv.put(
+      "gh-installation-token:42",
+      JSON.stringify({ token: "ghs_42", expiresAt: Date.now() + 60 * 60 * 1000 }),
+    )
+    vi.spyOn(crypto.subtle, "importKey").mockResolvedValue({} as CryptoKey)
+    vi.spyOn(crypto.subtle, "sign").mockResolvedValue(new Uint8Array([1]).buffer)
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === "https://api.github.com/app/installations/42") {
+          return new Response(
+            JSON.stringify({ id: 42, account: { id: 9001, login: "live-org", type: "Organization" } }),
+            { status: 200 },
+          )
+        }
+        if (url.startsWith("https://api.github.com/orgs/live-org/members?")) {
+          return new Response(JSON.stringify([{ id: 111, login: "octocat" }]), { status: 200 })
+        }
+        throw new Error(`unexpected GitHub request: ${url}`)
+      }),
+    )
 
     const res = await worker.fetch(
       req("https://x/v1/account", "last-admin", {

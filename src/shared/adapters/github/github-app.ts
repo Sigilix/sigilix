@@ -80,9 +80,12 @@ export async function getInstallationToken(args: {
   appId: string
   privateKey: string
   installationId: number
+  signal?: AbortSignal
 }): Promise<string> {
+  throwIfAborted(args.signal)
   const cacheKey = `${TOKEN_CACHE_PREFIX}${args.installationId}`
   const cached = (await args.kv.get(cacheKey, "json")) as CachedToken | null
+  throwIfAborted(args.signal)
   if (
     cached &&
     typeof cached.token === "string" &&
@@ -93,6 +96,7 @@ export async function getInstallationToken(args: {
   }
 
   const jwt = await signGitHubAppJwt(args.appId, args.privateKey)
+  throwIfAborted(args.signal)
   const res = await fetch(`https://api.github.com/app/installations/${args.installationId}/access_tokens`, {
     method: "POST",
     headers: {
@@ -101,6 +105,7 @@ export async function getInstallationToken(args: {
       "x-github-api-version": "2022-11-28",
       "user-agent": "sigilix-worker",
     },
+    ...(args.signal ? { signal: args.signal } : {}),
   })
   if (!res.ok) {
     const text = await res.text()
@@ -115,10 +120,17 @@ export async function getInstallationToken(args: {
     throw new Error(`Could not parse expires_at: ${json.expires_at}`)
   }
   const ttlSeconds = Math.max(60, Math.floor((expiresAt - Date.now()) / 1000))
+  throwIfAborted(args.signal)
   await args.kv.put(cacheKey, JSON.stringify({ token: json.token, expiresAt } satisfies CachedToken), {
     expirationTtl: ttlSeconds,
   })
+  throwIfAborted(args.signal)
   return json.token
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return
+  throw signal.reason ?? new DOMException("Operation aborted", "AbortError")
 }
 
 /**

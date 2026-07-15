@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import type { Env } from "@/src/shared/types/env"
 import type { SlackMentionContext } from "@/src/lib/slack/slack-agent"
+import { SLACK_CODE_CITATION_REVALIDATION_FAILED } from "@/src/lib/slack/slack-code-citations"
 
 // ─── Hoisted mocks ─────────────────────────────────────────────────────────
 
@@ -117,6 +118,29 @@ vi.mock("@/src/lib/slack/slack-api", async (importOriginal) => {
 vi.mock("@/src/lib/agent-tools", () => ({
   createAgentTools: createAgentToolsMock,
 }))
+
+const { createSlackCodeCitationSessionMock, verifyAndRenderCitationsMock, emitCitationTelemetryMock } = vi.hoisted(
+  () => ({
+    createSlackCodeCitationSessionMock: vi.fn(),
+    verifyAndRenderCitationsMock: vi.fn(async (answer: string) => answer),
+    emitCitationTelemetryMock: vi.fn(),
+  }),
+)
+vi.mock("@/src/lib/slack/slack-code-citations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/src/lib/slack/slack-code-citations")>()
+  return {
+    ...actual,
+    createSlackCodeCitationSession: createSlackCodeCitationSessionMock.mockImplementation(
+      (args: { mode: "shadow" | "on" }) => ({
+        mode: args.mode,
+        preflight: vi.fn(async () => ({ ok: true })),
+        filterAndIssue: vi.fn(async () => []),
+        verifyAndRender: verifyAndRenderCitationsMock,
+        emitTelemetry: emitCitationTelemetryMock,
+      }),
+    ),
+  }
+})
 
 vi.mock("@/src/lib/agent-telemetry-kv", () => ({
   makeKvTelemetrySink: vi.fn(() => ({ record: vi.fn(async () => {}) })),
@@ -325,6 +349,7 @@ function lastInitialUserMessage(): string {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  verifyAndRenderCitationsMock.mockImplementation(async (answer: string) => answer)
   // Default runAgentLoop mock → successful answer
   runAgentLoopMock.mockResolvedValue({
     ok: true,
@@ -409,6 +434,113 @@ describe("runSlackAgent — qa path", () => {
 
     // buildClientMock should have been called with the installation id
     expect(buildClientMock).toHaveBeenCalledWith(env, 111)
+  })
+})
+
+describe("runSlackAgent — verified code citation rollout", () => {
+  function lastLoopArgs(): {
+    systemPrompt: string
+    finalAnswerSchema: Record<string, unknown>
+  } {
+    const value = runAgentLoopMock.mock.calls.at(-1)?.[0] as
+      | { systemPrompt?: unknown; finalAnswerSchema?: unknown }
+      | undefined
+    if (typeof value?.systemPrompt !== "string" || !value.finalAnswerSchema) throw new Error("missing loop args")
+    return value as { systemPrompt: string; finalAnswerSchema: Record<string, unknown> }
+  }
+
+  it("keeps the prompt, schema, tool wiring, and reply byte-identical in shadow mode", async () => {
+    const offEnv = makeEnv()
+    const off = await runSlackAgent(offEnv, makeMultiRepoCtx())
+    const offLoop = lastLoopArgs()
+    const offToolArgs = createAgentToolsMock.mock.calls.at(-1)?.[0]
+
+    const shadowEnv = makeEnv()
+    shadowEnv.OPENCLAW_SLACK_CODE_CITATIONS_MODE = "shadow"
+    const shadow = await runSlackAgent(shadowEnv, makeMultiRepoCtx())
+    const shadowLoop = lastLoopArgs()
+    const shadowToolArgs = createAgentToolsMock.mock.calls.at(-1)?.[0] as Record<string, unknown>
+
+    expect(shadow.reply).toBe(off.reply)
+    expect(shadowLoop.systemPrompt).toBe(offLoop.systemPrompt)
+    expect(shadowLoop.finalAnswerSchema).toBe(offLoop.finalAnswerSchema)
+    expect(offToolArgs).not.toHaveProperty("slackCodeCitations")
+    expect(shadowToolArgs).toHaveProperty("slackCodeCitations")
+    expect(createSlackCodeCitationSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "shadow",
+        scope: expect.objectContaining({
+          installationId: 111,
+          repos: [
+            expect.objectContaining({ githubRepoId: 101, owner: "sigilix", repo: "api" }),
+            expect.objectContaining({ githubRepoId: 102, owner: "sigilix", repo: "web" }),
+          ],
+        }),
+      }),
+    )
+    expect(emitCitationTelemetryMock).toHaveBeenCalledOnce()
+  })
+
+  it("uses the Slack citation contract in on mode without changing a citation-free reply", async () => {
+    const env = makeEnv()
+    env.OPENCLAW_SLACK_CODE_CITATIONS_MODE = "on"
+
+    const result = await runSlackAgent(env, makeCtx())
+    const loop = lastLoopArgs()
+
+    expect(result.reply).toBe("The auth flow uses JWT tokens.")
+    expect(loop.systemPrompt).toContain("Verified Slack citations")
+    expect(loop.finalAnswerSchema).toHaveProperty("properties.citations")
+    expect(runAgentLoopMock).toHaveBeenLastCalledWith(expect.objectContaining({ toolTimeoutMs: 10_000 }))
+    expect(verifyAndRenderCitationsMock).toHaveBeenCalledWith("The auth flow uses JWT tokens.", [])
+  })
+
+  it("passes the model's bounded sidecar through the current-run verifier before rendering", async () => {
+    const citation = {
+      githubRepoId: 101,
+      repo: "sigilix/sigilix",
+      path: "src/auth.ts",
+      lineStart: 2,
+      lineEnd: 4,
+      ref: "a".repeat(40),
+      runId: "b".repeat(16),
+      chunkId: "c".repeat(48),
+    }
+    runAgentLoopMock.mockResolvedValueOnce({
+      ok: true,
+      answer: {
+        answer: "The guard is here.",
+        confidence: 5,
+        abstain: false,
+        citations: [citation],
+      },
+      stats: { toolTurns: 1, totalMs: 1, toolCallCount: 1 },
+    })
+    verifyAndRenderCitationsMock.mockResolvedValueOnce("The guard is here.\n\nSources:\n- verified")
+    const env = makeEnv()
+    env.OPENCLAW_SLACK_CODE_CITATIONS_MODE = "on"
+
+    const result = await runSlackAgent(env, makeCtx())
+
+    expect(verifyAndRenderCitationsMock).toHaveBeenCalledWith("The guard is here.", [citation])
+    expect(result.reply).toContain("Sources:\n- verified")
+  })
+
+  it("does not append an implementation offer when citation revalidation fails", async () => {
+    verifyAndRenderCitationsMock.mockResolvedValueOnce(SLACK_CODE_CITATION_REVALIDATION_FAILED)
+    generateMock.mockResolvedValueOnce({
+      text: '{"shouldOffer":true,"title":"Change auth","plan":"1. edit auth"}',
+      usage: { promptTokens: 1, completionTokens: 1 },
+    })
+    const env = makeEnvRunnerOn()
+    env.OPENCLAW_SLACK_CODE_CITATIONS_MODE = "on"
+
+    const result = await runSlackAgent(env, makeCtx())
+
+    expect(result.reply).toContain(SLACK_CODE_CITATION_REVALIDATION_FAILED)
+    expect(result.reply).not.toContain("I can open a PR for this")
+    expect(generateMock).not.toHaveBeenCalled()
+    expect(setImplementOfferMock).not.toHaveBeenCalled()
   })
 })
 

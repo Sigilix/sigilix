@@ -8,9 +8,8 @@ import { generate } from "@/src/shared/adapters/model"
 import { GITHUB_MENTION_SCHEMA } from "@/src/shared/domain/schemas"
 import { AGENT_SYSTEM_PROMPT } from "@/src/prompts/agent-system"
 import { runAgentLoop } from "@/src/lib/agent-loop"
-import { createAgentTools } from "@/src/lib/agent-tools"
 import { makeKvTelemetrySink } from "@/src/lib/agent-telemetry-kv"
-import { buildClient, parseGithubMentionResponse } from "@/src/lib/github-mention"
+import { parseGithubMentionResponse } from "@/src/lib/github-mention"
 import { buildLinearClient } from "@/src/lib/linear"
 import { dispatchTicketImplementation } from "@/src/lib/linear-agent-run"
 import { resolveLinearAgentRunMode } from "@/src/lib/agent-runner/mode"
@@ -42,6 +41,13 @@ import {
 import type { SlackMemoryScope } from "@/src/lib/slack/slack-memory"
 import type { SlackScope } from "@/src/lib/slack/slack-scope"
 import { detectSlackIntent, formatSigilixReply } from "@/src/lib/slack/slack-reply"
+import {
+  extractSlackCodeCitationSelections,
+  SLACK_CODE_CITATION_REVALIDATION_FAILED,
+  SLACK_CODE_CITATION_PROMPT,
+  SLACK_CODE_CITATION_SCHEMA,
+} from "@/src/lib/slack/slack-code-citations"
+import { buildSlackAgentTools } from "@/src/lib/slack/slack-agent-tools"
 import {
   getImplementOffer,
   setImplementOffer,
@@ -268,9 +274,9 @@ async function runQa(env: Env, ctx: SlackMentionContext, memScope: SlackMemorySc
   // The last leg is surface memory apply — the ORG∪REPO learnings injected into
   // the system prompt (installationId + numeric repoId from the trusted scope,
   // never message content); "" = off/no-op, SEAT memory never read here.
-  const [recalled, tools, repositoryContext, skillContext, memoryGuidance] = await Promise.all([
+  const [recalled, toolBundle, repositoryContext, skillContext, memoryGuidance] = await Promise.all([
     recallSlackMemory(env, memScope, ctx.mentionText),
-    buildSlackAgentTools(env, ctx),
+    buildSlackAgentTools(env, ctx.scope, true),
     loadSlackRepositoryContext(env, ctx),
     loadAgentSkillContext(env, ctx.scope.installationId, ctx.mentionText, commentId),
     renderSurfaceMemoryForPrompt({
@@ -282,6 +288,10 @@ async function runQa(env: Env, ctx: SlackMentionContext, memScope: SlackMemorySc
 
   const initialUserMessage = buildInitialUserMessage(ctx, recalled, repositoryContext)
   const baseSystem = applySkillGuidance({ system: AGENT_SYSTEM_PROMPT, user: "" }, skillContext).system
+  const memorySystem = memoryGuidance ? `${baseSystem}\n\n${memoryGuidance}` : baseSystem
+  const citationsOn = toolBundle.citations?.mode === "on"
+  const systemPrompt = citationsOn ? `${memorySystem}\n\n${SLACK_CODE_CITATION_PROMPT}` : memorySystem
+  const finalAnswerSchema = citationsOn ? SLACK_CODE_CITATION_SCHEMA : GITHUB_MENTION_SCHEMA
 
   const loopResult = await runAgentLoop({
     model,
@@ -289,10 +299,14 @@ async function runQa(env: Env, ctx: SlackMentionContext, memScope: SlackMemorySc
     env,
     surface: "slack-mention",
     commentId,
-    systemPrompt: memoryGuidance ? `${baseSystem}\n\n${memoryGuidance}` : baseSystem,
+    systemPrompt,
     initialUserMessage,
-    tools,
-    finalAnswerSchema: GITHUB_MENTION_SCHEMA as unknown as Record<string, unknown>,
+    tools: toolBundle.tools,
+    // Verified retrieval performs an exact-ID GitHub preflight before the
+    // legacy embed/Vectorize work. Preserve the original 5s retrieval budget
+    // after that independently bounded 5s proof instead of racing both.
+    ...(citationsOn ? { toolTimeoutMs: 10_000 } : {}),
+    finalAnswerSchema: finalAnswerSchema as unknown as Record<string, unknown>,
     telemetry: makeKvTelemetrySink(env.OPENCLAW_STATE),
     telemetryContext: {
       singleShotPrompt: "",
@@ -315,16 +329,22 @@ async function runQa(env: Env, ctx: SlackMentionContext, memScope: SlackMemorySc
   if (loopResult.ok) {
     const verdict = parseGithubMentionResponse(JSON.stringify(loopResult.answer))
     if (verdict && verdict.answer) {
+      const verifiedAnswer = citationsOn
+        ? await toolBundle.citations!.verifyAndRender(
+            verdict.answer,
+            extractSlackCodeCitationSelections(loopResult.answer),
+          )
+        : verdict.answer
       // B3c: a SEPARATE single-shot step decides whether the ask is an
       // implementable change and drafts the offer. Keeps the shared
       // GITHUB_MENTION_SCHEMA untouched (GitHub mentions reuse it). Gated DARK
       // behind the runner mode AND skipped on an abstain (an "I don't know"
       // never offers a PR) — and never on a degraded fallback below. When gated
       // off there is NO extra generate() call.
-      if (offersEnabled && !verdict.abstain) {
+      if (offersEnabled && !verdict.abstain && verifiedAnswer !== SLACK_CODE_CITATION_REVALIDATION_FAILED) {
         offer = await maybeBuildImplementOffer(env, ctx, verdict.answer)
       }
-      const body = offer ? `${verdict.answer}\n\n${buildOfferBlock(offer.plan)}` : verdict.answer
+      const body = offer ? `${verifiedAnswer}\n\n${buildOfferBlock(offer.plan)}` : verifiedAnswer
       reply = formatSigilixReply(body)
     } else {
       reply = formatSigilixReply("_I couldn't parse a grounded answer. Try rephrasing your question._", {
@@ -374,6 +394,8 @@ async function runQa(env: Env, ctx: SlackMentionContext, memScope: SlackMemorySc
     mentionText: ctx.mentionText,
     teamId: ctx.scope.teamId,
   })
+
+  toolBundle.citations?.emitTelemetry()
 
   return { reply, action: offer ? { kind: "implement-offer" } : { kind: "qa" } }
 }
@@ -619,8 +641,8 @@ async function runOfferRevise(
 
   // Same independent optional-context seam as runQa. Repository context can only
   // reach the prompt builder; buildSlackAgentTools accepts env + authorized scope.
-  const [tools, repositoryContext, skillContext] = await Promise.all([
-    buildSlackAgentTools(env, ctx),
+  const [toolBundle, repositoryContext, skillContext] = await Promise.all([
+    buildSlackAgentTools(env, ctx.scope),
     loadSlackRepositoryContext(env, ctx),
     loadAgentSkillContext(env, ctx.scope.installationId, ctx.mentionText, commentId),
   ])
@@ -634,7 +656,7 @@ async function runOfferRevise(
     commentId,
     systemPrompt: applySkillGuidance({ system: AGENT_SYSTEM_PROMPT, user: "" }, skillContext).system,
     initialUserMessage,
-    tools,
+    tools: toolBundle.tools,
     finalAnswerSchema: IMPLEMENT_REVISE_SCHEMA as unknown as Record<string, unknown>,
     telemetry: makeKvTelemetrySink(env.OPENCLAW_STATE),
     telemetryContext: {
@@ -778,27 +800,6 @@ function parseTriageSummary(text: string): TriageSummary | null {
 // ─── B3c offer helpers ─────────────────────────────────────────────────────────
 
 /**
- * Build the GitHub-scoped agent tools for this Slack mention's installation.
- * Shared by the qa path and the B3c revise path so the tool wiring never drifts.
- */
-async function buildSlackAgentTools(env: Env, ctx: SlackMentionContext): Promise<ReturnType<typeof createAgentTools>> {
-  const githubClient = await buildClient(env, ctx.scope.installationId)
-  // The channel binding is the Slack authorization boundary. Linear settings
-  // may identify a ticket destination but must never widen repository access.
-  const channelRepos = ctx.scope.repos.map((r) => ({ owner: r.owner, repo: r.repo }))
-  return createAgentTools({
-    env,
-    surface: "slack-mention",
-    github: {
-      githubClient,
-      allowedRepos: dedupeOwnerRepo(channelRepos),
-      defaultRef: "main",
-      installationId: ctx.scope.installationId,
-    },
-  })
-}
-
-/**
  * Read canonical repository descriptions for exactly this channel's immutable
  * installation/repository scope. The identity is built solely from the already
  * authorized SlackScope; stored context never participates in tool authorization.
@@ -818,19 +819,6 @@ async function loadSlackRepositoryContext(env: Env, ctx: SlackMentionContext): P
     identity,
   })
   return result.promptBlock
-}
-
-/** Dedupe `{ owner, repo }` pairs case-insensitively, preserving first-seen order. */
-function dedupeOwnerRepo(repos: Array<{ owner: string; repo: string }>): Array<{ owner: string; repo: string }> {
-  const seen = new Set<string>()
-  const out: Array<{ owner: string; repo: string }> = []
-  for (const r of repos) {
-    const key = `${r.owner}/${r.repo}`.toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(r)
-  }
-  return out
 }
 
 /**

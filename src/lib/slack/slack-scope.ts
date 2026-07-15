@@ -62,9 +62,11 @@ type PendingScopeResult = { ok: true; pending: PendingSlackScope } | Extract<Sla
 
 export async function resolveSlackScope(
   env: ScopeEnv,
-  args: { teamId: string; channelId: string },
+  args: { teamId: string; channelId: string; signal?: AbortSignal },
 ): Promise<SlackScopeResult> {
+  if (args.signal?.aborted) return { ok: false, reason: "scope-unavailable" }
   const dbScope = await getSlackChannelDbScope(env, args)
+  if (args.signal?.aborted) return { ok: false, reason: "scope-unavailable" }
   let pending: PendingScopeResult
 
   if (dbScope.kind === "bound") {
@@ -96,7 +98,7 @@ export async function resolveSlackScope(
   }
 
   if (!pending.ok) return pending
-  return authorizePendingScope(env, args, pending.pending)
+  return authorizePendingScope(env, args, pending.pending, args.signal)
 }
 
 function resolveLegacyPendingScope(
@@ -169,8 +171,9 @@ async function authorizePendingScope(
   env: Pick<Env, "OPENCLAW_STATE" | "GITHUB_APP_ID" | "GITHUB_PRIVATE_KEY">,
   args: { teamId: string; channelId: string },
   pending: PendingSlackScope,
+  signal?: AbortSignal,
 ): Promise<SlackScopeResult> {
-  if (!env.OPENCLAW_STATE || !env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
+  if (signal?.aborted || !env.OPENCLAW_STATE || !env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
     return { ok: false, reason: "scope-unavailable" }
   }
 
@@ -181,18 +184,22 @@ async function authorizePendingScope(
       appId: env.GITHUB_APP_ID,
       privateKey: env.GITHUB_PRIVATE_KEY,
       installationId: pending.installationId,
+      ...(signal ? { signal } : {}),
     })
   } catch {
     return { ok: false, reason: "scope-unavailable" }
   }
+  if (signal?.aborted) return { ok: false, reason: "scope-unavailable" }
 
   let listed: Awaited<ReturnType<typeof listGithubAppInstallationRepos>>
   try {
-    listed = await listGithubAppInstallationRepos(token, pending.installationId)
+    listed = signal
+      ? await listGithubAppInstallationRepos(token, pending.installationId, { signal })
+      : await listGithubAppInstallationRepos(token, pending.installationId)
   } catch {
     return { ok: false, reason: "scope-unavailable" }
   }
-  if (!listed.ok) return { ok: false, reason: "scope-unavailable" }
+  if (signal?.aborted || !listed.ok) return { ok: false, reason: "scope-unavailable" }
   if (
     listed.repos.some((repo) => repo.installationId !== pending.installationId || !isPositiveSafeInteger(repo.repoId))
   ) {

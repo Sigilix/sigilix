@@ -91,6 +91,32 @@ describe("listGithubUserInstallationRepos", () => {
 })
 
 describe("listGithubAppInstallationRepos", () => {
+  it("aborts an in-flight installation repository lookup when its parent scope expires", async () => {
+    const controller = new AbortController()
+    let observedSignal: AbortSignal | undefined
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      observedSignal = init?.signal ?? undefined
+      return new Promise<Response>((_resolve, reject) => {
+        observedSignal?.addEventListener(
+          "abort",
+          () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+          { once: true },
+        )
+      })
+    })
+
+    const pending = listGithubAppInstallationRepos("ghs_installation", 42, {
+      fetchImpl: fetchMock as unknown as typeof fetch,
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    })
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    controller.abort()
+
+    await expect(pending).resolves.toEqual({ ok: false, reason: "timeout" })
+    expect(observedSignal?.aborted).toBe(true)
+  })
+
   it("uses only the app installation endpoint with installation-token auth and immutable repository ids", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(input.toString())

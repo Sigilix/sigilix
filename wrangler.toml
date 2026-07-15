@@ -1213,6 +1213,12 @@ SIGILIX_REPOSITORY_CONTEXT_REVIEW_MODE = "shadow"
 # Flip to "on" only after timeout/error telemetry and adversarial scope checks pass.
 SIGILIX_REPOSITORY_CONTEXT_SLACK_MODE = "shadow"
 
+# Verified repo-qualified Slack code citations. Shadow inspects immutable
+# repo-tenant manifests + active-index membership but leaves prompts, tool bytes,
+# and replies unchanged. Flip to "on" only after the active-index writer itself
+# is on and the proof telemetry is clean.
+SIGILIX_SLACK_CODE_CITATIONS_MODE = "shadow"
+
 # Giant-PR total-context ceiling (estimated INPUT tokens across the whole review).
 # Recall-safe cost cap on the SIG-418 multi-batch spillover above: the posted
 # batch[0] (risk-ordered, full context) is ALWAYS reviewed, and spillover batches

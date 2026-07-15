@@ -31,6 +31,7 @@ import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { withTimeout } from "@/src/shared/util/with-timeout"
 import type { Env } from "@/src/shared/types/env"
 import { linearCitationMetadataForChunk } from "./linear-mention-citations"
+import type { SlackCodeCitationSession } from "./slack/slack-code-citations"
 
 const READ_FILE_MAX_LINES = 200
 const READ_FILE_LOOP_BUDGET_BYTES = 50_000
@@ -61,6 +62,10 @@ export interface AgentToolsContext {
    *     soft-failing to zero results from an unindexed namespace.
    *   - non-empty: repo must be in the set (case-insensitive match). */
   allowedRepos?: string[]
+  /** Slack-only immutable citation proof/issuance session. Shadow observes
+   *  eligible chunks without changing tool bytes; on fails closed and emits
+   *  only current active-snapshot chunks with exact citation sidecars. */
+  slackCodeCitations?: Pick<SlackCodeCitationSession, "mode" | "preflight" | "filterAndIssue">
 }
 
 export interface AgentTool {
@@ -88,12 +93,15 @@ export function createAgentTools(ctx: AgentToolsContext): AgentTool[] {
 // ───────────────────────────────────────────────────────────── retrieve_codebase
 
 function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
+  const slackCitationsOn = ctx.surface === "slack-mention" && ctx.slackCodeCitations?.mode === "on"
   return {
     name: "retrieve_codebase",
     description:
       ctx.surface === "linear-mention"
         ? "Semantic retrieval over the indexed codebase. Returns top-K relevant chunks with file path, line range, content, indexed ref/freshness, and a structured citation object when available. Copy exact citation objects into the final citations array; do not invent or alter them."
-        : "Semantic retrieval over the indexed codebase. Returns top-K relevant chunks with file path, line range, content, and indexed ref/freshness when available. Prefer current default-branch chunks for citations, and refine your query if the first call returns irrelevant chunks.",
+        : slackCitationsOn
+          ? "Semantic retrieval over the channel-authorized default-branch codebase. Returns only chunks proven present in the immutable active index, with an exact structured citation object. Copy exact citation objects into the final citations array; do not invent or alter them."
+          : "Semantic retrieval over the indexed codebase. Returns top-K relevant chunks with file path, line range, content, and indexed ref/freshness when available. Prefer current default-branch chunks for citations, and refine your query if the first call returns irrelevant chunks.",
     parameters: {
       type: "object",
       properties: {
@@ -195,6 +203,11 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
           }
         }
       }
+      const slackCitationPreflight = ctx.slackCodeCitations?.preflight(namespace, branch, signal)
+      if (slackCitationPreflight && ctx.slackCodeCitations?.mode === "on") {
+        const preflight = await slackCitationPreflight
+        if (!preflight.ok) return { ok: false, error: preflight.error }
+      }
       // The signal here is the loop's wall-clock signal; if it fires
       // mid-retrieval, the underlying embed/query calls will see it
       // through their own AbortSignal plumbing. retrieveChunks itself
@@ -209,10 +222,23 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
       const chunks: RetrievedChunk[] = await retrieveChunks({
         text: query,
         teamKey: namespace,
+        ...(slackCitationsOn ? { namespace } : {}),
         env: ctx.env,
       })
+      // Shadow observation is deliberately outside the tool's critical path:
+      // a slow GitHub identity check must never turn legacy retrieval into a
+      // wall-clock failure. On mode still joins proof and fails closed above.
+      if (slackCitationPreflight && ctx.slackCodeCitations?.mode === "shadow") {
+        void slackCitationPreflight
+          .then((result) =>
+            result.ok ? ctx.slackCodeCitations!.filterAndIssue(namespace, chunks).then(() => undefined) : undefined,
+          )
+          .catch(() => undefined)
+      }
+      const slackIssued = slackCitationsOn ? await ctx.slackCodeCitations!.filterAndIssue(namespace, chunks) : []
+      const returnedChunks = slackCitationsOn ? slackIssued.map((issued) => issued.chunk) : chunks
       const noChunksMessage =
-        chunks.length === 0
+        returnedChunks.length === 0
           ? `Retrieval returned no chunks for repo '${namespace}'. Refine the query; if this persists, retrieval may be temporarily unavailable.`
           : undefined
       // SIG-407: the agentic seam. The single-shot mention path expands hits to
@@ -223,12 +249,21 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
       // optional field; the `chunks` array is unchanged (additive). Only fires for
       // the GitHub surface (it needs a file fetcher + owner/repo) with the flag
       // `on`; `off`/`shadow`/Linear omit it → tool output byte-identical.
-      const symbolContext = await maybeExpandSymbolsForTool(ctx, namespace, chunks)
+      // Symbol expansion currently fetches gh.defaultRef (a mutable branch) and
+      // has no active-index sidecars. Keep it out of verified mode until it can
+      // read and prove exact-SHA ranges through the same session.
+      const symbolContext = slackCitationsOn ? null : await maybeExpandSymbolsForTool(ctx, namespace, returnedChunks)
+      const slackCitationsByChunk = new Map(slackIssued.map((issued) => [issued.chunk, issued.citation]))
       return {
         ok: true,
         repo: namespace,
-        chunks: chunks.map((c) => {
-          const citation = ctx.surface === "linear-mention" ? linearCitationMetadataForChunk(namespace, c) : null
+        chunks: returnedChunks.map((c) => {
+          const citation =
+            ctx.surface === "linear-mention"
+              ? linearCitationMetadataForChunk(namespace, c)
+              : slackCitationsOn
+                ? (slackCitationsByChunk.get(c) ?? null)
+                : null
           return {
             path: c.path,
             lineStart: c.lineStart,
@@ -242,7 +277,7 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
             ...(citation ? { citation } : {}),
           }
         }),
-        count: chunks.length,
+        count: returnedChunks.length,
         ...(noChunksMessage ? { message: noChunksMessage } : {}),
         ...(symbolContext ? { symbolContext } : {}),
       }

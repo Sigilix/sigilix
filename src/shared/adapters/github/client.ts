@@ -176,9 +176,13 @@ export class GitHubClient {
    * branch → commit SHA + tree SHA via `getBranch`). Returns null on
    * 404 so the consumer can ack and skip without retrying.
    */
-  async getRepository(owner: string, repo: string): Promise<{ default_branch: string; id: number | undefined } | null> {
+  async getRepository(
+    owner: string,
+    repo: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<{ default_branch: string; id: number | undefined } | null> {
     try {
-      const res = await this.restGet<{ default_branch?: string; id?: number }>(`/repos/${owner}/${repo}`)
+      const res = await this.restGet<{ default_branch?: string; id?: number }>(`/repos/${owner}/${repo}`, opts)
       if (typeof res.default_branch !== "string" || res.default_branch.length === 0) {
         return null
       }

@@ -13,6 +13,7 @@
 
 import { describe, expect, it, vi, afterEach } from "vitest"
 import {
+  getInstallationToken,
   signGitHubAppJwt,
   resolveRepoInstallationId,
   listAppInstallationIds,
@@ -57,6 +58,44 @@ VJ2u1IhcD24WrhOpFGFtUbY=
 -----END PRIVATE KEY-----`
 
 const APP_ID = "12345"
+
+describe("getInstallationToken", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("aborts an in-flight GitHub token exchange on the caller signal", async () => {
+    const controller = new AbortController()
+    let observedSignal: AbortSignal | undefined
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      observedSignal = init?.signal ?? undefined
+      return new Promise<Response>((_resolve, reject) => {
+        observedSignal?.addEventListener(
+          "abort",
+          () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+          { once: true },
+        )
+      })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const kv = {
+      get: vi.fn(async () => null),
+      put: vi.fn(async () => undefined),
+    } as unknown as KVNamespace
+
+    const pending = getInstallationToken({
+      kv,
+      appId: APP_ID,
+      privateKey: PKCS8_PEM,
+      installationId: 42,
+      signal: controller.signal,
+    })
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    controller.abort()
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+    expect(observedSignal?.aborted).toBe(true)
+    expect(kv.put).not.toHaveBeenCalled()
+  })
+})
 
 describe("signGitHubAppJwt", () => {
   it("returns a three-part JWT (header.payload.signature)", async () => {

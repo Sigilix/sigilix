@@ -59,10 +59,11 @@ function entry(overrides: Partial<LearningEntry> = {}): LearningEntry {
     ...(overrides.lastAppliedTs !== undefined ? { lastAppliedTs: overrides.lastAppliedTs } : {}),
     appliedCount: overrides.appliedCount ?? 0,
     ...(overrides.authorLogin !== undefined ? { authorLogin: overrides.authorLogin } : {}),
-    // The taxonomy fields default to absent so the base fixture models an
-    // old-shape (pre-taxonomy) record; tests opt in via overrides.
+    // The taxonomy + verification fields default to absent so the base fixture
+    // models an old-shape record; tests opt in via overrides.
     ...(overrides.type !== undefined ? { type: overrides.type } : {}),
     ...(overrides.lifespanAnchor !== undefined ? { lifespanAnchor: overrides.lifespanAnchor } : {}),
+    ...(overrides.verification !== undefined ? { verification: overrides.verification } : {}),
   }
 }
 
@@ -400,6 +401,25 @@ describe("adapters/store", () => {
     })
   })
 
+  it("round-trips the verification provenance field through KV (SIG-600)", async () => {
+    const { env } = makeEnv()
+    await appendLearning(
+      env,
+      "repo",
+      "123",
+      entry({
+        id: "verified",
+        verification: { status: "verified", evidence: ["ast", "cwe"], sourceFindingIds: ["security-0"] },
+      }),
+      Date.parse(TS),
+    )
+    const loaded = await loadLearnings(env, "repo", "123")
+    expect(loaded?.entries[0]).toMatchObject({
+      id: "verified",
+      verification: { status: "verified", evidence: ["ast", "cwe"], sourceFindingIds: ["security-0"] },
+    })
+  })
+
   it("loads and validates old-shape records that predate the taxonomy fields (backward-compat)", async () => {
     const { env, values } = makeEnv()
     // Seed a store whose entry has NO `type` / `lifespanAnchor` — the shape written
@@ -407,12 +427,14 @@ describe("adapters/store", () => {
     const legacy = entry({ id: "legacy" })
     expect("type" in legacy).toBe(false)
     expect("lifespanAnchor" in legacy).toBe(false)
+    expect("verification" in legacy).toBe(false)
     values.set("learnings:repo:123", JSON.stringify(store([legacy])))
     const loaded = await loadLearnings(env, "repo", "123")
     expect(loaded?.entries).toHaveLength(1)
     expect(loaded?.entries[0]?.id).toBe("legacy")
     expect(loaded?.entries[0]?.type).toBeUndefined()
     expect(loaded?.entries[0]?.lifespanAnchor).toBeUndefined()
+    expect(loaded?.entries[0]?.verification).toBeUndefined()
   })
 
   it("returns safe defaults on KV failures", async () => {

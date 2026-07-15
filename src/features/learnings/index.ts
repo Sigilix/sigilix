@@ -83,9 +83,10 @@ export type {
   SuppressBasis,
   SuppressibleFinding,
 } from "./domain/suppress"
-export { LEARNING_MEMORY_TYPES } from "./domain/types"
+export { LEARNING_EVIDENCE_KINDS, LEARNING_MEMORY_TYPES, LEARNING_VERIFICATION_STATUSES } from "./domain/types"
 export type {
   LearningEntry,
+  LearningEvidenceKind,
   LearningLifespanAnchor,
   LearningMemoryType,
   LearningPolarity,
@@ -93,6 +94,8 @@ export type {
   LearningSource,
   LearningSourceKind,
   LearningStore,
+  LearningVerification,
+  LearningVerificationStatus,
   LearningsMode,
 } from "./domain/types"
 export type { ExtractLearningArgs } from "./adapters/extractor-model"

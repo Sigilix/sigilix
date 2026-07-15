@@ -23,7 +23,7 @@ interface StripeErrorBody {
 async function stripePost(
   secret: string,
   path: string,
-  form: URLSearchParams,
+  form: URLSearchParams | string,
   idempotencyKey?: string,
   signal?: AbortSignal,
 ): Promise<{ ok: true; body: unknown } | { ok: false; error: string; status: number }> {
@@ -38,7 +38,7 @@ async function stripePost(
     res = await fetch(`${STRIPE_API_BASE}${path}`, {
       method: "POST",
       headers,
-      body: form.toString(),
+      body: typeof form === "string" ? form : form.toString(),
       ...(signal ? { signal } : {}),
     })
   } catch {
@@ -414,12 +414,21 @@ export async function createStripeCustomer(
   return { ok: true, customerId: id }
 }
 
-/** Create a Checkout Session from a pre-built form (see domain/checkout-session.ts). */
-export async function createCheckoutSession(secret: string, form: URLSearchParams): Promise<StripeResult> {
-  const res = await stripePost(secret, "/v1/checkout/sessions", form)
+/** Create one idempotent Checkout Session from the exact persisted request body. */
+export async function createCheckoutSession(
+  secret: string,
+  input: { requestBody: string; idempotencyKey: string; signal?: AbortSignal },
+): Promise<{ ok: true; sessionId: string; url: string } | { ok: false; error: string; status: number }> {
+  if (input.requestBody.length === 0 || input.idempotencyKey.trim().length === 0 || input.idempotencyKey.length > 255) {
+    return { ok: false, error: "invalid checkout request", status: 400 }
+  }
+  const res = await stripePost(secret, "/v1/checkout/sessions", input.requestBody, input.idempotencyKey, input.signal)
   if (!res.ok) return res
+  const sessionId = typeof (res.body as { id?: unknown }).id === "string" ? (res.body as { id: string }).id : null
   const url = readUrl(res.body)
-  return url ? { ok: true, url } : { ok: false, error: "stripe checkout url missing", status: 502 }
+  return sessionId && url
+    ? { ok: true, sessionId, url }
+    : { ok: false, error: "stripe checkout session identity missing", status: 502 }
 }
 
 /** Create a Billing Portal session so an existing subscriber can manage/cancel. */

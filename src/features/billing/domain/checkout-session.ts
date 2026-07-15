@@ -134,6 +134,33 @@ export interface CheckoutFormInput {
   customerId: string
   successUrl: string
   cancelUrl: string
+  /** Server-generated absolute Stripe Session expiry (Unix seconds). */
+  expiresAtEpochSeconds: number
+}
+
+/**
+ * Stable semantic identity for one Checkout intent. Attempt identity and provider
+ * expiry are deliberately excluded so a stale lease can replay the winner's exact
+ * stored request instead of looking like a different purchase.
+ */
+export async function fingerprintCheckoutIntent(input: CheckoutFormInput): Promise<string> {
+  const canonical = JSON.stringify({
+    schemaVersion: 1,
+    installationId: input.installationId,
+    customerId: input.customerId,
+    priceId: input.priceId,
+    tier: input.tier,
+    billingPeriod: input.billingPeriod,
+    seats: input.seats,
+    minimumSeats: input.bounds.min,
+    maximumSeats: input.bounds.max,
+    successUrl: input.successUrl,
+    cancelUrl: input.cancelUrl,
+  })
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical))
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
 }
 
 /**
@@ -144,6 +171,9 @@ export interface CheckoutFormInput {
  * quantity bounds — are set HERE from the validated/verified inputs only.
  */
 export function buildCheckoutForm(input: CheckoutFormInput): URLSearchParams {
+  if (!Number.isSafeInteger(input.expiresAtEpochSeconds) || input.expiresAtEpochSeconds <= 0) {
+    throw new Error("invalid checkout expiry")
+  }
   const form = new URLSearchParams()
   form.set("mode", "subscription")
   form.set("line_items[0][price]", input.priceId)
@@ -169,5 +199,6 @@ export function buildCheckoutForm(input: CheckoutFormInput): URLSearchParams {
   form.set("customer", input.customerId)
   form.set("success_url", input.successUrl)
   form.set("cancel_url", input.cancelUrl)
+  form.set("expires_at", String(input.expiresAtEpochSeconds))
   return form
 }

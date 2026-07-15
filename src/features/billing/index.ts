@@ -13,10 +13,16 @@ export {
   validateCheckoutRequest,
   resolvePriceForTier,
   buildCheckoutForm,
+  fingerprintCheckoutIntent,
   type PaidTier,
   type BillingPeriod,
 } from "./domain/checkout-session"
 export { createStripeCustomer, createCheckoutSession, createBillingPortalSession } from "./adapters/stripe-api"
+export {
+  claimCheckoutAttempt,
+  completeCheckoutAttempt,
+  type CheckoutAttemptLease,
+} from "./adapters/checkout-attempt-store"
 export { linkCustomerToInstallation, resolveCustomerForInstallation } from "./adapters/stripe-link-store"
 // sig-github-marketplace-billing: GitHub Marketplace subscription path — the webhook
 // handler (dispatched from the GitHub webhook entry on X-GitHub-Event:

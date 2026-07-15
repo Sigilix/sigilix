@@ -7,12 +7,84 @@ import {
   listCustomerSubscriptions,
   listSubscriptionItems,
   cancelSubscription,
+  createCheckoutSession,
   updateSubscriptionItemQuantity,
 } from "@/src/features/billing/adapters/stripe-api"
 
 const KEY = "sk_test"
 
 afterEach(() => vi.unstubAllGlobals())
+
+describe("createCheckoutSession", () => {
+  it("POSTs the exact persisted body with its exact idempotency key and AbortSignal", async () => {
+    const controller = new AbortController()
+    const requestBody = "mode=subscription&expires_at=1800000000&customer=cus_exact"
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ id: "cs_exact", url: "https://checkout.stripe.com/pay/cs_exact" }),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      createCheckoutSession(KEY, {
+        requestBody,
+        idempotencyKey: "sigilix-checkout-attempt-exact",
+        signal: controller.signal,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      sessionId: "cs_exact",
+      url: "https://checkout.stripe.com/pay/cs_exact",
+    })
+
+    const [input, init] = fetchMock.mock.calls[0]!
+    expect(String(input)).toBe("https://api.stripe.com/v1/checkout/sessions")
+    expect(init?.body).toBe(requestBody)
+    expect(init?.signal).toBe(controller.signal)
+    const headers = new Headers(init?.headers)
+    expect(headers.get("authorization")).toBe(`Bearer ${KEY}`)
+    expect(headers.get("content-type")).toBe("application/x-www-form-urlencoded")
+    expect(headers.get("idempotency-key")).toBe("sigilix-checkout-attempt-exact")
+  })
+
+  it("rejects invalid idempotency input before calling Stripe", async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+
+    for (const input of [
+      { requestBody: "", idempotencyKey: "key" },
+      { requestBody: "mode=subscription", idempotencyKey: "" },
+      { requestBody: "mode=subscription", idempotencyKey: " ".repeat(2) },
+      { requestBody: "mode=subscription", idempotencyKey: "k".repeat(256) },
+    ]) {
+      await expect(createCheckoutSession(KEY, input)).resolves.toEqual({
+        ok: false,
+        error: "invalid checkout request",
+        status: 400,
+      })
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("fails closed when Stripe omits either Session identity field", async () => {
+    for (const body of [
+      { url: "https://checkout.stripe.com/pay/cs_missing" },
+      { id: "cs_missing" },
+      { id: "", url: "https://checkout.stripe.com/pay/cs_missing" },
+    ]) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json(body)),
+      )
+      await expect(
+        createCheckoutSession(KEY, { requestBody: "mode=subscription", idempotencyKey: "key" }),
+      ).resolves.toEqual({
+        ok: false,
+        error: "stripe checkout session identity missing",
+        status: 502,
+      })
+    }
+  })
+})
 
 describe("listCustomerSubscriptions", () => {
   it("walks starting_after pages until has_more is false (oldest active never buried)", async () => {

@@ -28,15 +28,22 @@ import {
   validateCheckoutRequest,
   resolvePriceForTier,
   buildCheckoutForm,
+  fingerprintCheckoutIntent,
   createStripeCustomer,
   createCheckoutSession,
   createBillingPortalSession,
   linkCustomerToInstallation,
   readStripeCustomerBinding,
   resolveCustomerForInstallation,
+  claimCheckoutAttempt,
+  completeCheckoutAttempt,
 } from "@/src/features/billing"
 
 const DEFAULT_PORTAL_URL = "https://app.sigilix.ai"
+const CHECKOUT_LEASE_MS = 45_000
+const CHECKOUT_PROVIDER_TIMEOUT_MS = 20_000
+const CHECKOUT_SESSION_TTL_SECONDS = 60 * 60
+const CHECKOUT_REPLACEMENT_GRACE_MS = 5 * 60_000
 
 /**
  * The sole active/trialing tenant marker allowed to start self-serve Stripe Checkout.
@@ -48,6 +55,16 @@ const LEGACY_ENTITLEMENT_BILLING_SOURCE = "legacy_entitlement"
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+}
+
+function retryableJson(error: string, status: number, retryAfterSeconds: number): Response {
+  return new Response(JSON.stringify({ error }), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      "retry-after": String(Math.max(1, retryAfterSeconds)),
+    },
+  })
 }
 
 /** The portal base for success/cancel/return URLs — env-configured, defaulted. */
@@ -259,7 +276,10 @@ export async function handleBillingCheckoutRoute(
   if (!customer.ok) return customer.response
 
   const base = portalBase(env)
-  const form = buildCheckoutForm({
+  const nowMs = Date.now()
+  const stripeExpiresAtEpochSeconds = Math.floor(nowMs / 1_000) + CHECKOUT_SESSION_TTL_SECONDS
+  const stripeExpiresAtMs = stripeExpiresAtEpochSeconds * 1_000
+  const formInput = {
     priceId,
     seats: validation.seats,
     bounds: validation.bounds,
@@ -269,10 +289,90 @@ export async function handleBillingCheckoutRoute(
     customerId: customer.customerId,
     successUrl: `${base}/org?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
     cancelUrl: `${base}/org?checkout=cancel`,
+    expiresAtEpochSeconds: stripeExpiresAtEpochSeconds,
+  }
+  const form = buildCheckoutForm(formInput)
+  const intentFingerprint = await fingerprintCheckoutIntent(formInput)
+  const attemptId = crypto.randomUUID()
+  const claim = await claimCheckoutAttempt(env, {
+    installationId: admin.installationId,
+    attemptId,
+    intentFingerprint,
+    requestBody: form.toString(),
+    idempotencyKey: `sigilix-checkout-${attemptId}`,
+    leaseToken: crypto.randomUUID(),
+    nowMs,
+    leaseExpiresAtMs: nowMs + CHECKOUT_LEASE_MS,
+    stripeExpiresAtMs,
+    replaceAfterMs: stripeExpiresAtMs + CHECKOUT_REPLACEMENT_GRACE_MS,
+    nowIso: new Date(nowMs).toISOString(),
   })
+  if (claim.kind === "error") {
+    console.error(
+      JSON.stringify({
+        event: "billing-checkout-attempt-claim-error",
+        installationId: admin.installationId,
+        reason: claim.reason,
+      }),
+    )
+    return json({ error: "billing_unavailable" }, 503)
+  }
+  if (claim.kind === "ineligible") return json({ error: "already_subscribed" }, 409)
+  if (claim.kind === "busy") {
+    console.warn(
+      JSON.stringify({
+        event: "billing-checkout-attempt-busy",
+        installationId: admin.installationId,
+        reason: claim.reason,
+      }),
+    )
+    return retryableJson("checkout_in_progress", 409, claim.retryAfterSeconds)
+  }
+  if (claim.kind === "ready") {
+    console.log(
+      JSON.stringify({
+        event: "billing-checkout-replayed",
+        installationId: admin.installationId,
+        tier: validation.tier,
+        billingPeriod: validation.billingPeriod,
+        seats: validation.seats,
+      }),
+    )
+    return json({ url: claim.url }, 200)
+  }
 
-  const session = await createCheckoutSession(secret, form)
+  const session = await createCheckoutSession(secret, {
+    requestBody: claim.lease.requestBody,
+    idempotencyKey: claim.lease.idempotencyKey,
+    signal: AbortSignal.timeout(CHECKOUT_PROVIDER_TIMEOUT_MS),
+  })
   if (!session.ok) return json({ error: "stripe_error" }, 502)
+
+  const completion = await completeCheckoutAttempt(env, {
+    ...claim.lease,
+    sessionId: session.sessionId,
+    url: session.url,
+    nowMs: Date.now(),
+  })
+  if (completion.kind === "ineligible") {
+    console.warn(
+      JSON.stringify({
+        event: "billing-checkout-attempt-became-ineligible",
+        installationId: admin.installationId,
+      }),
+    )
+    return json({ error: "already_subscribed" }, 409)
+  }
+  if (completion.kind !== "ready") {
+    console.error(
+      JSON.stringify({
+        event: "billing-checkout-attempt-complete-error",
+        installationId: admin.installationId,
+        reason: completion.kind === "error" ? completion.reason : "stale",
+      }),
+    )
+    return json({ error: "billing_unavailable" }, 503)
+  }
 
   console.log(
     JSON.stringify({
@@ -283,7 +383,7 @@ export async function handleBillingCheckoutRoute(
       seats: validation.seats,
     }),
   )
-  return json({ url: session.url }, 200)
+  return json({ url: completion.url }, 200)
 }
 
 /** POST /v1/billing/portal — manage/cancel an existing subscription. See file header. */

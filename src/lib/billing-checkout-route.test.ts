@@ -67,6 +67,46 @@ function baseEnv(kv: KVNamespace, extra: Record<string, unknown> = {}): Env {
   } as unknown as Env
 }
 
+async function checkoutEnv(
+  kv: KVNamespace,
+  options: { status?: string | null; billingSource?: string | null; customerId?: string } = {},
+  extra: Record<string, unknown> = {},
+): Promise<Env> {
+  const db = makeD1()
+  for (const name of [
+    "0001_create_tenant_repo_usage.sql",
+    "0011_add_tenant_subscription_status.sql",
+    "0012_add_tenant_billing_source.sql",
+    "0020_create_stripe_seat_reconciliation.sql",
+    "0027_create_billing_checkout_attempt.sql",
+  ]) {
+    await db.exec(migration(name))
+  }
+  await db
+    .prepare(
+      `INSERT INTO tenant
+        (installation_id, tier, subscription_status, billing_source, created_at, updated_at)
+       VALUES (555, 'free', ?, ?, '2026-07-13T00:00:00.000Z', '2026-07-13T00:00:00.000Z')`,
+    )
+    .bind(
+      options.status === undefined ? "canceled" : options.status,
+      options.billingSource === undefined ? "stripe" : options.billingSource,
+    )
+    .run()
+  if (options.customerId) {
+    await db
+      .prepare(
+        `INSERT INTO stripe_seat_subscription
+          (installation_id, stripe_customer_id, derived_quantity, revision, snapshot_state,
+           created_at_ms, updated_at_ms)
+         VALUES (555, ?, 0, 1, 'not_applicable', 1, 1)`,
+      )
+      .bind(options.customerId)
+      .run()
+  }
+  return baseEnv(kv, { SIGILIX_PLATFORM_DB: db, ...extra })
+}
+
 function post(body: unknown, sessionId: string | null): Request {
   const headers = new Headers({ "content-type": "application/json" })
   if (sessionId) headers.set("cookie", `${SESSION_COOKIE}=${sessionId}`)
@@ -98,7 +138,7 @@ function stubFetch(opts: StubOpts) {
     }
     if (url === "https://api.stripe.com/v1/checkout/sessions") {
       cap.checkoutBody = typeof init?.body === "string" ? init.body : ""
-      return new Response(JSON.stringify({ url: "https://checkout.stripe.com/pay/cs_test" }))
+      return new Response(JSON.stringify({ id: "cs_test", url: "https://checkout.stripe.com/pay/cs_test" }))
     }
     if (url === "https://api.stripe.com/v1/billing_portal/sessions") {
       return new Response(JSON.stringify({ url: "https://billing.stripe.com/session/bp_test" }))
@@ -135,6 +175,34 @@ describe("POST /v1/billing/checkout", () => {
 
     expect(res.status).toBe(503)
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("503 when the Checkout-attempt migration is missing — never reaches Stripe", async () => {
+    const db = makeD1()
+    for (const name of [
+      "0001_create_tenant_repo_usage.sql",
+      "0011_add_tenant_subscription_status.sql",
+      "0012_add_tenant_billing_source.sql",
+      "0020_create_stripe_seat_reconciliation.sql",
+    ]) {
+      await db.exec(migration(name))
+    }
+    await db
+      .prepare("INSERT INTO tenant (installation_id, tier, created_at, updated_at) VALUES (555, 'free', 't', 't')")
+      .run()
+    const { kv, store } = makeKV()
+    await seedSession(kv, "s1", "octocat")
+    store.set("stripe-installation:555", "cus_existing")
+    const captured: { checkoutBody?: string } = {}
+    stubFetch({ installations: ADMIN_INSTALLS, captured })
+
+    const response = await handleBillingCheckoutRoute(
+      post({ tier: "pro", installationId: 555 }, "s1"),
+      baseEnv(kv, { SIGILIX_PLATFORM_DB: db }),
+    )
+
+    expect(response.status).toBe(503)
+    expect(captured.checkoutBody).toBeUndefined()
   })
 
   it("401 without a session", async () => {
@@ -204,19 +272,9 @@ describe("POST /v1/billing/checkout", () => {
     await seedSession(kv, "s1", "octocat")
     const captured: { checkoutBody?: string } = {}
     stubFetch({ installations: ADMIN_INSTALLS, captured })
-    const db = {
-      prepare: (sql: string) => ({
-        bind: () => ({
-          first: async () =>
-            sql.includes("stripe_seat_subscription")
-              ? null
-              : { subscription_status: "active", billing_source: "legacy_entitlement" },
-        }),
-      }),
-    } as unknown as Env["SIGILIX_PLATFORM_DB"]
     const res = await handleBillingCheckoutRoute(
       post({ tier: "max", billingPeriod: "annual", installationId: 555 }, "s1"),
-      baseEnv(kv, { SIGILIX_PLATFORM_DB: db }),
+      await checkoutEnv(kv, { status: "active", billingSource: "legacy_entitlement" }),
     )
     expect(res.status).toBe(200)
     expect(new URLSearchParams(captured.checkoutBody).get("line_items[0][price]")).toBe("price_max_annual")
@@ -254,18 +312,13 @@ describe("POST /v1/billing/checkout", () => {
     // session's token administers (555) — the spoof must be rejected as forbidden,
     // never written to Stripe. (Sending 555, which the caller admins, is honored below.)
     stubFetch({ installations: ADMIN_INSTALLS, captured })
+    const env = await checkoutEnv(kv)
 
-    const spoof = await handleBillingCheckoutRoute(
-      post({ tier: "teams", seats: 12, installationId: 999 }, "s1"),
-      baseEnv(kv),
-    )
+    const spoof = await handleBillingCheckoutRoute(post({ tier: "teams", seats: 12, installationId: 999 }, "s1"), env)
     expect(spoof.status).toBe(403)
     expect(captured.checkoutBody).toBeUndefined() // never reached Stripe
 
-    const ok = await handleBillingCheckoutRoute(
-      post({ tier: "teams", seats: 12, installationId: 555 }, "s1"),
-      baseEnv(kv),
-    )
+    const ok = await handleBillingCheckoutRoute(post({ tier: "teams", seats: 12, installationId: 555 }, "s1"), env)
     expect(ok.status).toBe(200)
     const body = (await ok.json()) as { url: string }
     expect(body.url).toBe("https://checkout.stripe.com/pay/cs_test")
@@ -286,7 +339,10 @@ describe("POST /v1/billing/checkout", () => {
     const captured: { checkoutBody?: string } = {}
     stubFetch({ installations: ADMIN_INSTALLS, captured })
 
-    const res = await handleBillingCheckoutRoute(post({ tier: "pro", installationId: 555 }, "s1"), baseEnv(kv))
+    const res = await handleBillingCheckoutRoute(
+      post({ tier: "pro", installationId: 555 }, "s1"),
+      await checkoutEnv(kv),
+    )
     expect(res.status).toBe(200)
     const form = new URLSearchParams(captured.checkoutBody)
     expect(form.get("subscription_data[trial_period_days]")).toBe("14")
@@ -300,7 +356,7 @@ describe("POST /v1/billing/checkout", () => {
 
     const res = await handleBillingCheckoutRoute(
       post({ tier: "teams", seats: 10, billingPeriod: "annual", installationId: 555 }, "s1"),
-      baseEnv(kv),
+      await checkoutEnv(kv),
     )
     expect(res.status).toBe(200)
     const form = new URLSearchParams(captured.checkoutBody)
@@ -315,7 +371,10 @@ describe("POST /v1/billing/checkout", () => {
     stubFetch({ installations: ADMIN_INSTALLS, captured })
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
 
-    const res = await handleBillingCheckoutRoute(post({ tier: "pro", installationId: 555 }, "s1"), baseEnv(kv))
+    const res = await handleBillingCheckoutRoute(
+      post({ tier: "pro", installationId: 555 }, "s1"),
+      await checkoutEnv(kv),
+    )
     expect(res.status).toBe(200)
     expect(new URLSearchParams(captured.checkoutBody).get("line_items[0][price]")).toBe("price_pro")
     expect(
@@ -353,7 +412,7 @@ describe("POST /v1/billing/checkout", () => {
       const seats = tier === "teams" ? 10 : 1
       const res = await handleBillingCheckoutRoute(
         post({ tier, seats, installationId: 555, intent: "trial", plan: tier, trial: true }, "s1"),
-        baseEnv(kv),
+        await checkoutEnv(kv),
       )
       expect(res.status).toBe(200)
       const form = new URLSearchParams(captured.checkoutBody)
@@ -436,7 +495,10 @@ describe("POST /v1/billing/checkout", () => {
     const captured: { checkoutBody?: string; customerCalls?: number } = {}
     stubFetch({ installations: ADMIN_INSTALLS, captured })
 
-    const res = await handleBillingCheckoutRoute(post({ tier: "pro", installationId: 555 }, "s1"), baseEnv(kv))
+    const res = await handleBillingCheckoutRoute(
+      post({ tier: "pro", installationId: 555 }, "s1"),
+      await checkoutEnv(kv),
+    )
     expect(res.status).toBe(200)
     expect(captured.customerCalls).toBe(0) // never created a second customer
     const form = new URLSearchParams(captured.checkoutBody)
@@ -444,26 +506,6 @@ describe("POST /v1/billing/checkout", () => {
   })
 
   it("reuses the durable D1 customer binding when the legacy KV link is missing", async () => {
-    const db = makeD1()
-    await db.exec(migration("0001_create_tenant_repo_usage.sql"))
-    await db.exec(migration("0011_add_tenant_subscription_status.sql"))
-    await db.exec(migration("0012_add_tenant_billing_source.sql"))
-    await db.exec(migration("0020_create_stripe_seat_reconciliation.sql"))
-    await db
-      .prepare(
-        "INSERT INTO tenant" +
-          " (installation_id, tier, subscription_status, billing_source, created_at, updated_at)" +
-          " VALUES (555, 'free', 'canceled', 'stripe', '2026-07-13T00:00:00.000Z', '2026-07-13T00:00:00.000Z')",
-      )
-      .run()
-    await db
-      .prepare(
-        `INSERT INTO stripe_seat_subscription
-          (installation_id, stripe_customer_id, derived_quantity, revision, snapshot_state,
-           created_at_ms, updated_at_ms)
-         VALUES (555, 'cus_durable', 0, 1, 'not_applicable', 1, 1)`,
-      )
-      .run()
     const { kv } = makeKV()
     await seedSession(kv, "s1", "octocat")
     const captured: { checkoutBody?: string; customerCalls?: number } = {}
@@ -471,7 +513,7 @@ describe("POST /v1/billing/checkout", () => {
 
     const response = await handleBillingCheckoutRoute(
       post({ tier: "pro", seats: 1, installationId: 555 }, "s1"),
-      baseEnv(kv, { SIGILIX_PLATFORM_DB: db }),
+      await checkoutEnv(kv, { customerId: "cus_durable" }),
     )
 
     expect(response.status).toBe(200)
@@ -485,7 +527,10 @@ describe("POST /v1/billing/checkout", () => {
     const captured: { checkoutBody?: string; customerCalls?: number } = {}
     stubFetch({ installations: ADMIN_INSTALLS, captured })
 
-    const res = await handleBillingCheckoutRoute(post({ tier: "pro", installationId: 555 }, "s1"), baseEnv(kv))
+    const res = await handleBillingCheckoutRoute(
+      post({ tier: "pro", installationId: 555 }, "s1"),
+      await checkoutEnv(kv),
+    )
     expect(res.status).toBe(200)
     expect(captured.customerCalls).toBe(1)
     // Linked immediately (anti-duplicate) so a retried checkout reuses it.
@@ -555,6 +600,7 @@ async function makeManagedEnv(options: {
   await db.exec(migration("0011_add_tenant_subscription_status.sql"))
   await db.exec(migration("0012_add_tenant_billing_source.sql"))
   await db.exec(migration("0020_create_stripe_seat_reconciliation.sql"))
+  await db.exec(migration("0027_create_billing_checkout_attempt.sql"))
   await db.exec(migration("0022_create_org_workspace_access.sql"))
   await db
     .prepare(

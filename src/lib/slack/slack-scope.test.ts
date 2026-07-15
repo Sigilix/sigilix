@@ -159,6 +159,30 @@ afterEach(() => {
 })
 
 describe("resolveSlackScope exact D1 authority", () => {
+  it("threads the caller deadline through token exchange and live repository reconciliation", async () => {
+    const db = await makeSlackDb()
+    await bindChannel(db, {
+      channelId: "CABORT1",
+      repos: [{ repoId: 101, fullName: "acme/api" }],
+    })
+    allowLive(42, [{ repoId: 101, owner: "acme", repo: "api" }])
+    const controller = new AbortController()
+
+    await expect(
+      resolveSlackScope(makeEnv({ db }), {
+        teamId: "TDB",
+        channelId: "CABORT1",
+        signal: controller.signal,
+      }),
+    ).resolves.toMatchObject({ ok: true })
+    expect(getInstallationTokenMock).toHaveBeenCalledWith(
+      expect.objectContaining({ installationId: 42, signal: controller.signal }),
+    )
+    expect(listGithubAppInstallationReposMock).toHaveBeenCalledWith("token-42", 42, {
+      signal: controller.signal,
+    })
+  })
+
   it("reconciles an explicit binding by immutable repo id and emits the current GitHub name", async () => {
     const db = await makeSlackDb()
     await bindChannel(db, {

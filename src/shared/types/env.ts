@@ -1302,6 +1302,7 @@ export interface Env extends AwsBedrockEnv {
   OPENCLAW_REPOSITORY_CONTEXT_API?: string // Exact "on" exposes the canonical org repository-context API.
   OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE?: string // off | shadow; unknown/unset (including on) → off.
   OPENCLAW_REPOSITORY_CONTEXT_SLACK_MODE?: string // off | shadow | on; unknown/unset → off.
+  OPENCLAW_SLACK_CODE_CITATIONS_MODE?: string // off | shadow | on; unknown/unset → off.
   // SIG-303 full usage metering (two independent pools: ORG + SEAT). Own flag +
   // tunable per-(pool × window) caps, independent of the SIG-38 PR-review gate.
   //   SIGILIX_USAGE_METER_MODE      "shadow" (default/unknown) | "off" | "enforce".

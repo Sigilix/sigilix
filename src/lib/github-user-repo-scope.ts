@@ -29,6 +29,12 @@ interface RepositoriesResponse {
   repositories?: Repository[]
 }
 
+interface ExactRepositoryLookupOptions {
+  fetchImpl?: typeof fetch
+  timeoutMs?: number
+  signal?: AbortSignal
+}
+
 export interface GithubUserInstallationRepo {
   installationId: number
   repoId?: number
@@ -280,13 +286,16 @@ function raceAbort<T>(operation: Promise<T>, signal: AbortSignal, onLateResolve?
 async function listExactInstallationRepositories(
   installationId: number,
   fetchPage: ExactRepositoryPageFetcher,
-  options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  options: ExactRepositoryLookupOptions = {},
 ): Promise<GithubUserInstallationReposForInstallationResult> {
   if (!Number.isSafeInteger(installationId) || installationId <= 0) {
     return { ok: false, reason: "lookup_failed" }
   }
   const fetchImpl = options.fetchImpl ?? fetch
   const controller = new AbortController()
+  const abortFromParent = (): void => controller.abort()
+  options.signal?.addEventListener("abort", abortFromParent, { once: true })
+  if (options.signal?.aborted) abortFromParent()
   const timeout = setTimeout(() => controller.abort(), Math.max(1, options.timeoutMs ?? DEFAULT_TIMEOUT_MS))
   const repos: GithubUserInstallationRepoWithId[] = []
   const namesById = new Map<number, string>()
@@ -336,6 +345,7 @@ async function listExactInstallationRepositories(
     return { ok: false, reason: controller.signal.aborted ? "timeout" : "lookup_failed" }
   } finally {
     clearTimeout(timeout)
+    options.signal?.removeEventListener("abort", abortFromParent)
   }
 }
 
@@ -347,7 +357,7 @@ async function listExactInstallationRepositories(
 export async function listGithubUserInstallationReposForInstallation(
   accessToken: string,
   installationId: number,
-  options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  options: ExactRepositoryLookupOptions = {},
 ): Promise<GithubUserInstallationReposForInstallationResult> {
   if (!accessToken) return { ok: false, reason: "lookup_failed" }
   return listExactInstallationRepositories(
@@ -371,7 +381,7 @@ export async function listGithubUserInstallationReposForInstallation(
 export async function listGithubAppInstallationRepos(
   installationToken: string,
   installationId: number,
-  options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  options: ExactRepositoryLookupOptions = {},
 ): Promise<GithubUserInstallationReposForInstallationResult> {
   if (!installationToken) return { ok: false, reason: "lookup_failed" }
   return listExactInstallationRepositories(

@@ -473,6 +473,7 @@ describe("buildAgentInitialUserMessage", () => {
     issueBody: "Tenant A must not see tenant B.",
     askerHandle: "daniel",
     question: "Can this see other tenants?",
+    repositoryContext: "",
   }
 
   it("SIG-221: unmapped team with no indexed repos falls back to issue context without claiming 'no access'", () => {

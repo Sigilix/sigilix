@@ -39,7 +39,8 @@ import {
   type LinearConfig,
   type LinearTenantContext,
 } from "@/src/features/linear-integration"
-import { resolveBindingRepoScope } from "@/src/lib/cross-repo-context"
+import { resolveBindingRepoScope, type BindingRepoScope } from "@/src/lib/cross-repo-context"
+import { loadLinearRepositoryContext } from "@/src/lib/linear-repository-context"
 import { isLinearOrgTeacher } from "@/src/lib/mention-reply-org-teach"
 import { resolveTenantLinearRepoScope, type LinearAgentRepoScope } from "@/src/lib/mention-reply-repo-scope"
 import {
@@ -269,12 +270,7 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
     return
   }
 
-  // SIG-225 — queue-consumer self-filter: catches the case where the
-  // webhook handler raced past `isBotAuthoredComment` because of
-  // Cloudflare KV's cross-POP eventual-consistency window. By the
-  // time the consumer runs the queue-delivery delay has typically
-  // surpassed propagation, so the stamp is visible here even if it
-  // wasn't at webhook time.
+  // Consumer-side backstop for the webhook's eventually consistent bot stamp.
   if (await isBotAuthoredComment(env.OPENCLAW_STATE, commentId)) {
     log("skip-bot-authored-tracker")
     return
@@ -290,8 +286,8 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
   }
 
   let tenantConfig: LinearConfig | null = null
+  let tenantScope: BindingRepoScope | null = null
   let tenantRepo: { owner: string; repo: string } | null = null
-  // Cross-repo context: capped sibling namespaces beyond the primary (multi-repo / use-all).
   let tenantSiblingNamespaces: string[] = []
   let tenantCitationNamespaces: string[] = []
   if (tenant) {
@@ -300,12 +296,10 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
       resolveLinearTeamBinding(env, tenant.organizationId, data.issue.team.id),
     ])
     tenantConfig = config
-    // The team's primary repo + capped cross-repo siblings (multi-repo / use-all).
-    // A team with >=1 accessible repo resolves here instead of failing closed.
-    const scope = binding ? await resolveBindingRepoScope(env, binding, tenant.installationId) : null
+    tenantScope = binding ? await resolveBindingRepoScope(env, binding, tenant.installationId) : null
     const valid =
       !!config &&
-      !!scope &&
+      !!tenantScope &&
       (tenant.teamId === undefined || tenant.teamId === data.issue.team.id) &&
       teamIsSelected(config, data.issue.team.id)
     if (!valid) {
@@ -323,11 +317,11 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
       log("missing-tenant-binding", { teamId: data.issue.team.id })
       return
     }
-    tenantRepo = scope!.primary
-    tenantSiblingNamespaces = scope!.siblingNamespaces
-    tenantCitationNamespaces = scope!.allNamespaces
-    if (scope!.truncated > 0) {
-      log("cross-repo-siblings-capped", { truncated: scope!.truncated })
+    tenantRepo = tenantScope!.primary
+    tenantSiblingNamespaces = tenantScope!.siblingNamespaces
+    tenantCitationNamespaces = tenantScope!.allNamespaces
+    if (tenantScope!.truncated > 0) {
+      log("cross-repo-siblings-capped", { truncated: tenantScope!.truncated })
     }
     if (!config.writeback.comments) {
       log("comment-writeback-disabled", { teamId: data.issue.team.id })
@@ -335,9 +329,7 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
     }
   }
 
-  // Skip self — never reply to our own comments. Linear's webhook fires
-  // for every Comment.create including the bot's own posts, so without
-  // this guard the bot loops on its own replies forever.
+  // Linear fires Comment.create for bot replies too; never answer ourselves.
   if (isLikelyBotAuthor(data.user?.displayName ?? data.user?.name ?? null)) {
     log("skip-bot-author")
     return
@@ -356,20 +348,21 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
     return
   }
 
-  // Linked-PR context: extract PR refs from the full pre-truncation
-  // question text (NOT issueBody — a stale PR URL in the issue
-  // description would poison context for unrelated follow-up questions).
-  // Using the pre-truncation text ensures a long comment with a PR ref
-  // at the end isn't silently stripped by the questionChars limit.
-  // Each ref gets an independent fetch with isolated failure handling.
+  // Extract PR refs from the full question so truncation cannot hide a trailing ref.
   const teamKey = data.issue.team?.key ?? null
-  // SIG-134: this mapping is the Linear tenant boundary for agentic
-  // codebase retrieval. Values must be explicit `{ owner, repo }`
-  // objects so the agent can scope all indexed namespaces to the
-  // requesting tenant owner before advertising or enforcing them.
   const teamRepo = tenantRepo ?? parseTeamGithubRepo(env.OPENCLAW_TEAM_GITHUB_REPO_MAP, teamKey)
   const contextEnabled = !tenantConfig || codebaseContextEnabled(tenantConfig)
   const contextToolsEnabled = !tenantConfig || codebaseToolsEnabled(tenantConfig)
+  const repositoryContextPromise =
+    tenant && tenantScope
+      ? loadLinearRepositoryContext({
+          env,
+          surface: "mention",
+          installationId: tenant.installationId,
+          repositories: tenantScope.effectiveRepositories,
+          enabled: contextEnabled,
+        })
+      : Promise.resolve("")
   const repoScope = contextEnabled
     ? tenant
       ? await resolveTenantLinearRepoScope(env, teamRepo, tenantSiblingNamespaces)
@@ -414,6 +407,7 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
 
   // Surface memory apply — ORG∪REPO learnings block for the answer prompt (see helper).
   const surfaceMemory = await renderLinearSurfaceMemory({ env, teamRepo, tenant })
+  const repositoryContext = await repositoryContextPromise
   const askerHandle = data.user?.displayName ?? data.user?.name ?? "there"
   const prompt = buildPrompt({
     issueIdentifier: data.issue.identifier,
@@ -433,6 +427,7 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
     linkedPrs,
     linkedPrFailures,
     teamMemory: surfaceMemory,
+    repositoryContext,
   })
 
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
@@ -440,13 +435,7 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
 
   if (env.OPENCLAW_AGENTIC_LINEAR_MODE === "on" && contextToolsEnabled) {
     log("agent-loop-start")
-    // Resolved once so the prompt's advisory list and the tool's
-    // hard enforcement can't drift (CR PR #30 caught the gap where
-    // the prompt advertised the universe but the tool didn't enforce
-    // it — the model could still query unindexed namespaces).
-    // ARC-239: `listIndexedRepos` is now KV-backed (reads
-    // `repo-index-manifest:*` keys). The agent loop already runs in
-    // an async context so the new `await` adds no surface cost.
+    // Resolve the advertised and enforced repository set once so they cannot drift.
     const loopResult = await runAgentLoop({
       model,
       apiKey: env.OLLAMA_API_KEY,
@@ -460,29 +449,16 @@ export async function handleMention(commentId: string, env: Env, opts: HandleMen
         issueBody: data.issue.description ?? "",
         askerHandle,
         question,
-        // CR PR #24 catch: pass the resolved repo namespace so the
-        // model knows which `repo` to pass to its only tool. Without
-        // this the model has to guess; if the team→repo mapping is
-        // missing it can't ground retrieval at all.
-        // SIG-132: the namespace is `<owner>/<repo>` lowercased, matching
-        // the `availableRepos` entries (which are KV-key suffixes).
         repo: repoScope.repo,
         mappedRepo: repoScope.mappedRepo,
         repoStatus: repoScope.status,
-        // The full set of indexed namespaces the agent is allowed to
-        // query. The team's primary repo (above) is the default, but
-        // the model picks a different namespace from this list when the
-        // issue is clearly about another repo (e.g. ARC-team issue
-        // about the website).
         availableRepos: repoScope.availableRepos,
+        repositoryContext,
       }),
       tools: createAgentTools({
         env,
         surface: "linear-mention",
-        // Same set the prompt advertises — enforced inside
-        // retrieve_codebase so a hallucinated namespace gets a
-        // recoverable error with the valid choices, not a silent
-        // empty-result.
+        // The same set is advertised above and enforced by retrieve_codebase.
         allowedRepos: repoScope.availableRepos,
         // Linear surface — no GitHub auth/repo identity, so no fetch_pr/read_file_lines.
       }),
@@ -655,6 +631,7 @@ interface PromptCtx {
   linkedPrs: PrContext[]
   linkedPrFailures: LinkedPrFailure[]
   teamMemory: string
+  repositoryContext: string
 }
 
 function buildPrompt(ctx: PromptCtx): string {
@@ -691,6 +668,8 @@ function buildPrompt(ctx: PromptCtx): string {
   if (recent) {
     sections.push("[RECENT THREAD CONTEXT — chronological]", recent, "")
   }
+
+  if (ctx.repositoryContext) sections.push(ctx.repositoryContext, "")
 
   sections.push("[CODEBASE RETRIEVAL STATUS]", ctx.codebaseStatus, "")
 
@@ -798,6 +777,7 @@ interface AgentInitialMessageCtx {
   mappedRepo: string | null
   availableRepos: string[]
   repoStatus: LinearAgentRepoScope["status"]
+  repositoryContext: string
 }
 
 /**
@@ -859,6 +839,7 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
     "[QUESTION]",
     ctx.question,
     "",
+    ...(ctx.repositoryContext ? [ctx.repositoryContext, ""] : []),
     "[CITATION CONTRACT] Copy exact `citation` objects returned by retrieve_codebase into the top-level `citations` array. Use an empty array when none apply. Do not write path:line citations in prose and never invent or alter citation metadata.",
     "",
     repoLine,

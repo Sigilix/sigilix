@@ -33,6 +33,8 @@ export interface BindingRepoScope {
   siblingNamespaces: string[]
   /** Exact effective D1 binding set, before the retrieval fan-out cap. */
   allNamespaces: string[]
+  /** Immutable ids + live names for exact canonical repository-context reads. */
+  effectiveRepositories: Array<{ repositoryId: number; fullName: string }>
   /** How many siblings were dropped by the `MAX_CROSS_REPO_SIBLINGS` cap (for logging). */
   truncated: number
 }
@@ -71,6 +73,10 @@ export async function resolveBindingRepoScope(
     primaryNamespace,
     siblingNamespaces,
     allNamespaces: [primaryNamespace, ...rest],
+    effectiveRepositories: effective.map((repository) => ({
+      repositoryId: repository.githubRepoId,
+      fullName: repository.githubRepoFullName,
+    })),
     truncated: rest.length - siblingNamespaces.length,
   }
 }

@@ -1288,7 +1288,6 @@ export interface Env extends AwsBedrockEnv {
   SIGILIX_COST_BUDGET_MAX_WEEKLY?: string
   SIGILIX_COST_BUDGET_ULTRA_SESSION?: string
   SIGILIX_COST_BUDGET_ULTRA_WEEKLY?: string
-
   // sig-free-tier-entitlements: master rollout switch for the paid-only feature
   // gate (CI-failure triage, the Slack assistant, Linear triage/agent are
   // Pro/Teams/Max/Ultra/Enterprise only). "off" (default/unset/unknown) — NO gating, byte-identical
@@ -1302,6 +1301,7 @@ export interface Env extends AwsBedrockEnv {
   OPENCLAW_REPOSITORY_CONTEXT_API?: string // Exact "on" exposes the canonical org repository-context API.
   OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE?: string // off | shadow; unknown/unset (including on) → off.
   OPENCLAW_REPOSITORY_CONTEXT_SLACK_MODE?: string // off | shadow | on; unknown/unset → off.
+  OPENCLAW_REPOSITORY_CONTEXT_LINEAR_MODE?: string // off | shadow | on; unknown/unset → off.
   OPENCLAW_SLACK_CODE_CITATIONS_MODE?: string // off | shadow | on; unknown/unset → off.
   OPENCLAW_SLACK_MEMORY_SCOPE_MODE?: string // off | shadow | on; unknown/unset → off.
   // SIG-303 full usage metering (two independent pools: ORG + SEAT). Own flag +

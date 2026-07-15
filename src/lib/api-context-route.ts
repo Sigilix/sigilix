@@ -409,6 +409,22 @@ export async function handleAgentContextRoute(request: Request, env: Env): Promi
       status = await resolveInstalledStatus(env, parsed.owner, parsed.repo, installationId, repoId)
     }
 
+    // Observability: one structured line per served turn so a grounding call is
+    // greppable in `wrangler tail` (e.g. to confirm the agent-runner container
+    // actually grounds). No secrets; owner/repo are already in the request.
+    console.log(
+      JSON.stringify({
+        event: "agent-context-served",
+        owner: parsed.owner,
+        repo: parsed.repo,
+        status,
+        chunkCount: result.telemetry.chunkCount,
+        symbolsExpanded: result.telemetry.symbolsExpanded,
+        learningsInjected: result.telemetry.learningsInjected,
+        contextChars: result.context?.length ?? 0,
+      }),
+    )
+
     return json(
       {
         status,

@@ -16,6 +16,7 @@ import {
   handleGitLabConnectProject,
   handleGitLabConnectDisconnect,
 } from "./gitlab-connect-projects"
+import { handleGetGitLabRepositoryContext, handlePutGitLabRepositoryContext } from "./gitlab-repository-context"
 
 /** Paths whose cross-origin portal fetches need the CORS-with-credentials grant
  *  (used by index.ts to answer the OPTIONS preflight in one place). */
@@ -23,6 +24,7 @@ export function isGitLabConnectCorsPath(pathname: string): boolean {
   return (
     pathname === "/gitlab/connect/status" ||
     pathname === "/gitlab/connect/projects" ||
+    pathname === "/gitlab/connect/repository-context" ||
     pathname.startsWith("/gitlab/connect/projects/")
   )
 }
@@ -47,6 +49,14 @@ export async function tryHandleGitLabConnectRoute(
   // Portal fetches — CORS-wrapped.
   if (method === "GET" && pathname === "/gitlab/connect/status") {
     return withPortalCors(request, await handleGitLabConnectStatus(request, env, ctx), env)
+  }
+  if (pathname === "/gitlab/connect/repository-context") {
+    if (method === "GET") {
+      return withPortalCors(request, await handleGetGitLabRepositoryContext(request, env, ctx), env)
+    }
+    if (method === "PUT") {
+      return withPortalCors(request, await handlePutGitLabRepositoryContext(request, env, ctx), env)
+    }
   }
   if (pathname === "/gitlab/connect/projects") {
     if (method === "GET") {

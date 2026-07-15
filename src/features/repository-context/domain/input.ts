@@ -50,6 +50,16 @@ export function validateGitHubRepositoryContextInput(
   raw: unknown,
   detectsCredential: RepositoryContextCredentialDetector,
 ): RepositoryContextInputValidation {
+  return validateNumericRepositoryContextInput(raw, detectsCredential)
+}
+
+/** Provider-neutral browser contract for forges whose immutable repository id
+ * is a positive safe integer. Provider-qualified storage identity is resolved
+ * only after this shape/text validation. */
+export function validateNumericRepositoryContextInput(
+  raw: unknown,
+  detectsCredential: RepositoryContextCredentialDetector,
+): RepositoryContextInputValidation {
   if (!isRecord(raw) || !hasExactKeys(raw, ["revision", "repositories", "relationships", "conventions"])) {
     return invalid("invalid_shape")
   }

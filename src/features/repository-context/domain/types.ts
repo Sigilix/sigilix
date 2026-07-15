@@ -39,6 +39,14 @@ export interface ReplaceRepositoryContextArgs {
   conventions: string
   nowIso: string
   updatedBy: string
+  /** Optional strong-authority snapshot. When present, this replacement is
+   *  committed only if the exact active repository set still has this revision. */
+  authorityGuard?: RepositoryContextAuthorityGuard
+}
+
+export interface RepositoryContextAuthorityGuard {
+  revision: number
+  externalIds: string[]
 }
 
 export interface PurgeRepositoryContextArgs {
@@ -57,4 +65,5 @@ export type RepositoryContextReadResult =
 export type RepositoryContextWriteResult =
   | { status: "updated"; snapshot: RepositoryContextSnapshot }
   | { status: "conflict"; currentRevision: number }
+  | { status: "scope_changed" }
   | { status: "unavailable" }

@@ -28,6 +28,12 @@ import type {
 import { GitLabClient } from "@/src/shared/adapters/gitlab"
 import { verifyGitLabWebhook } from "@/src/shared/adapters/gitlab/gitlab-webhook-verify"
 import { decidePullRequestJobs } from "@/src/index-internals"
+import {
+  canonicalGitLabRepositoryAuthorityIdentity,
+  normalizeGitLabInstanceOrigin,
+  verifyActiveGitLabRepositoryAuthorityGeneration,
+} from "@/src/features/repository-context"
+import { getConnection, getProjectReviewToken } from "@/src/lib/gitlab-connect/gitlab-connect-store"
 
 /**
  * Map a GitLab merge-request `object_attributes.action` onto the GitHub
@@ -50,27 +56,61 @@ export function mapGitLabActionToGitHubAction(action: string): string | null {
   }
 }
 
-/** KV-key prefix (in `OPENCLAW_STATE`) for a per-project GitLab access token —
- *  the GitLab counterpart of GitHub's installation -> token resolution. Keyed by
- *  the numeric GitLab project id: `gitlab-project-token:<projectId>`. */
-const GITLAB_PROJECT_TOKEN_KV_PREFIX = "gitlab-project-token:"
-
 /**
  * Resolve the GitLab access token for a project (PR-3 per-tenant mapping). Reads
- * a per-project token from KV (`gitlab-project-token:<projectId>`) first — the
- * multi-tenant path, mirroring GitHub's per-installation token — and falls back
- * to the single global `SIGILIX_GITLAB_TOKEN` so an existing single-token deploy
- * keeps working. Returns `null` when neither is configured. `source` lets the
- * caller tell an explicitly-onboarded project (per-project) apart from the shared
- * global token (used by the allowlist gate: a per-project token IS onboarding).
+ * an authority-generation-qualified per-project token first in repository-
+ * context mode; legacy mode retains the unsuffixed KV contract. A connected
+ * project never falls through to the global token when its exact credential or
+ * issuer no longer matches. Unconnected legacy deployments still fall back to
+ * `SIGILIX_GITLAB_TOKEN`.
  */
 export async function resolveGitLabProjectToken(
   env: Env,
   projectId: number,
 ): Promise<{ token: string; source: "per-project" | "global" } | null> {
-  let perProject: string | null
   try {
-    perProject = await env.OPENCLAW_STATE.get(`${GITLAB_PROJECT_TOKEN_KV_PREFIX}${projectId}`)
+    if (env.OPENCLAW_REPOSITORY_CONTEXT_API === "on") {
+      const connection = await getConnection(env, projectId)
+      if (connection) {
+        const currentInstanceOrigin = normalizeGitLabInstanceOrigin(env.SIGILIX_GITLAB_BASE_URL)
+        if (
+          !currentInstanceOrigin ||
+          !connection.instanceOrigin ||
+          connection.instanceOrigin !== currentInstanceOrigin ||
+          !connection.contextOwnerUserId ||
+          !connection.authorityExternalId ||
+          !connection.authorityClaimToken
+        ) {
+          console.warn(JSON.stringify({ event: "gitlab-project-token-instance-mismatch", project_id: projectId }))
+          return null
+        }
+        const identity = await canonicalGitLabRepositoryAuthorityIdentity(currentInstanceOrigin, projectId)
+        if (!identity || identity.externalId !== connection.authorityExternalId || !env.SIGILIX_PLATFORM_DB) {
+          console.warn(JSON.stringify({ event: "gitlab-project-token-authority-mismatch", project_id: projectId }))
+          return null
+        }
+        const generation = await verifyActiveGitLabRepositoryAuthorityGeneration(env.SIGILIX_PLATFORM_DB, {
+          scopeId: connection.contextOwnerUserId,
+          externalId: connection.authorityExternalId,
+          claimToken: connection.authorityClaimToken,
+        })
+        if (generation.status === "unavailable") {
+          throw new Error("GitLab repository authority unavailable")
+        }
+        if (generation.status !== "active") {
+          console.warn(JSON.stringify({ event: "gitlab-project-token-generation-inactive", project_id: projectId }))
+          return null
+        }
+        const perProject = await getProjectReviewToken(env, projectId, connection.authorityClaimToken)
+        return perProject ? { token: perProject, source: "per-project" } : null
+      }
+      // An unsuffixed token is a legacy connection, not authority. Do not let
+      // it fall through to a different issuer's global credential.
+      if (await getProjectReviewToken(env, projectId)) return null
+    } else {
+      const perProject = await getProjectReviewToken(env, projectId)
+      if (perProject) return { token: perProject, source: "per-project" }
+    }
   } catch (err) {
     // FAIL CLOSED (Codex PR-3): a KV read blip must NOT silently degrade a
     // per-project-onboarded tenant to the global token (wrong credential) or to
@@ -84,9 +124,6 @@ export async function resolveGitLabProjectToken(
       }),
     )
     throw err instanceof Error ? err : new Error(String(err))
-  }
-  if (typeof perProject === "string" && perProject.length > 0) {
-    return { token: perProject, source: "per-project" }
   }
   const globalToken = env.SIGILIX_GITLAB_TOKEN
   if (typeof globalToken === "string" && globalToken.length > 0) {
@@ -128,12 +165,11 @@ export function isGitLabProjectAllowlisted(
 }
 
 /**
- * GitLab `ScmProvider`. Auth model (PR-3): a per-project GitLab access token
- * resolved KV-first (`gitlab-project-token:<projectId>`) with a fall-back to the
- * global `SIGILIX_GITLAB_TOKEN` (see `resolveGitLabProjectToken`), sent as the
- * `PRIVATE-TOKEN` header against REST v4 at `SIGILIX_GITLAB_BASE_URL` (default
- * `https://gitlab.com`; self-managed instances override it). The project gate
- * lives in `isGitLabProjectAllowlisted` + the consumer.
+ * GitLab `ScmProvider`. Auth model (PR-3): authority-backed connections resolve
+ * a generation-qualified per-project token only after D1 confirms that exact
+ * generation; legacy unconnected deployments can still use the global
+ * `SIGILIX_GITLAB_TOKEN`. The selected token is sent as `PRIVATE-TOKEN` against
+ * REST v4 at the matching `SIGILIX_GITLAB_BASE_URL`.
  */
 export class GitLabScmProvider implements ScmProvider {
   readonly kind = "gitlab" as const

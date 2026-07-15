@@ -8,6 +8,7 @@ import {
 import type {
   PurgeRepositoryContextArgs,
   ReplaceRepositoryContextArgs,
+  RepositoryContextAuthorityGuard,
   RepositoryContextAction,
   RepositoryContextProvider,
   RepositoryContextReadResult,
@@ -59,6 +60,7 @@ interface CanonicalMutation {
   updatedBy: string
   action: RepositoryContextAction
   deletedAt: string | null
+  authorityGuard: RepositoryContextAuthorityGuard | null
 }
 
 const SCOPE_COLUMNS =
@@ -121,13 +123,23 @@ async function writeRepositoryContext(
     ...relationshipInsertStatements(db, mutation, writeToken),
     commitGuardStatement(db, mutation, writeToken),
     ...snapshotReadStatements(db, mutation.provider, mutation.scopeId),
+    ...authorityReadStatements(db, mutation),
   ]
   try {
     const results = await db.batch(statements)
-    const readResults = results.slice(-3)
+    const authorityResultCount = mutation.authorityGuard ? 2 : 0
+    const readEnd = authorityResultCount === 0 ? results.length : results.length - authorityResultCount
+    const readResults = results.slice(readEnd - 3, readEnd)
     if (changes(results[0]) === 0) {
+      if (mutation.authorityGuard) {
+        const authorityResults = results.slice(-authorityResultCount)
+        if (!authorityMatches(authorityResults, mutation.authorityGuard)) return { status: "scope_changed" }
+      }
       const currentRevision = decodeCurrentRevision(readResults[0])
       return currentRevision === null ? { status: "unavailable" } : { status: "conflict", currentRevision }
+    }
+    if (mutation.authorityGuard && !authorityMatches(results.slice(-authorityResultCount), mutation.authorityGuard)) {
+      return { status: "unavailable" }
     }
     const read = await decodeReadBatch(readResults)
     if (
@@ -152,6 +164,8 @@ function scopeCasStatement(
   writeToken: string,
   auditId: string,
 ): D1PreparedStatement {
+  const authorityPredicate = authorityPredicateSql(mutation.authorityGuard)
+  const authorityBindings = mutation.authorityGuard ? authorityPredicateBindings(mutation, mutation.authorityGuard) : []
   return db
     .prepare(
       `INSERT INTO repository_context_scope
@@ -159,10 +173,10 @@ function scopeCasStatement(
          relationship_count, write_token, created_at, updated_at, updated_by,
          last_action, last_audit_id, deleted_at)
        SELECT ?, ?, ?, ${SNAPSHOT_FORMAT}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-       WHERE ? = 0 OR EXISTS (
+       WHERE (? = 0 OR EXISTS (
          SELECT 1 FROM repository_context_scope
           WHERE provider = ? AND scope_id = ? AND revision = ?
-       )
+       ))${authorityPredicate}
        ON CONFLICT(provider, scope_id) DO UPDATE SET
          revision = excluded.revision,
          snapshot_format = excluded.snapshot_format,
@@ -176,7 +190,7 @@ function scopeCasStatement(
          last_action = excluded.last_action,
          last_audit_id = excluded.last_audit_id,
          deleted_at = excluded.deleted_at
-       WHERE repository_context_scope.revision = ?`,
+       WHERE repository_context_scope.revision = ?${authorityPredicate}`,
     )
     .bind(
       mutation.provider,
@@ -197,8 +211,45 @@ function scopeCasStatement(
       mutation.provider,
       mutation.scopeId,
       mutation.expectedRevision,
+      ...authorityBindings,
       mutation.expectedRevision,
+      ...authorityBindings,
     )
+}
+
+function authorityPredicateSql(guard: RepositoryContextAuthorityGuard | null): string {
+  if (!guard) return ""
+  return ` AND COALESCE((
+      SELECT authority_scope.revision FROM repository_context_authority_scope AS authority_scope
+       WHERE authority_scope.provider = ? AND authority_scope.scope_id = ?
+    ), 0) = ?
+    AND (
+      SELECT COUNT(*) FROM repository_context_authority_repository AS authority_count
+       WHERE authority_count.provider = ? AND authority_count.scope_id = ? AND authority_count.state = 'active'
+    ) = ?
+    AND NOT EXISTS (
+      SELECT 1 FROM repository_context_authority_repository AS authority_repository
+       WHERE authority_repository.provider = ? AND authority_repository.scope_id = ?
+         AND authority_repository.state = 'active'
+         AND NOT EXISTS (
+           SELECT 1 FROM json_each(?) AS expected_authority
+            WHERE CAST(expected_authority.value AS TEXT) = authority_repository.external_id
+         )
+    )`
+}
+
+function authorityPredicateBindings(mutation: CanonicalMutation, guard: RepositoryContextAuthorityGuard): unknown[] {
+  return [
+    mutation.provider,
+    mutation.scopeId,
+    guard.revision,
+    mutation.provider,
+    mutation.scopeId,
+    guard.externalIds.length,
+    mutation.provider,
+    mutation.scopeId,
+    JSON.stringify(guard.externalIds),
+  ]
 }
 
 function deleteRelationshipsStatement(
@@ -332,6 +383,37 @@ function snapshotReadStatements(
   ]
 }
 
+function authorityReadStatements(db: D1Database, mutation: CanonicalMutation): D1PreparedStatement[] {
+  if (!mutation.authorityGuard) return []
+  return [
+    db
+      .prepare(
+        "SELECT revision FROM repository_context_authority_scope" + " WHERE provider = ? AND scope_id = ? LIMIT 1",
+      )
+      .bind(mutation.provider, mutation.scopeId),
+    db
+      .prepare(
+        "SELECT external_id FROM repository_context_authority_repository" +
+          " WHERE provider = ? AND scope_id = ? AND state = 'active' ORDER BY external_id",
+      )
+      .bind(mutation.provider, mutation.scopeId),
+  ]
+}
+
+function authorityMatches(results: readonly D1Result[], guard: RepositoryContextAuthorityGuard): boolean {
+  if (results.length !== 2) return false
+  const scopeRows = rows<{ revision: number }>(results[0])
+  const repositoryRows = rows<{ external_id: string }>(results[1])
+  if (!scopeRows || scopeRows.length > 1 || !repositoryRows) return false
+  const revision = scopeRows.length === 0 ? 0 : scopeRows[0]?.revision
+  if (revision !== guard.revision) return false
+  const expected = [...guard.externalIds].sort(compareCodepoints)
+  return (
+    repositoryRows.length === expected.length &&
+    repositoryRows.every((row, index) => row.external_id === expected[index])
+  )
+}
+
 async function decodeReadBatch(results: readonly D1Result[]): Promise<RepositoryContextReadResult> {
   if (results.length !== 3) return { status: "unavailable" }
   const scopeRows = rows<ScopeRow>(results[0])
@@ -463,6 +545,9 @@ function canonicalMutation(
     repository.position = position
   })
 
+  const authorityGuard = canonicalAuthorityGuard(args.provider, args.authorityGuard, typedRepositories)
+  if (args.authorityGuard !== undefined && authorityGuard === null) return null
+
   const relationships = args.relationships
     .map((relationship) => canonicalRelationship(args.provider, relationship, ids))
     .sort((a, b) => compareRelationships(args.provider, a, b))
@@ -491,7 +576,35 @@ function canonicalMutation(
     updatedBy: args.updatedBy,
     action,
     deletedAt,
+    authorityGuard,
   }
+}
+
+function canonicalAuthorityGuard(
+  provider: RepositoryContextProvider,
+  guard: RepositoryContextAuthorityGuard | undefined,
+  repositories: readonly RepositoryContextRepository[],
+): RepositoryContextAuthorityGuard | null {
+  if (guard === undefined) return null
+  if (
+    !Number.isSafeInteger(guard.revision) ||
+    guard.revision < 0 ||
+    guard.revision >= Number.MAX_SAFE_INTEGER ||
+    !Array.isArray(guard.externalIds) ||
+    guard.externalIds.length > MAX_REPOSITORY_CONTEXT_REPOSITORIES
+  ) {
+    return null
+  }
+  const externalIds = [...guard.externalIds].sort((left, right) => compareExternalIds(provider, left, right))
+  if (
+    externalIds.some((externalId) => !validExternalId(provider, externalId)) ||
+    new Set(externalIds).size !== externalIds.length ||
+    externalIds.length !== repositories.length ||
+    repositories.some((repository, index) => repository.externalId !== externalIds[index])
+  ) {
+    return null
+  }
+  return { revision: guard.revision, externalIds }
 }
 
 function canonicalRepository(

@@ -3,6 +3,7 @@
 // delegates to the SAME pure `decidePullRequestJobs`, so the trigger decision is
 // byte-identical to GitHub's (notably `reopen` -> overview-only, no re-review).
 
+import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import {
   GitLabScmProvider,
@@ -12,10 +13,23 @@ import {
 } from "@/src/index-gitlab-scm-provider"
 import type { ScmReviewEventInput } from "@/src/lib/ensemble/ports"
 import type { Env } from "@/src/shared/types/env"
+import { activateGitLabRepositoryAuthority, claimGitLabRepositoryAuthority } from "@/src/features/repository-context"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+
+const AUTHORITY_MIGRATION = readFileSync(
+  new URL("../migrations/0026_create_repository_context_authority.sql", import.meta.url),
+  "utf8",
+)
 
 function envWith(over: Partial<Env> = {}, kv: Record<string, string> = {}): Env {
   return {
-    OPENCLAW_STATE: { get: async (key: string) => kv[key] ?? null } as unknown as Env["OPENCLAW_STATE"],
+    OPENCLAW_STATE: {
+      get: async (key: string, type?: "json") => {
+        const value = kv[key]
+        if (value === undefined) return null
+        return type === "json" ? JSON.parse(value) : value
+      },
+    } as unknown as Env["OPENCLAW_STATE"],
     ...over,
   } as unknown as Env
 }
@@ -95,6 +109,85 @@ describe("resolveGitLabProjectToken (per-tenant token: KV-first, global fall-bac
 
   it("returns null when neither is configured", async () => {
     await expect(resolveGitLabProjectToken(envWith(), 42)).resolves.toBeNull()
+  })
+
+  it("does not send a connected project's token to a newly configured GitLab instance", async () => {
+    const env = envWith(
+      {
+        OPENCLAW_REPOSITORY_CONTEXT_API: "on",
+        SIGILIX_GITLAB_BASE_URL: "https://gitlab-b.example",
+        SIGILIX_GITLAB_TOKEN: "global",
+      },
+      {
+        "gitlab-project-token:42": "instance-a-token",
+        "gitlab-connection:42": JSON.stringify({
+          userId: "user-a",
+          projectPath: "grp/api",
+          name: "api",
+          hookId: 9,
+          connectedAt: "t",
+          contextOwnerUserId: "user-a",
+          instanceOrigin: "https://gitlab-a.example",
+          authorityExternalId: "gl:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          authorityClaimToken: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        }),
+      },
+    )
+    await expect(resolveGitLabProjectToken(env, 42)).resolves.toBeNull()
+  })
+
+  it("does not resolve credentials from a generation that lost D1 authority", async () => {
+    const db = makeD1()
+    await db.exec(AUTHORITY_MIGRATION)
+    const stale = await claimGitLabRepositoryAuthority(db, {
+      scopeId: "user-a",
+      instanceOrigin: "https://gitlab.com",
+      sourceId: 42,
+      fullName: "grp/api",
+    })
+    if (stale.status !== "claimed") throw new Error("expected stale claim")
+    await db
+      .prepare(
+        "UPDATE repository_context_authority_repository" +
+          " SET claim_expires_at = '2000-01-01T00:00:00.000Z' WHERE claim_token = ?",
+      )
+      .bind(stale.claimToken)
+      .run()
+    const replacement = await claimGitLabRepositoryAuthority(db, {
+      scopeId: "user-b",
+      instanceOrigin: "https://gitlab.com",
+      sourceId: 42,
+      fullName: "grp/api",
+    })
+    if (replacement.status !== "claimed") throw new Error("expected replacement claim")
+    await activateGitLabRepositoryAuthority(db, {
+      scopeId: "user-b",
+      externalId: replacement.repository.externalId,
+      claimToken: replacement.claimToken,
+    })
+
+    const env = envWith(
+      {
+        OPENCLAW_REPOSITORY_CONTEXT_API: "on",
+        SIGILIX_GITLAB_BASE_URL: "https://gitlab.com",
+        SIGILIX_PLATFORM_DB: db,
+      },
+      {
+        [`gitlab-project-token:42:${stale.claimToken}`]: "stale-token",
+        "gitlab-connection:42": JSON.stringify({
+          userId: "user-a",
+          projectPath: "grp/api",
+          name: "api",
+          hookId: 9,
+          connectedAt: "t",
+          contextOwnerUserId: "user-a",
+          instanceOrigin: "https://gitlab.com",
+          authorityExternalId: stale.repository.externalId,
+          authorityClaimToken: stale.claimToken,
+        }),
+      },
+    )
+    await expect(resolveGitLabProjectToken(env, 42)).resolves.toBeNull()
   })
 
   it("FAILS CLOSED (rejects) on a KV read error instead of silently using the global token", async () => {

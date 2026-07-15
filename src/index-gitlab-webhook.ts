@@ -23,7 +23,12 @@
 import type { Env } from "@/src/shared/types/env"
 import type { ScmReviewEventInput } from "@/src/lib/ensemble/ports"
 import { selectScmProvider } from "@/src/index-scm-provider"
-import { getProjectWebhookSecret } from "@/src/lib/gitlab-connect"
+import { getConnection, getProjectWebhookSecret } from "@/src/lib/gitlab-connect/gitlab-connect-store"
+import {
+  canonicalGitLabRepositoryAuthorityIdentity,
+  normalizeGitLabInstanceOrigin,
+  verifyActiveGitLabRepositoryAuthorityGeneration,
+} from "@/src/features/repository-context"
 
 /** Cap the pre-auth body parse (Codex sign-off #2). GitLab MR webhook payloads
  *  carry only MR metadata + commit list — comfortably under 1 MB. An oversized
@@ -86,17 +91,69 @@ export async function handleGitLabWebhook(request: Request, env: Env, _ctx: Exec
   // so the existing single-secret deploy behaves EXACTLY as before.
   const projectIdForSecret = payload?.project?.id
   let secret: string | undefined
+  let rejectStoredProject = false
   // The per-project secret lives in KV. Guard the binding + a read blip: a
   // missing OPENCLAW_STATE or a transient KV error must NEVER drop the global
   // secret path (fail-safe — a project connected via the global secret still
   // verifies). A connect-flow project always has OPENCLAW_STATE bound in prod.
   if (typeof projectIdForSecret === "number" && env.OPENCLAW_STATE) {
     try {
-      secret = (await getProjectWebhookSecret(env, projectIdForSecret)) ?? undefined
+      if (env.OPENCLAW_REPOSITORY_CONTEXT_API === "on") {
+        const connection = await getConnection(env, projectIdForSecret)
+        const currentInstanceOrigin = normalizeGitLabInstanceOrigin(env.SIGILIX_GITLAB_BASE_URL)
+        if (connection) {
+          if (
+            !connection.instanceOrigin ||
+            !currentInstanceOrigin ||
+            connection.instanceOrigin !== currentInstanceOrigin ||
+            !connection.contextOwnerUserId ||
+            !connection.authorityExternalId ||
+            !connection.authorityClaimToken
+          ) {
+            rejectStoredProject = true
+          } else {
+            const identity = await canonicalGitLabRepositoryAuthorityIdentity(currentInstanceOrigin, projectIdForSecret)
+            if (!identity || identity.externalId !== connection.authorityExternalId || !env.SIGILIX_PLATFORM_DB) {
+              rejectStoredProject = true
+            } else {
+              const generation = await verifyActiveGitLabRepositoryAuthorityGeneration(env.SIGILIX_PLATFORM_DB, {
+                scopeId: connection.contextOwnerUserId,
+                externalId: connection.authorityExternalId,
+                claimToken: connection.authorityClaimToken,
+              })
+              if (generation.status === "unavailable") {
+                return new Response("gitlab not configured\n", { status: 503 })
+              }
+              if (generation.status !== "active") {
+                rejectStoredProject = true
+              } else {
+                secret =
+                  (await getProjectWebhookSecret(env, projectIdForSecret, connection.authorityClaimToken)) ?? undefined
+                if (!secret) rejectStoredProject = true
+              }
+            }
+          }
+        } else {
+          // A legacy per-project secret is not strong authority. Refuse it in
+          // authority mode rather than falling through to another instance's
+          // global secret.
+          secret = (await getProjectWebhookSecret(env, projectIdForSecret)) ?? undefined
+          if (secret) {
+            rejectStoredProject = true
+            secret = undefined
+          }
+        }
+      } else {
+        secret = (await getProjectWebhookSecret(env, projectIdForSecret)) ?? undefined
+      }
     } catch {
+      if (env.OPENCLAW_REPOSITORY_CONTEXT_API === "on") {
+        return new Response("gitlab not configured\n", { status: 503 })
+      }
       secret = undefined
     }
   }
+  if (rejectStoredProject) return new Response("invalid token\n", { status: 401 })
   if (!secret) secret = env.SIGILIX_GITLAB_WEBHOOK_SECRET
   if (!secret) {
     // Unconfigured deploy — no webhook secret to verify against (neither a

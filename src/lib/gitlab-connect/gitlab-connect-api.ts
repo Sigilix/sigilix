@@ -176,8 +176,12 @@ export async function fetchProject(
   baseUrl: string | undefined,
   token: string,
   projectId: number,
+  options?: { signal?: AbortSignal },
 ): Promise<GitLabProject | null> {
-  const res = await fetch(`${apiBase(baseUrl)}/projects/${projectId}`, { headers: bearerHeaders(token) })
+  const res = await fetch(`${apiBase(baseUrl)}/projects/${projectId}`, {
+    headers: bearerHeaders(token),
+    ...(options?.signal ? { signal: options.signal } : {}),
+  })
   if (res.status === 403 || res.status === 404) return null
   if (!res.ok) throw new Error(`gitlab GET /projects/${projectId} failed: HTTP ${res.status}`)
   return mapProject((await res.json()) as RawGitLabProject)
@@ -198,6 +202,7 @@ export async function createMergeRequestHook(args: {
   projectId: number
   webhookUrl: string
   webhookSecret: string
+  signal?: AbortSignal
 }): Promise<GitLabHook> {
   const res = await fetch(`${apiBase(args.baseUrl)}/projects/${args.projectId}/hooks`, {
     method: "POST",
@@ -209,6 +214,7 @@ export async function createMergeRequestHook(args: {
       push_events: false,
       enable_ssl_verification: true,
     }),
+    ...(args.signal ? { signal: args.signal } : {}),
   })
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -306,6 +312,7 @@ export async function createProjectAccessToken(args: {
   projectId: number
   name: string
   expiresAtIso: string
+  signal?: AbortSignal
 }): Promise<GitLabProjectAccessToken> {
   const res = await fetch(`${apiBase(args.baseUrl)}/projects/${args.projectId}/access_tokens`, {
     method: "POST",
@@ -316,6 +323,7 @@ export async function createProjectAccessToken(args: {
       access_level: MAINTAINER_ACCESS_LEVEL,
       expires_at: args.expiresAtIso,
     }),
+    ...(args.signal ? { signal: args.signal } : {}),
   })
   if (!res.ok) {
     const text = await res.text().catch(() => "")

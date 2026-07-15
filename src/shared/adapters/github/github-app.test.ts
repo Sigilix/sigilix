@@ -13,6 +13,7 @@
 
 import { describe, expect, it, vi, afterEach } from "vitest"
 import {
+  getAppInstallation,
   getInstallationToken,
   signGitHubAppJwt,
   resolveRepoInstallationId,
@@ -300,6 +301,72 @@ describe("listAppInstallations (with account id/login/type)", () => {
   })
 })
 
+describe("getAppInstallation", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("binds the requested installation id to its validated immutable account", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://api.github.com/app/installations/42")
+      expect(new Headers(init?.headers).get("authorization")).toMatch(/^Bearer /)
+      return new Response(
+        JSON.stringify({
+          id: 42,
+          account: { id: 9001, login: "Sigilix", type: "Organization" },
+        }),
+        { status: 200 },
+      )
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(getAppInstallation("123", PKCS8_PEM, 42)).resolves.toEqual({
+      id: 42,
+      accountId: 9001,
+      accountLogin: "Sigilix",
+      accountType: "Organization",
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("returns null only when the exact installation does not exist for the App", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("not found", { status: 404 })),
+    )
+    await expect(getAppInstallation("123", PKCS8_PEM, 42)).resolves.toBeNull()
+  })
+
+  it.each([
+    ["provider failure", 503, { message: "unavailable" }],
+    ["mismatched installation id", 200, { id: 43, account: { id: 9001, login: "Sigilix", type: "Organization" } }],
+    [
+      "unsafe installation id",
+      200,
+      { id: Number.MAX_SAFE_INTEGER + 1, account: { id: 9001, login: "Sigilix", type: "Organization" } },
+    ],
+    ["missing immutable account id", 200, { id: 42, account: { login: "Sigilix", type: "Organization" } }],
+    [
+      "unsafe immutable account id",
+      200,
+      { id: 42, account: { id: Number.MAX_SAFE_INTEGER + 1, login: "Sigilix", type: "Organization" } },
+    ],
+    ["empty account login", 200, { id: 42, account: { id: 9001, login: "", type: "Organization" } }],
+    ["unknown account type", 200, { id: 42, account: { id: 9001, login: "Sigilix", type: "Bot" } }],
+  ])("rejects %s instead of returning an untrusted installation", async (_case, status, body) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify(body), { status })),
+    )
+    await expect(getAppInstallation("123", PKCS8_PEM, 42)).rejects.toThrow()
+  })
+
+  it("rejects an invalid requested installation id before calling GitHub", async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+    await expect(getAppInstallation("123", PKCS8_PEM, Number.MAX_SAFE_INTEGER + 1)).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
 describe("listOrgMemberIds", () => {
   afterEach(() => vi.unstubAllGlobals())
   const kv = {
@@ -400,6 +467,102 @@ describe("listInstallationRepoFullNames", () => {
     const r = await listInstallationRepoFullNames(kv, "123", PKCS8_PEM, 999)
     expect(r.complete).toBe(false)
   })
+
+  it("non-array repositories in a 200 response → complete:false", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        return new Response(JSON.stringify({ repositories: { full_name: "o/a" } }), { status: 200 })
+      }),
+    )
+
+    expect(await listInstallationRepoFullNames(kv, "123", PKCS8_PEM, 999)).toEqual({
+      items: [],
+      complete: false,
+    })
+  })
+
+  it("invalid repository rows make an otherwise successful page incomplete", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        return new Response(
+          JSON.stringify({ repositories: [{ full_name: "o/valid" }, { full_name: "" }, { name: "missing" }] }),
+          { status: 200 },
+        )
+      }),
+    )
+
+    expect(await listInstallationRepoFullNames(kv, "123", PKCS8_PEM, 999)).toEqual({
+      items: ["o/valid"],
+      complete: false,
+    })
+  })
+
+  it("preserves prior repository pages when a later row is invalid", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        const page = new URL(url).searchParams.get("page")
+        if (page === "1") {
+          return new Response(
+            JSON.stringify({
+              repositories: Array.from({ length: 100 }, (_, index) => ({ full_name: `org/repo-${index + 1}` })),
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ repositories: [{ full_name: "org/repo-101" }, { name: "invalid" }] }), {
+          status: 200,
+        })
+      }),
+    )
+
+    const r = await listInstallationRepoFullNames(kv, "123", PKCS8_PEM, 999)
+    expect(r.complete).toBe(false)
+    expect(r.items).toHaveLength(101)
+  })
+
+  it("invalid JSON in a 200 repositories response → complete:false", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        return new Response("{", { status: 200 })
+      }),
+    )
+
+    expect(await listInstallationRepoFullNames(kv, "123", PKCS8_PEM, 999)).toEqual({
+      items: [],
+      complete: false,
+    })
+  })
+
+  it("keeps valid full-page repository pagination complete", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        const page = new URL(url).searchParams.get("page")
+        if (page === "1") {
+          return new Response(
+            JSON.stringify({
+              repositories: Array.from({ length: 100 }, (_, index) => ({ full_name: `org/repo-${index + 1}` })),
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify({ repositories: [{ full_name: "org/repo-101" }] }), { status: 200 })
+      }),
+    )
+
+    const r = await listInstallationRepoFullNames(kv, "123", PKCS8_PEM, 999)
+    expect(r.complete).toBe(true)
+    expect(r.items).toHaveLength(101)
+  })
 })
 
 // sig-org-members — the roster listings the org page merges in.
@@ -448,7 +611,7 @@ describe("listOrgMembers", () => {
     expect(authSchemes[0]).toBe("token tkn") // installation token → `token`, not `Bearer`
   })
 
-  it("excludes rows whose immutable ID is missing or not a positive safe integer", async () => {
+  it("keeps valid rows but marks invalid member rows incomplete", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
@@ -475,8 +638,86 @@ describe("listOrgMembers", () => {
     const r = await listOrgMembers(rosterKv, "123", PKCS8_PEM, 999, "acme")
     expect(r).toEqual({
       items: [{ githubUserId: "201", login: "valid", avatarUrl: "https://avatars/valid" }],
-      complete: true,
+      complete: false,
     })
+  })
+
+  it("preserves prior member pages when a later row is invalid", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        const page = new URL(url).searchParams.get("page")
+        if (page === "1") {
+          return new Response(
+            JSON.stringify(
+              Array.from({ length: 100 }, (_, index) => ({ id: index + 1, login: `member-${index + 1}` })),
+            ),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify([{ id: 101, login: "member-101" }, { login: "invalid" }]), {
+          status: 200,
+        })
+      }),
+    )
+
+    const r = await listOrgMembers(rosterKv, "123", PKCS8_PEM, 999, "acme")
+    expect(r.complete).toBe(false)
+    expect(r.items).toHaveLength(101)
+  })
+
+  it("non-array members in a 200 response → complete:false", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        return new Response(JSON.stringify({ id: 201, login: "not-an-array" }), { status: 200 })
+      }),
+    )
+
+    expect(await listOrgMembers(rosterKv, "123", PKCS8_PEM, 999, "acme")).toEqual({
+      items: [],
+      complete: false,
+    })
+  })
+
+  it("invalid JSON in a 200 members response → complete:false", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        return new Response("{", { status: 200 })
+      }),
+    )
+
+    expect(await listOrgMembers(rosterKv, "123", PKCS8_PEM, 999, "acme")).toEqual({
+      items: [],
+      complete: false,
+    })
+  })
+
+  it("keeps valid full-page pagination complete", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        const page = new URL(url).searchParams.get("page")
+        if (page === "1") {
+          return new Response(
+            JSON.stringify(
+              Array.from({ length: 100 }, (_, index) => ({ id: index + 1, login: `member-${index + 1}` })),
+            ),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify([{ id: 101, login: "member-101" }]), { status: 200 })
+      }),
+    )
+
+    const r = await listOrgMembers(rosterKv, "123", PKCS8_PEM, 999, "acme")
+    expect(r.complete).toBe(true)
+    expect(r.items).toHaveLength(101)
   })
 
   it("403 (App lacks Members permission) → empty + complete:false (fail-soft, never throws)", async () => {
@@ -494,6 +735,29 @@ describe("listOrgMembers", () => {
 
 describe("listInstallationCollaborators", () => {
   afterEach(() => vi.unstubAllGlobals())
+
+  it("does not traverse repositories when repository enumeration is malformed", async () => {
+    const collaboratorRequests: string[] = []
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        if (url.includes("/installation/repositories")) {
+          return new Response(JSON.stringify({ repositories: [{ full_name: "o/a" }, { name: "missing-full-name" }] }), {
+            status: 200,
+          })
+        }
+        collaboratorRequests.push(url)
+        return new Response(JSON.stringify([{ id: 301, login: "must-not-be-read" }]), { status: 200 })
+      }),
+    )
+
+    expect(await listInstallationCollaborators(rosterKv, "123", PKCS8_PEM, 999)).toEqual({
+      items: [],
+      complete: false,
+    })
+    expect(collaboratorRequests).toEqual([])
+  })
 
   it("dedupes renamed collaborators by immutable ID and keeps distinct IDs with the same login", async () => {
     vi.stubGlobal(
@@ -519,14 +783,12 @@ describe("listInstallationCollaborators", () => {
         if (url.includes("/repos/o/b/collaborators")) {
           const p = new URL(url).searchParams.get("page")
           // Same immutable account after a rename + a distinct account that
-          // currently has the same display login. Invalid IDs are excluded.
+          // currently has the same display login.
           return p === "1"
             ? new Response(
                 JSON.stringify([
                   { id: 301, login: "dana-renamed", avatar_url: "https://avatars/dana2" },
                   { id: 302, login: "Dana", avatar_url: "https://avatars/other-dana" },
-                  { login: "missing-id" },
-                  { id: "303", login: "string-id" },
                 ]),
                 { status: 200 },
               )
@@ -542,6 +804,113 @@ describe("listInstallationCollaborators", () => {
       { githubUserId: "301", login: "Dana", avatarUrl: "https://avatars/dana" },
       { githubUserId: "302", login: "Dana", avatarUrl: "https://avatars/other-dana" },
     ])
+  })
+
+  it("keeps valid rows but marks invalid collaborator rows incomplete", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        if (url.includes("/installation/repositories")) {
+          return new Response(JSON.stringify({ repositories: [{ full_name: "o/a" }] }), { status: 200 })
+        }
+        return new Response(
+          JSON.stringify([{ id: 303, login: "valid", avatar_url: "https://avatars/valid" }, { login: "missing-id" }]),
+          { status: 200 },
+        )
+      }),
+    )
+
+    expect(await listInstallationCollaborators(rosterKv, "123", PKCS8_PEM, 999)).toEqual({
+      items: [{ githubUserId: "303", login: "valid", avatarUrl: "https://avatars/valid" }],
+      complete: false,
+    })
+  })
+
+  it("preserves prior repositories when a later collaborator row is invalid", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        if (url.includes("/installation/repositories")) {
+          return new Response(JSON.stringify({ repositories: [{ full_name: "o/a" }, { full_name: "o/b" }] }), {
+            status: 200,
+          })
+        }
+        if (url.includes("/repos/o/a/collaborators")) {
+          return new Response(JSON.stringify([{ id: 301, login: "first-repo" }]), { status: 200 })
+        }
+        return new Response(JSON.stringify([{ id: 302, login: "second-repo" }, { login: "invalid" }]), {
+          status: 200,
+        })
+      }),
+    )
+
+    const r = await listInstallationCollaborators(rosterKv, "123", PKCS8_PEM, 999)
+    expect(r.complete).toBe(false)
+    expect(r.items.map((item) => item.githubUserId)).toEqual(["301", "302"])
+  })
+
+  it("non-array collaborators in a 200 response → complete:false", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        if (url.includes("/installation/repositories")) {
+          return new Response(JSON.stringify({ repositories: [{ full_name: "o/a" }] }), { status: 200 })
+        }
+        return new Response(JSON.stringify({ id: 303, login: "not-an-array" }), { status: 200 })
+      }),
+    )
+
+    expect(await listInstallationCollaborators(rosterKv, "123", PKCS8_PEM, 999)).toEqual({
+      items: [],
+      complete: false,
+    })
+  })
+
+  it("invalid JSON in a 200 collaborators response → complete:false", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        if (url.includes("/installation/repositories")) {
+          return new Response(JSON.stringify({ repositories: [{ full_name: "o/a" }] }), { status: 200 })
+        }
+        return new Response("{", { status: 200 })
+      }),
+    )
+
+    expect(await listInstallationCollaborators(rosterKv, "123", PKCS8_PEM, 999)).toEqual({
+      items: [],
+      complete: false,
+    })
+  })
+
+  it("keeps valid full-page collaborator pagination complete", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        if (url.includes("/installation/repositories")) {
+          return new Response(JSON.stringify({ repositories: [{ full_name: "o/a" }] }), { status: 200 })
+        }
+        const page = new URL(url).searchParams.get("page")
+        if (page === "1") {
+          return new Response(
+            JSON.stringify(
+              Array.from({ length: 100 }, (_, index) => ({ id: index + 1, login: `collaborator-${index + 1}` })),
+            ),
+            { status: 200 },
+          )
+        }
+        return new Response(JSON.stringify([{ id: 101, login: "collaborator-101" }]), { status: 200 })
+      }),
+    )
+
+    const r = await listInstallationCollaborators(rosterKv, "123", PKCS8_PEM, 999)
+    expect(r.complete).toBe(true)
+    expect(r.items).toHaveLength(101)
   })
 
   it("a collaborators page error marks complete:false but keeps what it got", async () => {

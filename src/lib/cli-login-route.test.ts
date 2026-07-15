@@ -775,6 +775,7 @@ describe("handleCliExchangeRoute (POST /v1/cli/exchange)", () => {
         githubUserId: "111",
         nowIso: "2026-07-13T01:00:00.000Z",
         updatedBy: "test:admin",
+        rosterSnapshot: { memberIds: ["111"], sqlTokenSet: "|111|" },
       }),
     ).resolves.toEqual({ status: "removed" })
 
@@ -856,6 +857,7 @@ describe("handleCliExchangeRoute (POST /v1/cli/exchange)", () => {
         githubUserId: "111",
         nowIso: "2026-07-13T02:00:00.000Z",
         updatedBy: "test:admin",
+        rosterSnapshot: { memberIds: ["111"], sqlTokenSet: "|111|" },
       }),
     ).resolves.toEqual({ status: "removed" })
     await expect(

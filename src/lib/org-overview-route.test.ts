@@ -19,7 +19,8 @@ const rosterMock = vi.fn<(...a: unknown[]) => Promise<RosterResult>>(async () =>
   complete: true,
   source: "none",
 }))
-vi.mock("@/src/lib/org-members-roster", () => ({
+vi.mock("@/src/lib/org-members-roster", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/src/lib/org-members-roster")>()),
   fetchInstallationRoster: (...a: unknown[]) => rosterMock(...a),
 }))
 
@@ -85,12 +86,17 @@ async function seedWorkspaceAccess(
   role: "admin" | "member" = "member",
 ): Promise<void> {
   const nowIso = "2026-07-13T00:00:00.000Z"
+  const memberIds = [...new Set(["111", "222", "333", "444", "555", githubUserId])].sort(
+    (left, right) => left.length - right.length || left.localeCompare(right),
+  )
+  const rosterSnapshot = { memberIds, sqlTokenSet: `|${memberIds.join("|")}|` }
   if (role === "admin") {
     const result = await bootstrapFirstOrgAdmin(db, {
       installationId,
       githubUserId,
       nowIso,
       updatedBy: "test",
+      rosterSnapshot,
     })
     if (result === "bootstrapped") return
   }
@@ -102,6 +108,7 @@ async function seedWorkspaceAccess(
       role,
       nowIso: "2026-07-13T00:00:01.000Z",
       updatedBy: "test",
+      rosterSnapshot,
     })
     if (result.status !== "updated") throw new Error(`failed to seed admin: ${result.status}`)
   }
@@ -758,9 +765,9 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
     const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
 
     const res = await worker.fetch(reqWithSession("sess-1"), env, ctx)
-    expect(res.status).toBe(403)
-    expect(await res.json()).toEqual({ error: "forbidden" })
-    expect(rosterMock).not.toHaveBeenCalled()
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({ error: "org_access_unavailable" })
+    expect(rosterMock).toHaveBeenCalledOnce()
   })
 
   it("managed mode returns 503 when stored authorization is unavailable instead of an empty 200", async () => {

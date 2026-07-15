@@ -476,6 +476,7 @@ describe("CLI installation picker through worker.fetch", () => {
         githubUserId: "111",
         nowIso: "2026-07-13T01:00:00.000Z",
         updatedBy: "test:admin",
+        rosterSnapshot: { memberIds: ["111"], sqlTokenSet: "|111|" },
       }),
     ).resolves.toEqual({ status: "removed" })
 

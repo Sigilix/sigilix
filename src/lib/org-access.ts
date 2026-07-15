@@ -12,6 +12,7 @@
 
 import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
 import { getValidGithubToken } from "@/src/lib/github-user-token"
+import { createCompleteInstallationRosterSnapshot, fetchInstallationRoster } from "@/src/lib/org-members-roster"
 import { resolveExactUserInstallationScope, type UserRole } from "@/src/lib/resolve-user-role"
 import {
   bootstrapFirstOrgAdmin,
@@ -32,6 +33,7 @@ export type OrgAccessResult =
       installationId: number
       githubUserId: string
       login: string
+      account: { login: string; type: string }
       role: UserRole
     }
   | { ok: false; response: Response }
@@ -93,6 +95,7 @@ function success(args: {
   accessToken: string
   installationId: number
   githubUserId: string
+  account: { login: string; type: string }
   role: UserRole
 }): OrgAccessResult {
   return {
@@ -102,6 +105,7 @@ function success(args: {
     installationId: args.installationId,
     githubUserId: args.githubUserId,
     login: args.session.record.login,
+    account: args.account,
     role: args.role,
   }
 }
@@ -125,6 +129,7 @@ export async function resolveOrgRolePolicyForVisibleInstallation(
     githubUserId: string | null
     liveRole: UserRole
     requiredRole: OrgAccessRequiredRole
+    account: { login: string; type: string }
   },
 ): Promise<OrgRolePolicyResult> {
   if (!Number.isSafeInteger(args.installationId) || args.installationId <= 0) {
@@ -180,7 +185,25 @@ export async function resolveOrgRolePolicyForVisibleInstallation(
   if (storedState.kind !== "active" || storedState.access.role !== "admin") {
     if (args.liveRole === "admin") {
       try {
-        const activeAdminExists = await hasActiveOrgAdmin(db, args.installationId)
+        if (args.account.login === "" || (args.account.type !== "Organization" && args.account.type !== "User")) {
+          throw new Error("invalid installation account")
+        }
+        const roster = await fetchInstallationRoster(env, args.installationId, args.account.login, args.account.type)
+        const expectedSource = args.account.type === "Organization" ? "org" : "collaborators"
+        const rosterSnapshot = createCompleteInstallationRosterSnapshot(roster)
+        if (rosterSnapshot === null || roster.source !== expectedSource) {
+          throw new Error("incomplete installation roster")
+        }
+        if (!rosterSnapshot.memberIds.includes(args.githubUserId)) {
+          if (storedState.kind === "absent") return jsonError("forbidden", 403)
+          // Existing active access remains product authority. A live GitHub
+          // admin role alone never upgrades it when the App roster disagrees.
+          return roleSatisfies(storedState.access.role, args.requiredRole)
+            ? { ok: true, role: storedState.access.role }
+            : jsonError("forbidden", 403)
+        }
+
+        const activeAdminExists = await hasActiveOrgAdmin(db, args.installationId, rosterSnapshot)
         if (typeof activeAdminExists !== "boolean") {
           throw new Error("invalid active-admin result")
         }
@@ -190,6 +213,7 @@ export async function resolveOrgRolePolicyForVisibleInstallation(
             githubUserId: args.githubUserId,
             nowIso: new Date().toISOString(),
             updatedBy: `github:${args.githubUserId}`,
+            rosterSnapshot,
           })
           // Always re-read THIS caller. A different caller winning the atomic
           // race does not confer access; a same-caller race/retry sees its row.
@@ -207,7 +231,9 @@ export async function resolveOrgRolePolicyForVisibleInstallation(
             err: error instanceof Error ? error.message : String(error),
           }),
         )
-        return jsonError("org_access_unavailable", 503)
+        // A failed bootstrap proof must not revoke an already-active stored
+        // member. It only blocks creating/elevating access from an absent row.
+        if (storedState.kind === "absent") return jsonError("org_access_unavailable", 503)
       }
     }
   }
@@ -307,7 +333,8 @@ export async function requireOrgAccess(
     githubUserId,
     liveRole: liveScope.role,
     requiredRole,
+    account: liveScope.account,
   })
   if (!policy.ok) return policy
-  return success({ session, accessToken, installationId, githubUserId, role: policy.role })
+  return success({ session, accessToken, installationId, githubUserId, account: liveScope.account, role: policy.role })
 }

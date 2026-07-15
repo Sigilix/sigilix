@@ -451,6 +451,7 @@ describe("repository-context route", () => {
       githubUserId: "111",
       nowIso: "2026-07-13T21:01:00.000Z",
       updatedBy: "test",
+      rosterSnapshot: { memberIds: ["111"], sqlTokenSet: "|111|" },
     })
     const env = await makeEnv({ db, membershipMode: "on" })
     const fetchMock = stubGitHub({

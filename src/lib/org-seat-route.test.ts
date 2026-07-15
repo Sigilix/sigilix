@@ -518,7 +518,7 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     expect(await readSeatRow(db, 1, "newbie")).toBeNull()
   })
 
-  it("a target returned before a later roster page fails is still positively verified → 200", async () => {
+  it("a target returned before a later roster page fails is not enough for a billing write → 503", async () => {
     const db = await makeDb()
     const kv = makeKV()
     await seedSession(kv, "sess-1", "boss", 111)
@@ -547,8 +547,8 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
       "newbie",
     )
 
-    expect(res.status).toBe(200)
-    expect((await readSeatRow(db, 1, "newbie"))?.assigned).toBe(1)
+    expect(res.status).toBe(503)
+    expect(await readSeatRow(db, 1, "newbie")).toBeNull()
   })
 
   it("missing SIGILIX_PLATFORM_DB → 503 rather than a false success or 404", async () => {
@@ -715,6 +715,30 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     expect(res.status).toBe(200)
     expect(res.headers.get("access-control-allow-origin")).toBe("https://app.sigilix.ai")
     expect((await readSeatRow(db, 1, "dev"))?.assigned).toBe(0)
+  })
+
+  it("end-to-end via worker.fetch: rollout-off uses the exact live account instead of stale tenant metadata", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-live-account", "boss", 111)
+    await enableAppRoster(kv)
+    await insertTenant(db, 1, "stale-org", "Organization")
+    const env = {
+      ...baseEnv(kv, db),
+      GITHUB_APP_ID: "123",
+      GITHUB_PRIVATE_KEY: "cached-token-avoids-key-use",
+    } as Env
+    const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
+    stubGitHub({
+      installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "admin", state: "active", organization: { login: "acme" } }],
+      orgMemberPages: { 1: [{ id: 222, login: "newbie" }] },
+    })
+
+    const res = await worker.fetch(seatReq("sess-live-account", 1, "newbie", { assigned: true }), env, ctx)
+
+    expect(res.status).toBe(200)
+    expect((await readSeatRow(db, 1, "newbie"))?.assigned).toBe(1)
   })
 
   it("end-to-end via worker.fetch: managed access rejects a revoked stored admin before the seat write", async () => {

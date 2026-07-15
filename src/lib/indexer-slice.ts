@@ -18,7 +18,7 @@ import { upsertLexicalChunks, type LexicalChunk } from "@/src/lib/lexical-index"
 import { extractFileGraph } from "@/src/lib/graph-extract"
 import { writeFileGraph } from "@/src/lib/repo-graph-client"
 import { graphIndexEnabled } from "@/src/lib/graph-flags"
-import { type Chunk, chunkFile } from "@/src/lib/chunk-core"
+import { CITATION_CHUNK_VERSION, type Chunk, chunkFile } from "@/src/lib/chunk-core"
 import { chunkFileAst, jsTsExtOf } from "@/src/lib/ast-chunker"
 import { isBranchStateRepo } from "@/src/lib/index-branch"
 import {
@@ -302,6 +302,8 @@ async function embedBatch(
         content: chunk.content,
         headSha: indexRef.headSha,
         runId: indexRef.runId,
+        citationChunkVersion: CITATION_CHUNK_VERSION,
+        fragmentIndex: chunk.fragmentIndex ?? -1,
       },
     })
   }

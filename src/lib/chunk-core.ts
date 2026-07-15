@@ -4,6 +4,10 @@
 
 export const CHUNK_LINES = 30
 export const CHUNK_OVERLAP = 10
+/** Version of the splitter identity persisted with newly indexed chunks.
+ *  Citation verification uses this to select the exact historical splitter
+ *  that produced a Vectorize row instead of applying future chunking rules. */
+export const CITATION_CHUNK_VERSION = 1
 // Token-safe cap (SIG-133). The embedder (bge-base-en-v1.5) is a BERT
 // WordPiece model with a ~512-token context. Code averages ~3 chars/token,
 // so 1400 chars ≈ ~470 tokens, leaving margin for [CLS]/[SEP] + dense
@@ -43,7 +47,7 @@ export interface Chunk {
  * slices, each emitted with `lineStart === lineEnd ===` that line's
  * absolute number. `path` is left empty here and set by the caller.
  */
-export function splitOversizedWindow(lines: ReadonlyArray<string>, windowStartLine: number): Chunk[] {
+export function splitOversizedWindowV1(lines: ReadonlyArray<string>, windowStartLine: number): Chunk[] {
   const chunks: Chunk[] = []
   let buf = ""
   let bufStartLine = windowStartLine
@@ -131,6 +135,10 @@ export function splitOversizedWindow(lines: ReadonlyArray<string>, windowStartLi
   flush()
   return chunks
 }
+
+/** Current public splitter. Keep the versioned implementation above frozen;
+ *  a future algorithm ships as V2 and moves this alias without changing V1. */
+export const splitOversizedWindow = splitOversizedWindowV1
 
 /**
  * Split file content into overlapping line windows — 30-line windows

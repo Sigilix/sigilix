@@ -5,6 +5,8 @@ import type { PullRequestMeta, PrChangedFile } from "@/src/shared/types/github"
 const mockMethods = {
   getPullRequest: vi.fn(),
   getPullRequestDiff: vi.fn(),
+  getCompareDiff: vi.fn(),
+  compareCommits: vi.fn(),
   listPullRequestFiles: vi.fn(),
 }
 const mockGetInstallationToken = vi.fn(async (_args: unknown) => "test-token")
@@ -20,6 +22,8 @@ vi.mock("@/src/shared/adapters/github", async () => {
     GitHubClient: vi.fn().mockImplementation(() => ({
       getPullRequest: mockMethods.getPullRequest,
       getPullRequestDiff: mockMethods.getPullRequestDiff,
+      getCompareDiff: mockMethods.getCompareDiff,
+      compareCommits: mockMethods.compareCommits,
       listPullRequestFiles: mockMethods.listPullRequestFiles,
     })),
   }
@@ -28,12 +32,15 @@ vi.mock("@/src/shared/adapters/github", async () => {
 import {
   fetchPullRequestContextFromEnv as fetchPullRequestContext,
   fetchPullRequestContextWithClient,
+  fetchPullRequestSnapshotWithClient,
 } from "@/src/lib/github-pr-context"
 import type { Env } from "@/src/shared/types/env"
 
 beforeEach(() => {
   mockMethods.getPullRequest.mockReset()
   mockMethods.getPullRequestDiff.mockReset()
+  mockMethods.getCompareDiff.mockReset()
+  mockMethods.compareCommits.mockReset()
   mockMethods.listPullRequestFiles.mockReset()
   mockGetInstallationToken.mockReset().mockResolvedValue("test-token")
 })
@@ -114,6 +121,78 @@ describe("fetchPullRequestContextWithClient", () => {
     })
     expect(mockGetInstallationToken).not.toHaveBeenCalled()
     expect(GitHubClient).not.toHaveBeenCalled()
+  })
+})
+
+describe("fetchPullRequestSnapshotWithClient", () => {
+  it("builds context from the immutable base/head comparison and returns presentation-independent proof", async () => {
+    const baseSha = "b".repeat(40)
+    const headSha = "h".repeat(40)
+    mockMethods.getPullRequest.mockResolvedValue(
+      makeMeta({
+        head: { sha: headSha, ref: "feat/exact-snapshot" },
+        base: { sha: baseSha, ref: "main" },
+      }),
+    )
+    mockMethods.getCompareDiff.mockResolvedValue("diff --git a/src/exact.ts b/src/exact.ts\n+snapshot")
+    mockMethods.compareCommits.mockResolvedValue({
+      status: "ahead",
+      totalCommits: 2,
+      files: [
+        { status: "modified", filename: "src/exact.ts", previous_filename: null },
+        { status: "renamed", filename: "src/new.ts", previous_filename: "src/old.ts" },
+      ],
+    })
+    const suppliedClient = {
+      getPullRequest: mockMethods.getPullRequest,
+      getPullRequestDiff: mockMethods.getPullRequestDiff,
+      getCompareDiff: mockMethods.getCompareDiff,
+      compareCommits: mockMethods.compareCommits,
+      listPullRequestFiles: mockMethods.listPullRequestFiles,
+    } as unknown as GitHubClient
+
+    const result = await fetchPullRequestSnapshotWithClient({
+      owner: "Sigilix",
+      repo: "rema-portal",
+      number: 162,
+      client: suppliedClient,
+    })
+
+    expect(result).toEqual({
+      ok: true,
+      context: {
+        owner: "Sigilix",
+        repo: "rema-portal",
+        number: 162,
+        title: "Port headless logic to Rust",
+        body: "Issue body text",
+        diff: "diff --git a/src/exact.ts b/src/exact.ts\n+snapshot",
+        filesChanged: { items: ["src/exact.ts", "src/new.ts"], total: 4 },
+        state: "merged",
+        mergedAt: "2026-04-29T12:00:00Z",
+      },
+      proof: {
+        source: "github_compare",
+        baseSha,
+        headSha,
+      },
+    })
+    expect(mockMethods.getPullRequest).toHaveBeenCalledTimes(1)
+    expect(mockMethods.getPullRequest).toHaveBeenCalledWith("Sigilix", "rema-portal", 162, {
+      signal: expect.any(AbortSignal),
+    })
+    expect(mockMethods.getCompareDiff).toHaveBeenCalledWith("Sigilix", "rema-portal", baseSha, headSha, {
+      signal: expect.any(AbortSignal),
+    })
+    expect(mockMethods.compareCommits).toHaveBeenCalledWith("Sigilix", "rema-portal", baseSha, headSha, {
+      signal: expect.any(AbortSignal),
+    })
+    expect(mockMethods.getPullRequestDiff).not.toHaveBeenCalled()
+    expect(mockMethods.listPullRequestFiles).not.toHaveBeenCalled()
+
+    const metaOrder = mockMethods.getPullRequest.mock.invocationCallOrder[0]
+    expect(metaOrder).toBeLessThan(mockMethods.getCompareDiff.mock.invocationCallOrder[0]!)
+    expect(metaOrder).toBeLessThan(mockMethods.compareCommits.mock.invocationCallOrder[0]!)
   })
 })
 

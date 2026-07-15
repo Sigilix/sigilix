@@ -20,7 +20,7 @@
 //   - AbortError from the loop's wall-clock signal is re-thrown so the
 //     loop's catch can map it to `wall_clock_exceeded`.
 
-import { fetchPullRequestContextWithClient } from "./github-pr-context"
+import { fetchPullRequestContextWithClient, fetchPullRequestSnapshotWithClient } from "./github-pr-context"
 import { encodeBranchName, parseBranchNamespace } from "./index-branch"
 import { indexNamespace } from "./repo-index-manifest"
 import { retrieveChunks, type RetrievedChunk } from "./retrieval"
@@ -65,7 +65,10 @@ export interface AgentToolsContext {
   /** Slack-only immutable citation proof/issuance session. Shadow observes
    *  eligible chunks without changing tool bytes; on fails closed and emits
    *  only current active-snapshot chunks with exact citation sidecars. */
-  slackCodeCitations?: Pick<SlackCodeCitationSession, "mode" | "preflight" | "filterAndIssue">
+  slackCodeCitations?: Pick<
+    SlackCodeCitationSession,
+    "mode" | "preflight" | "filterAndIssue" | "prepareFileRead" | "issueFileLines" | "issuePullRequest"
+  >
 }
 
 export interface AgentTool {
@@ -84,7 +87,7 @@ export interface AgentTool {
 export function createAgentTools(ctx: AgentToolsContext): AgentTool[] {
   const tools: AgentTool[] = [makeRetrieveCodebase(ctx)]
   if (ctx.github) {
-    tools.push(makeFetchPr(ctx.github))
+    tools.push(makeFetchPr(ctx, ctx.github))
     tools.push(makeReadFileLines(ctx, ctx.github))
   }
   return tools
@@ -380,11 +383,13 @@ async function resolveBranchNamespace(
 
 // ───────────────────────────────────────────────────────────── fetch_pr
 
-function makeFetchPr(gh: NonNullable<AgentToolsContext["github"]>): AgentTool {
+function makeFetchPr(ctx: AgentToolsContext, gh: NonNullable<AgentToolsContext["github"]>): AgentTool {
+  const slackCitationsOn = ctx.surface === "slack-mention" && ctx.slackCodeCitations?.mode === "on"
   return {
     name: "fetch_pr",
-    description:
-      "Fetch a GitHub PR's title, body, file list, and unified diff. Use when the asker references a PR by URL or number AND you need to see what changed in it. Returns truncated diff (<=250 lines, <=20k chars) + first 50 changed filenames.",
+    description: slackCitationsOn
+      ? "Fetch an immutable GitHub PR snapshot by exact base/head comparison. Returns title, body, file list, truncated diff, and an exact citation object. Copy that citation unchanged into the final citations array when the snapshot supports your answer."
+      : "Fetch a GitHub PR's title, body, file list, and unified diff. Use when the asker references a PR by URL or number AND you need to see what changed in it. Returns truncated diff (<=250 lines, <=20k chars) + first 50 changed filenames.",
     parameters: {
       type: "object",
       properties: {
@@ -416,19 +421,26 @@ function makeFetchPr(gh: NonNullable<AgentToolsContext["github"]>): AgentTool {
         }
       }
 
-      // The scoped-client fetcher returns its own structured
-      // PrFetchResult ({ok, context} | {ok:false, reason}). Pass it
-      // through verbatim — both shapes are recoverable from the
-      // model's perspective.
-      const result = await fetchPullRequestContextWithClient({
-        owner,
-        repo,
-        number,
-        client: gh.githubClient,
-      })
-      if (!result.ok) {
-        return { ok: false, error: `fetch_pr failed: ${result.reason}` }
+      if (slackCitationsOn) {
+        const result = await fetchPullRequestSnapshotWithClient({ owner, repo, number, client: gh.githubClient })
+        if (!result.ok) return { ok: false, error: `fetch_pr failed: ${result.reason}` }
+        const citation = await ctx.slackCodeCitations!.issuePullRequest({
+          namespace: indexNamespace(owner, repo),
+          number,
+          baseSha: result.proof.baseSha,
+          headSha: result.proof.headSha,
+          source: result.proof.source,
+        })
+        if (!citation) {
+          return { ok: false, error: "Verified PR citation proof is unavailable for this snapshot." }
+        }
+        return { ok: true, pr: result.context, citation }
       }
+      // The legacy scoped-client fetcher returns its own structured
+      // PrFetchResult ({ok, context} | {ok:false, reason}). Both shapes
+      // remain recoverable from the model's perspective.
+      const result = await fetchPullRequestContextWithClient({ owner, repo, number, client: gh.githubClient })
+      if (!result.ok) return { ok: false, error: `fetch_pr failed: ${result.reason}` }
       return { ok: true, pr: result.context }
     },
   }
@@ -437,10 +449,12 @@ function makeFetchPr(gh: NonNullable<AgentToolsContext["github"]>): AgentTool {
 // ───────────────────────────────────────────────────────────── read_file_lines
 
 function makeReadFileLines(ctx: AgentToolsContext, gh: NonNullable<AgentToolsContext["github"]>): AgentTool {
+  const slackCitationsOn = ctx.surface === "slack-mention" && ctx.slackCodeCitations?.mode === "on"
   return {
     name: "read_file_lines",
-    description:
-      "Read a specific line range of a file in the indexed repo. Use ONLY after retrieve_codebase points you at a file and you need lines beyond the chunk's window.",
+    description: slackCitationsOn
+      ? "Read a specific line range from the channel-authorized active default-branch snapshot. Returns exact-SHA content plus a citation object; copy that citation unchanged into the final citations array when the range supports your answer."
+      : "Read a specific line range of a file in the indexed repo. Use ONLY after retrieve_codebase points you at a file and you need lines beyond the chunk's window.",
     parameters: {
       type: "object",
       properties: {
@@ -460,7 +474,8 @@ function makeReadFileLines(ctx: AgentToolsContext, gh: NonNullable<AgentToolsCon
       const owner = typeof args.owner === "string" ? args.owner : ""
       const repo = typeof args.repo === "string" ? args.repo : ""
       const path = typeof args.path === "string" ? args.path : ""
-      const ref = typeof args.ref === "string" && args.ref.length > 0 ? args.ref : gh.defaultRef
+      const suppliedRef = typeof args.ref === "string" && args.ref.length > 0 ? args.ref : null
+      const requestedRef = suppliedRef ?? gh.defaultRef
       const lineStartRaw = typeof args.lineStart === "number" ? args.lineStart : Number.NaN
       const lineEndRaw = typeof args.lineEnd === "number" ? args.lineEnd : Number.NaN
       const lineStart = Number.isInteger(lineStartRaw) && lineStartRaw > 0 ? lineStartRaw : 0
@@ -508,6 +523,17 @@ function makeReadFileLines(ctx: AgentToolsContext, gh: NonNullable<AgentToolsCon
           ok: false,
           error: `read_file_lines per-loop budget exhausted (${bytesUsed}/${READ_FILE_LOOP_BUDGET_BYTES} bytes). No more reads this loop.`,
         }
+      }
+
+      let ref = requestedRef
+      if (slackCitationsOn) {
+        const prepared = await ctx.slackCodeCitations!.prepareFileRead(
+          indexNamespace(owner, repo),
+          suppliedRef ?? "",
+          signal,
+        )
+        if (!prepared.ok) return { ok: false, error: prepared.error }
+        ref = prepared.ref
       }
 
       // Authenticated GitHub client per-call (token may have rotated).
@@ -558,6 +584,21 @@ function makeReadFileLines(ctx: AgentToolsContext, gh: NonNullable<AgentToolsCon
       const sliceText = sliced.join("\n")
       const sliceBytes = new TextEncoder().encode(sliceText).length
 
+      let citation: Awaited<ReturnType<SlackCodeCitationSession["issueFileLines"]>> | undefined
+      if (slackCitationsOn) {
+        citation = await ctx.slackCodeCitations!.issueFileLines({
+          namespace: indexNamespace(owner, repo),
+          path,
+          lineStart,
+          lineEnd: Math.min(lineEnd, lines.length),
+          ref,
+          content: sliceText,
+        })
+        if (!citation) {
+          return { ok: false, error: "Verified file citation proof is unavailable for this range." }
+        }
+      }
+
       // Update the per-loop budget. Allow this call to land even if it
       // pushes the budget slightly over — counter applies to NEXT call.
       perLoopContext.set(READ_FILE_LOOP_BUDGET_KEY, bytesUsed + sliceBytes)
@@ -572,6 +613,7 @@ function makeReadFileLines(ctx: AgentToolsContext, gh: NonNullable<AgentToolsCon
         content: sliceText,
         bytesReturned: sliceBytes,
         bytesBudgetRemaining: Math.max(0, READ_FILE_LOOP_BUDGET_BYTES - bytesUsed - sliceBytes),
+        ...(citation ? { citation } : {}),
       }
     },
   }

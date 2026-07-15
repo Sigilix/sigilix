@@ -2,9 +2,8 @@
 // formatter. The Vectorize / Workers AI bindings are stubbed; the actual
 // network calls are integration-tested manually after deploy.
 
-import { describe, expect, it } from "vitest"
-import { teamKeyToNamespace } from "@/src/lib/retrieval"
-import { formatChunksForPrompt, type RetrievedChunk } from "@/src/lib/retrieval"
+import { describe, expect, it, vi } from "vitest"
+import { formatChunksForPrompt, retrieveChunks, teamKeyToNamespace, type RetrievedChunk } from "@/src/lib/retrieval"
 
 describe("teamKeyToNamespace", () => {
   it("returns the default when team key is null", () => {
@@ -159,5 +158,60 @@ describe("formatChunksForPrompt", () => {
     const out = formatChunksForPrompt([chunk("a.ts", "AAA"), chunk("b.ts", "BBB")])!
     expect(out).not.toContain("truncated")
     expect(out).not.toContain("omitted")
+  })
+})
+
+describe("retrieveChunks citation identity metadata", () => {
+  it("carries the citation chunk version and normalized fragment index from Vectorize", async () => {
+    const query = vi.fn(async () => ({
+      matches: [
+        {
+          id: "normal-chunk",
+          score: 0.9,
+          metadata: {
+            repo: "acme/api",
+            path: "src/normal.ts",
+            lineStart: 1,
+            lineEnd: 3,
+            content: "export const normal = true",
+            citationChunkVersion: 1,
+            fragmentIndex: -1,
+          },
+        },
+        {
+          id: "fragment-chunk",
+          score: 0.8,
+          metadata: {
+            repo: "acme/api",
+            path: "src/generated.ts",
+            lineStart: 7,
+            lineEnd: 7,
+            content: "=".repeat(1_400),
+            citationChunkVersion: 1,
+            fragmentIndex: 1,
+          },
+        },
+      ],
+    }))
+    const chunks = await retrieveChunks({
+      text: "authorization",
+      teamKey: "acme/api",
+      env: {
+        AI: {
+          run: async () => ({ data: [Array(768).fill(0.1)], shape: [1, 768] }),
+        },
+        OPENCLAW_CODE_INDEX: { query },
+      },
+    })
+
+    expect(query).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ namespace: "acme/api", returnMetadata: "all" }),
+    )
+    expect(chunks).toHaveLength(2)
+    expect(chunks[0]?.citationChunkVersion).toBe(1)
+    expect(chunks[0]?.fragmentIndex).toBe(-1)
+    expect(chunks[1]?.citationChunkVersion).toBe(1)
+    expect(chunks[1]?.fragmentIndex).toBe(1)
   })
 })

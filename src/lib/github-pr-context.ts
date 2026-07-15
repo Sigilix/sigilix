@@ -33,6 +33,16 @@ export type PrFetchResult =
       reason: "no_installation" | "not_found" | "forbidden" | "timeout" | "error"
     }
 
+export interface PrSnapshotProof {
+  source: "github_compare"
+  baseSha: string
+  headSha: string
+}
+
+export type PrSnapshotFetchResult =
+  | { ok: true; context: PrContext; proof: PrSnapshotProof }
+  | Extract<PrFetchResult, { ok: false }>
+
 export interface PrContext {
   owner: string
   repo: string
@@ -144,6 +154,57 @@ export async function fetchPullRequestContextWithClient(args: FetchPrContextWith
   }
 }
 
+/** Fetch a PR snapshot through immutable base/head compare endpoints. The
+ * supplied client remains the authorization boundary, while `proof` preserves
+ * the exact source SHAs independently from the prompt-facing presentation. */
+export async function fetchPullRequestSnapshotWithClient(
+  args: FetchPrContextWithClientArgs,
+): Promise<PrSnapshotFetchResult> {
+  const { owner, repo, number, client } = args
+
+  let meta: PullRequestMeta
+  try {
+    meta = await withTimeout((signal) => client.getPullRequest(owner, repo, number, { signal }), TIMEOUT_MS)
+  } catch (error) {
+    return { ok: false, reason: mapTopLevelError(error) }
+  }
+
+  const baseSha = typeof meta.base?.sha === "string" ? meta.base.sha : ""
+  const headSha = typeof meta.head?.sha === "string" ? meta.head.sha : ""
+  if (!baseSha || !headSha) return { ok: false, reason: "error" }
+
+  const [diffResult, filesResult] = await Promise.all([
+    fetchCompareDiffPartial(client, owner, repo, baseSha, headSha),
+    fetchCompareFilesPartial(client, owner, repo, baseSha, headSha),
+  ])
+  const totalChanged = typeof meta.changed_files === "number" ? meta.changed_files : null
+  const filesChanged: PrContext["filesChanged"] =
+    filesResult.kind === "items"
+      ? {
+          items: filesResult.items.map((file) => file.filename).filter((path) => path.length > 0),
+          total: totalChanged ?? filesResult.items.length,
+        }
+      : filesResult.kind === "timeout"
+        ? "[timeout]"
+        : "[error]"
+
+  return {
+    ok: true,
+    context: {
+      owner,
+      repo,
+      number,
+      title: meta.title ?? "",
+      body: truncate(meta.body ?? "", BODY_MAX_CHARS),
+      diff: diffResult,
+      filesChanged,
+      state: normalizeState(meta),
+      mergedAt: meta.merged_at ?? null,
+    },
+    proof: { source: "github_compare", baseSha, headSha },
+  }
+}
+
 type FilesPartial = { kind: "items"; items: PrChangedFile[] } | { kind: "timeout" } | { kind: "error" }
 
 async function fetchDiffPartial(
@@ -177,6 +238,48 @@ async function fetchFilesPartial(
       TIMEOUT_MS,
     )
     return { kind: "items", items }
+  } catch (error) {
+    return { kind: isAbortError(error) ? "timeout" : "error" }
+  }
+}
+
+async function fetchCompareDiffPartial(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  baseSha: string,
+  headSha: string,
+): Promise<PrContext["diff"]> {
+  try {
+    const raw = await withTimeout(
+      (signal) => client.getCompareDiff(owner, repo, baseSha, headSha, { signal }),
+      TIMEOUT_MS,
+    )
+    return truncateDiff(raw ?? "")
+  } catch (error) {
+    return isAbortError(error) ? "[timeout]" : "[error]"
+  }
+}
+
+type CompareFilesPartial =
+  | { kind: "items"; items: Array<{ filename: string }> }
+  | { kind: "timeout" }
+  | { kind: "error" }
+
+async function fetchCompareFilesPartial(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  baseSha: string,
+  headSha: string,
+): Promise<CompareFilesPartial> {
+  try {
+    const comparison = await withTimeout(
+      (signal) => client.compareCommits(owner, repo, baseSha, headSha, { signal }),
+      TIMEOUT_MS,
+    )
+    if (!comparison) return { kind: "error" }
+    return { kind: "items", items: comparison.files.slice(0, FILES_MAX) }
   } catch (error) {
     return { kind: isAbortError(error) ? "timeout" : "error" }
   }

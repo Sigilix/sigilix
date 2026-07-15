@@ -42,6 +42,8 @@ interface VectorizeMatch {
     content?: string
     headSha?: string
     runId?: string
+    citationChunkVersion?: number
+    fragmentIndex?: number
   }
 }
 
@@ -115,6 +117,10 @@ export interface RetrievedChunk {
   indexedHeadSha?: string
   /** Stable index run id when known. */
   indexRunId?: string
+  /** Splitter identity persisted by the indexer for exact citation proof. */
+  citationChunkVersion?: number
+  /** -1 for normal chunks; >=0 for one physical line's hard-split fragment. */
+  fragmentIndex?: number
   /** current = chunk carried current manifest SHA; legacy = manifest-enriched only. */
   indexFreshness?: "current" | "legacy" | "unknown"
 }
@@ -326,6 +332,12 @@ function parseVectorMatches(matches: VectorizeMatch[] | undefined): RetrievedChu
       source: "vector",
       ...(typeof md.headSha === "string" && md.headSha.length > 0 ? { indexedHeadSha: md.headSha } : {}),
       ...(typeof md.runId === "string" && md.runId.length > 0 ? { indexRunId: md.runId } : {}),
+      ...(typeof md.citationChunkVersion === "number" && Number.isSafeInteger(md.citationChunkVersion)
+        ? { citationChunkVersion: md.citationChunkVersion }
+        : {}),
+      ...(typeof md.fragmentIndex === "number" && Number.isSafeInteger(md.fragmentIndex) && md.fragmentIndex >= -1
+        ? { fragmentIndex: md.fragmentIndex }
+        : {}),
     })
   }
   return out

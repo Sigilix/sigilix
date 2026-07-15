@@ -1,4 +1,5 @@
 import { GITHUB_MENTION_SCHEMA } from "@/src/shared/domain/schemas"
+import { CITATION_CHUNK_VERSION, splitOversizedWindowV1 } from "@/src/lib/chunk-core"
 import { chunkId } from "@/src/lib/indexer-internals"
 import {
   indexNamespace,
@@ -14,20 +15,21 @@ import type { Env } from "@/src/shared/types/env"
 
 export type SlackCodeCitationMode = "off" | "shadow" | "on"
 
-export interface SlackCodeCitation {
-  githubRepoId: number
-  repo: string
-  path: string
-  lineStart: number
-  lineEnd: number
-  ref: string
-  runId: string
-  chunkId: string
+export type SlackCitationKind = "code" | "file_lines" | "pull_request"
+
+export interface SlackCitationRef {
+  id: string
+  kind: SlackCitationKind
 }
+
+/** Backward-compatible exported name for callers that imported the original
+ * code-only model sidecar type. Citation-on now exposes only opaque refs; all
+ * rich repository/range proof stays request-local on the server. */
+export type SlackCodeCitation = SlackCitationRef
 
 export interface IssuedSlackCodeChunk {
   chunk: RetrievedChunk
-  citation: SlackCodeCitation
+  citation: SlackCitationRef
 }
 
 export type SlackCitationPreflight = { ok: true } | { ok: false; error: string }
@@ -36,8 +38,30 @@ export interface SlackCodeCitationSession {
   readonly mode: Exclude<SlackCodeCitationMode, "off">
   preflight(namespace: string, branch: string, signal?: AbortSignal): Promise<SlackCitationPreflight>
   filterAndIssue(namespace: string, chunks: RetrievedChunk[]): Promise<IssuedSlackCodeChunk[]>
+  prepareFileRead(namespace: string, requestedRef: string, signal?: AbortSignal): Promise<SlackPreparedFileRead>
+  issueFileLines(args: SlackFileLinesProofInput): Promise<SlackCitationRef | null>
+  issuePullRequest(args: SlackPullRequestProofInput): Promise<SlackCitationRef | null>
   verifyAndRender(answer: string, selected: unknown[]): Promise<string>
   emitTelemetry(): void
+}
+
+export type SlackPreparedFileRead = { ok: true; ref: string } | { ok: false; error: string }
+
+export interface SlackFileLinesProofInput {
+  namespace: string
+  path: string
+  lineStart: number
+  lineEnd: number
+  ref: string
+  content: string
+}
+
+export interface SlackPullRequestProofInput {
+  namespace: string
+  number: number
+  baseSha: string
+  headSha: string
+  source: "github_compare"
 }
 
 const MAX_CITATIONS = 24
@@ -60,16 +84,14 @@ export const SLACK_CODE_CITATION_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          githubRepoId: { type: "integer", minimum: 1 },
-          repo: { type: "string" },
-          path: { type: "string" },
-          lineStart: { type: "integer", minimum: 1 },
-          lineEnd: { type: "integer", minimum: 1 },
-          ref: { type: "string" },
-          runId: { type: "string" },
-          chunkId: { type: "string" },
+          id: {
+            type: "string",
+            pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          },
+          kind: { type: "string", enum: ["code", "file_lines", "pull_request"] },
         },
-        required: ["githubRepoId", "repo", "path", "lineStart", "lineEnd", "ref", "runId", "chunkId"],
+        required: ["id", "kind"],
+        additionalProperties: false,
       },
     },
   },
@@ -78,7 +100,7 @@ export const SLACK_CODE_CITATION_SCHEMA = {
 
 export const SLACK_CODE_CITATION_PROMPT = `## Verified Slack citations
 
-When retrieve_codebase returns a citation object, copy that exact object into the top-level citations array for every current-code claim it supports. Use citations: [] when none apply. Never invent or alter a citation, and do not write path:line references in prose; the server re-verifies and renders exact-commit links.`
+When an evidence tool returns a citation object, copy that exact {id, kind} object into the top-level citations array for every claim it supports. Use citations: [] when no returned evidence applies. Never invent or alter a citation, and do not write path:line references in prose; the server re-verifies and renders exact-snapshot links.`
 
 interface ExactRepoProof {
   scopedRepo: SlackScopedRepo
@@ -103,22 +125,54 @@ interface ProofFailure {
 
 type ProofResult = { ok: true; proof: ExactRepoProof } | { ok: false; failure: ProofFailure }
 
-interface IssuedCitationProof {
-  citation: SlackCodeCitation
+interface IssuedProofBase {
+  citation: SlackCitationRef
   githubRepoId: number
   owner: string
   repo: string
+}
+
+interface IssuedCodeProof extends IssuedProofBase {
+  kind: "code"
   namespace: string
   runId: string
   chunkId: string
+  path: string
+  lineStart: number
+  lineEnd: number
+  ref: string
+  content: string
+  citationChunkVersion: number
+  fragmentIndex: number
+}
+
+interface IssuedFileLinesProof extends IssuedProofBase {
+  kind: "file_lines"
+  namespace: string
+  runId: string
+  path: string
+  lineStart: number
+  lineEnd: number
+  ref: string
   content: string
 }
+
+interface IssuedPullRequestProof extends IssuedProofBase {
+  kind: "pull_request"
+  number: number
+  baseSha: string
+  headSha: string
+}
+
+type IssuedCitationProof = IssuedCodeProof | IssuedFileLinesProof | IssuedPullRequestProof
 
 interface SessionCounters {
   proofEligible: number
   proofRejected: number
   chunksConsidered: number
   chunksIssued: number
+  fileLinesIssued: number
+  pullRequestsIssued: number
   selected: number
   verified: number
 }
@@ -149,12 +203,14 @@ export function createSlackCodeCitationSession(args: {
 
   const proofPromises = new Map<string, Promise<ProofResult>>()
   const issued = new Map<string, IssuedCitationProof>()
-  let retrievalAttempted = false
+  let requiresCitation = false
   const counters: SessionCounters = {
     proofEligible: 0,
     proofRejected: 0,
     chunksConsidered: 0,
     chunksIssued: 0,
+    fileLinesIssued: 0,
+    pullRequestsIssued: 0,
     selected: 0,
     verified: 0,
   }
@@ -219,6 +275,14 @@ export function createSlackCodeCitationSession(args: {
     return promise
   }
 
+  const newCitationRef = (kind: SlackCitationKind): SlackCitationRef | null => {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const citation = { id: crypto.randomUUID(), kind }
+      if (!issued.has(citationKey(citation))) return citation
+    }
+    return null
+  }
+
   return {
     mode: args.mode,
 
@@ -231,7 +295,6 @@ export function createSlackCodeCitationSession(args: {
     },
 
     async filterAndIssue(namespace, chunks) {
-      retrievalAttempted = true
       const normalized = namespace.trim().toLowerCase()
       const result = await cachedProof(normalized)
       counters.chunksConsidered += chunks.length
@@ -248,19 +311,13 @@ export function createSlackCodeCitationSession(args: {
               lineStart: chunk.lineStart,
               lineEnd: chunk.lineEnd,
               content: chunk.content,
+              ...(chunk.fragmentIndex >= 0 ? { fragmentIndex: chunk.fragmentIndex } : {}),
             })
             if (computedId !== chunk.id) return null
-            const citation: SlackCodeCitation = {
-              githubRepoId: proof.scopedRepo.githubRepoId,
-              repo: `${proof.scopedRepo.owner}/${proof.scopedRepo.repo}`,
-              path: chunk.path,
-              lineStart: chunk.lineStart,
-              lineEnd: chunk.lineEnd,
-              ref: proof.headSha,
-              runId: proof.runId,
-              chunkId: chunk.id,
-            }
+            const citation = newCitationRef("code")
+            if (!citation) return null
             issued.set(citationKey(citation), {
+              kind: "code",
               citation,
               githubRepoId: proof.scopedRepo.githubRepoId,
               owner: proof.scopedRepo.owner,
@@ -268,7 +325,13 @@ export function createSlackCodeCitationSession(args: {
               namespace: normalized,
               runId: proof.runId,
               chunkId: chunk.id,
+              path: chunk.path,
+              lineStart: chunk.lineStart,
+              lineEnd: chunk.lineEnd,
+              ref: proof.headSha,
               content: chunk.content,
+              citationChunkVersion: chunk.citationChunkVersion,
+              fragmentIndex: chunk.fragmentIndex,
             })
             return { chunk, citation }
           }),
@@ -278,17 +341,93 @@ export function createSlackCodeCitationSession(args: {
       }
       const accepted = candidates.filter((value): value is IssuedSlackCodeChunk => value !== null)
       counters.chunksIssued += accepted.length
+      if (accepted.length > 0) requiresCitation = true
       return accepted
     },
 
+    async prepareFileRead(namespace, requestedRef, signal) {
+      const normalized = namespace.trim().toLowerCase()
+      const result = await cachedProof(normalized, signal)
+      if (!result.ok) return { ok: false, error: citationUnavailable(normalized, result.failure.reason) }
+      const requested = requestedRef.trim()
+      if (requested.length > 0 && requested !== result.proof.defaultBranch && requested !== result.proof.headSha) {
+        return { ok: false, error: citationUnavailable(normalized, "branch") }
+      }
+      return { ok: true, ref: result.proof.headSha }
+    },
+
+    async issueFileLines(input) {
+      const normalized = input.namespace.trim().toLowerCase()
+      const result = await cachedProof(normalized)
+      if (
+        !result.ok ||
+        input.ref !== result.proof.headSha ||
+        input.content.length === 0 ||
+        !safePath(input.path) ||
+        !safeLineRange(input.lineStart, input.lineEnd) ||
+        (result.proof.byPath[input.path] ?? []).length === 0
+      ) {
+        return null
+      }
+      const citation = newCitationRef("file_lines")
+      if (!citation) return null
+      issued.set(citationKey(citation), {
+        kind: "file_lines",
+        citation,
+        githubRepoId: result.proof.scopedRepo.githubRepoId,
+        owner: result.proof.scopedRepo.owner,
+        repo: result.proof.scopedRepo.repo,
+        namespace: normalized,
+        runId: result.proof.runId,
+        path: input.path,
+        lineStart: input.lineStart,
+        lineEnd: input.lineEnd,
+        ref: input.ref,
+        content: input.content,
+      })
+      requiresCitation = true
+      counters.fileLinesIssued += 1
+      return citation
+    },
+
+    async issuePullRequest(input) {
+      const normalized = input.namespace.trim().toLowerCase()
+      const scopedRepo = scopedByNamespace.get(normalized)
+      if (
+        !scopedRepo ||
+        input.source !== "github_compare" ||
+        !Number.isSafeInteger(input.number) ||
+        input.number < 1 ||
+        !FULL_SHA.test(input.baseSha) ||
+        !FULL_SHA.test(input.headSha)
+      ) {
+        return null
+      }
+      const citation = newCitationRef("pull_request")
+      if (!citation) return null
+      issued.set(citationKey(citation), {
+        kind: "pull_request",
+        citation,
+        githubRepoId: scopedRepo.githubRepoId,
+        owner: scopedRepo.owner,
+        repo: scopedRepo.repo,
+        number: input.number,
+        baseSha: input.baseSha,
+        headSha: input.headSha,
+      })
+      requiresCitation = true
+      counters.pullRequestsIssued += 1
+      return citation
+    },
+
     async verifyAndRender(answer, selected) {
-      if (selected.length === 0) return retrievalAttempted ? SLACK_CODE_CITATION_REVALIDATION_FAILED : answer
+      if (selected.length === 0) return requiresCitation ? SLACK_CODE_CITATION_REVALIDATION_FAILED : answer
       if (selected.length > MAX_CITATIONS) return SLACK_CODE_CITATION_REVALIDATION_FAILED
       counters.selected += Math.min(selected.length, MAX_CITATIONS)
       const selectedIssued: IssuedCitationProof[] = []
       const seen = new Set<string>()
       for (const raw of selected.slice(0, MAX_CITATIONS)) {
-        const citation = parseCitation(raw)
+        const citation = parseCitationRef(raw)
         if (!citation) return SLACK_CODE_CITATION_REVALIDATION_FAILED
         const key = citationKey(citation)
         if (seen.has(key)) continue
@@ -305,21 +444,26 @@ export function createSlackCodeCitationSession(args: {
         const currentScope = await args.resolveCurrentScope(verifySignal)
         if (!scopeAuthorizesIssued(currentScope, args.scope, selectedIssued)) return []
         const results = await mapWithConcurrency(selectedIssued, VERIFY_CONCURRENCY, async (entry) => {
+          if (entry.kind === "pull_request") return entry
           let proofPromise = freshProofs.get(entry.githubRepoId)
           if (!proofPromise) {
             proofPromise = readProof(entry.namespace, true, verifySignal)
             freshProofs.set(entry.githubRepoId, proofPromise)
           }
           const fresh = await proofPromise
-          if (!fresh.ok || !sameIssuedProof(entry, fresh.proof)) return null
-          if (!(fresh.proof.byPath[entry.citation.path] ?? []).includes(entry.chunkId)) return null
+          if (!fresh.ok || !sameIssuedRepoProof(entry, fresh.proof)) return null
+          if (entry.kind === "code") {
+            if (!(fresh.proof.byPath[entry.path] ?? []).includes(entry.chunkId)) return null
+          } else if ((fresh.proof.byPath[entry.path] ?? []).length === 0) {
+            return null
+          }
 
-          const cacheKey = `${entry.githubRepoId}\0${entry.citation.path}\0${entry.citation.ref}`
+          const cacheKey = `${entry.githubRepoId}\0${entry.path}\0${entry.ref}`
           let filePromise = fileReads.get(cacheKey)
           if (!filePromise) {
             filePromise = withAbortDeadline(
               (requestSignal) =>
-                args.githubClient.getFileContent(entry.owner, entry.repo, entry.citation.path, entry.citation.ref, {
+                args.githubClient.getFileContent(entry.owner, entry.repo, entry.path, entry.ref, {
                   signal: requestSignal,
                 }),
               GITHUB_TIMEOUT_MS,
@@ -329,7 +473,7 @@ export function createSlackCodeCitationSession(args: {
           }
           const content = await filePromise
           if (content === null || !rangeMatchesIssuedContent(content, entry)) return null
-          return entry.citation
+          return entry
         })
         const finalScope = await args.resolveCurrentScope(verifySignal)
         return scopeAuthorizesIssued(finalScope, args.scope, selectedIssued) ? results : []
@@ -375,7 +519,10 @@ function manifestMatchesScope(manifest: RepoIndexManifestV1, scopedRepo: SlackSc
   )
 }
 
-function chunkEligibleForProof(chunk: RetrievedChunk, proof: ExactRepoProof): chunk is RetrievedChunk & { id: string } {
+function chunkEligibleForProof(
+  chunk: RetrievedChunk,
+  proof: ExactRepoProof,
+): chunk is RetrievedChunk & { id: string; citationChunkVersion: number; fragmentIndex: number } {
   return (
     typeof chunk.id === "string" &&
     (proof.byPath[chunk.path] ?? []).includes(chunk.id) &&
@@ -386,20 +533,23 @@ function chunkEligibleForProof(chunk: RetrievedChunk, proof: ExactRepoProof): ch
     Number.isSafeInteger(chunk.lineEnd) &&
     chunk.lineStart >= 1 &&
     chunk.lineEnd >= chunk.lineStart &&
-    chunk.lineEnd <= 1_000_000
+    chunk.lineEnd <= 1_000_000 &&
+    chunk.citationChunkVersion === CITATION_CHUNK_VERSION &&
+    Number.isSafeInteger(chunk.fragmentIndex) &&
+    typeof chunk.fragmentIndex === "number" &&
+    chunk.fragmentIndex >= -1 &&
+    chunk.fragmentIndex <= 1_000_000 &&
+    (chunk.fragmentIndex === -1 || chunk.lineStart === chunk.lineEnd)
   )
 }
 
-function sameIssuedProof(entry: IssuedCitationProof, proof: ExactRepoProof): boolean {
+function sameIssuedRepoProof(entry: IssuedCodeProof | IssuedFileLinesProof, proof: ExactRepoProof): boolean {
   return (
-    entry.citation.githubRepoId === entry.githubRepoId &&
-    entry.citation.runId === entry.runId &&
-    entry.citation.chunkId === entry.chunkId &&
     proof.scopedRepo.githubRepoId === entry.githubRepoId &&
     proof.scopedRepo.owner === entry.owner &&
     proof.scopedRepo.repo === entry.repo &&
     proof.namespace === entry.namespace &&
-    proof.headSha === entry.citation.ref &&
+    proof.headSha === entry.ref &&
     proof.runId === entry.runId
   )
 }
@@ -428,53 +578,29 @@ function scopeAuthorizesIssued(
   })
 }
 
-function rangeMatchesIssuedContent(file: string, entry: IssuedCitationProof): boolean {
+function rangeMatchesIssuedContent(file: string, entry: IssuedCodeProof | IssuedFileLinesProof): boolean {
   const lines = file.split("\n")
-  if (entry.citation.lineEnd > lines.length) return false
-  return lines.slice(entry.citation.lineStart - 1, entry.citation.lineEnd).join("\n") === entry.content
+  if (entry.lineEnd > lines.length) return false
+  if (entry.kind === "code" && entry.fragmentIndex >= 0) {
+    if (entry.citationChunkVersion !== CITATION_CHUNK_VERSION || entry.lineStart !== entry.lineEnd) return false
+    const physicalLine = lines[entry.lineStart - 1]
+    if (physicalLine === undefined) return false
+    const fragment = splitOversizedWindowV1([physicalLine], entry.lineStart).find(
+      (candidate) => candidate.fragmentIndex === entry.fragmentIndex,
+    )
+    return fragment?.content === entry.content
+  }
+  return lines.slice(entry.lineStart - 1, entry.lineEnd).join("\n") === entry.content
 }
 
-function parseCitation(value: unknown): SlackCodeCitation | null {
+function parseCitationRef(value: unknown): SlackCitationRef | null {
   if (!isRecord(value)) return null
-  const repo = typeof value.repo === "string" ? value.repo : ""
-  const path = typeof value.path === "string" ? value.path : ""
-  const ref = typeof value.ref === "string" ? value.ref : ""
-  const runId = typeof value.runId === "string" ? value.runId : ""
-  const chunkIdValue = typeof value.chunkId === "string" ? value.chunkId : ""
-  const githubRepoId = value.githubRepoId
-  const lineStart = value.lineStart
-  const lineEnd = value.lineEnd
-  if (
-    !Number.isSafeInteger(githubRepoId) ||
-    (githubRepoId as number) < 1 ||
-    !safeRepo(repo) ||
-    !safePath(path) ||
-    !FULL_SHA.test(ref) ||
-    !RUN_ID.test(runId) ||
-    !/^[0-9a-f]{48}$/u.test(chunkIdValue)
-  ) {
-    return null
-  }
-  if (!Number.isSafeInteger(lineStart) || !Number.isSafeInteger(lineEnd)) return null
-  if ((lineStart as number) < 1 || (lineEnd as number) < (lineStart as number) || (lineEnd as number) > 1_000_000) {
-    return null
-  }
-  return {
-    githubRepoId: githubRepoId as number,
-    repo,
-    path,
-    lineStart: lineStart as number,
-    lineEnd: lineEnd as number,
-    ref,
-    runId,
-    chunkId: chunkIdValue,
-  }
-}
-
-function safeRepo(repo: string): boolean {
-  if (repo.length === 0 || repo.length > 512 || /[\u0000-\u001f\u007f]/u.test(repo)) return false
-  const parts = repo.split("/")
-  return parts.length === 2 && parts.every((part) => part.length > 0 && part !== "." && part !== "..")
+  if (Object.keys(value).some((key) => key !== "id" && key !== "kind")) return null
+  const id = typeof value.id === "string" ? value.id : ""
+  const kind = value.kind
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(id)) return null
+  if (kind !== "code" && kind !== "file_lines" && kind !== "pull_request") return null
+  return { id, kind }
 }
 
 function safePath(path: string): boolean {
@@ -484,29 +610,35 @@ function safePath(path: string): boolean {
   return path.split("/").every((part) => part.length > 0 && part !== "." && part !== "..")
 }
 
-function citationKey(citation: SlackCodeCitation): string {
-  return JSON.stringify([
-    citation.githubRepoId,
-    citation.repo,
-    citation.path,
-    citation.lineStart,
-    citation.lineEnd,
-    citation.ref,
-    citation.runId,
-    citation.chunkId,
-  ])
+function safeLineRange(lineStart: number, lineEnd: number): boolean {
+  return (
+    Number.isSafeInteger(lineStart) &&
+    Number.isSafeInteger(lineEnd) &&
+    lineStart >= 1 &&
+    lineEnd >= lineStart &&
+    lineEnd <= 1_000_000
+  )
 }
 
-function renderCitationLinks(answer: string, citations: SlackCodeCitation[]): string {
+function citationKey(citation: SlackCitationRef): string {
+  return `${citation.kind}:${citation.id}`
+}
+
+function renderCitationLinks(answer: string, citations: IssuedCitationProof[]): string {
   const links = citations.map((citation) => {
-    const [owner, repo] = citation.repo.split("/") as [string, string]
+    const owner = encodeURIComponent(citation.owner)
+    const repo = encodeURIComponent(citation.repo)
+    const labelRepo = `${citation.owner}/${citation.repo}`.replace(/[\[\]()<>|]/gu, "_")
+    if (citation.kind === "pull_request") {
+      const url = `https://github.com/${owner}/${repo}/compare/${citation.baseSha}...${citation.headSha}`
+      return `- [${labelRepo} · PR #${citation.number} snapshot @ ${citation.headSha.slice(0, 7)}](${url})`
+    }
     const path = citation.path.split("/").map(encodeURIComponent).join("/")
     const anchor =
       citation.lineStart === citation.lineEnd
         ? `#L${citation.lineStart}`
         : `#L${citation.lineStart}-L${citation.lineEnd}`
-    const url = `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/blob/${citation.ref}/${path}${anchor}`
-    const labelRepo = citation.repo.replace(/[\[\]()<>|]/gu, "_")
+    const url = `https://github.com/${owner}/${repo}/blob/${citation.ref}/${path}${anchor}`
     const labelPath = citation.path.replace(/[\[\]()<>|]/gu, "_")
     return `- [${labelRepo} · ${labelPath}:${citation.lineStart}-${citation.lineEnd}](${url})`
   })

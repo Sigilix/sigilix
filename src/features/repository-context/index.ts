@@ -1,5 +1,19 @@
 export { purgeRepositoryContext, readRepositoryContext, replaceRepositoryContext } from "./adapters/d1-store"
 export {
+  abandonGitLabRepositoryAuthorityClaim,
+  activateGitLabRepositoryAuthority,
+  claimGitLabRepositoryAuthority,
+  readGitLabRepositoryAuthority,
+  releaseGitLabRepositoryAuthority,
+  verifyActiveGitLabRepositoryAuthorityGeneration,
+  type GitLabRepositoryAuthorityAbandonResult,
+  type GitLabRepositoryAuthorityActivationResult,
+  type GitLabRepositoryAuthorityClaimResult,
+  type GitLabRepositoryAuthorityGenerationResult,
+  type GitLabRepositoryAuthorityReadResult,
+  type GitLabRepositoryAuthorityReleaseResult,
+} from "./adapters/authority-store"
+export {
   readRepositoryContextForReview,
   type RepositoryContextReviewReadOutcome,
   type RepositoryContextReviewReadResult,
@@ -16,6 +30,7 @@ export {
   MAX_REPOSITORY_CONTEXT_RELATIONSHIPS,
   MAX_REPOSITORY_CONTEXT_REPOSITORIES,
   validateGitHubRepositoryContextInput,
+  validateNumericRepositoryContextInput,
   type RepositoryContextInput,
   type RepositoryContextInputRelationship,
   type RepositoryContextInputRepository,
@@ -43,9 +58,19 @@ export {
   type RepositoryContextScopedRenderResult,
   type RepositoryContextScopedRepositoryIdentity,
 } from "./domain/scoped-context"
+export {
+  canonicalGitLabRepositoryAuthorityIdentity,
+  canonicalGitLabRepositoryFullName,
+  canonicalGitLabSourceId,
+  makeGitLabRepositoryExternalId,
+  normalizeGitLabInstanceOrigin,
+  type GitLabRepositoryAuthorityIdentity,
+  type GitLabRepositoryAuthorityRepository,
+} from "./domain/authority"
 export type {
   PurgeRepositoryContextArgs,
   ReplaceRepositoryContextArgs,
+  RepositoryContextAuthorityGuard,
   RepositoryContextAction,
   RepositoryContextProvider,
   RepositoryContextReadResult,

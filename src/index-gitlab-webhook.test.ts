@@ -4,9 +4,17 @@
 // single-secret deploy is unaffected. A non-MR event is used so verification is
 // isolated from the enqueue path.
 
+import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import type { Env } from "@/src/shared/types/env"
 import { handleGitLabWebhook } from "@/src/index-gitlab-webhook"
+import { activateGitLabRepositoryAuthority, claimGitLabRepositoryAuthority } from "@/src/features/repository-context"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+
+const AUTHORITY_MIGRATION = readFileSync(
+  new URL("../migrations/0026_create_repository_context_authority.sql", import.meta.url),
+  "utf8",
+)
 
 function makeKV(seed: Record<string, string> = {}): KVNamespace {
   const store = new Map<string, string>(Object.entries(seed))
@@ -66,6 +74,87 @@ describe("handleGitLabWebhook — per-project secret resolution", () => {
     // The per-project secret does.
     const usingProject = await handleGitLabWebhook(req("psecret", "Push Hook", 5), env, ctx)
     expect(usingProject.status).toBe(200)
+  })
+
+  it("rejects a connected project's secret after the configured GitLab instance changes", async () => {
+    const env = {
+      OPENCLAW_STATE: makeKV({
+        "gitlab-webhook-secret:5": "instance-a-secret",
+        "gitlab-connection:5": JSON.stringify({
+          userId: "user-a",
+          projectPath: "grp/api",
+          name: "api",
+          hookId: 9,
+          connectedAt: "t",
+          contextOwnerUserId: "user-a",
+          instanceOrigin: "https://gitlab-a.example",
+          authorityExternalId: "gl:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          authorityClaimToken: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        }),
+      }),
+      OPENCLAW_REPOSITORY_CONTEXT_API: "on",
+      SIGILIX_GITLAB_BASE_URL: "https://gitlab-b.example",
+      SIGILIX_GITLAB_WEBHOOK_SECRET: "global",
+    } as unknown as Env
+
+    const stale = await handleGitLabWebhook(req("instance-a-secret", "Push Hook", 5), env, ctx)
+    expect(stale.status).toBe(401)
+    const global = await handleGitLabWebhook(req("global", "Push Hook", 5), env, ctx)
+    expect(global.status).toBe(401)
+  })
+
+  it("rejects a webhook secret from a generation that lost D1 authority", async () => {
+    const db = makeD1()
+    await db.exec(AUTHORITY_MIGRATION)
+    const stale = await claimGitLabRepositoryAuthority(db, {
+      scopeId: "user-a",
+      instanceOrigin: "https://gitlab.com",
+      sourceId: 5,
+      fullName: "grp/api",
+    })
+    if (stale.status !== "claimed") throw new Error("expected stale claim")
+    await db
+      .prepare(
+        "UPDATE repository_context_authority_repository" +
+          " SET claim_expires_at = '2000-01-01T00:00:00.000Z' WHERE claim_token = ?",
+      )
+      .bind(stale.claimToken)
+      .run()
+    const replacement = await claimGitLabRepositoryAuthority(db, {
+      scopeId: "user-b",
+      instanceOrigin: "https://gitlab.com",
+      sourceId: 5,
+      fullName: "grp/api",
+    })
+    if (replacement.status !== "claimed") throw new Error("expected replacement claim")
+    await activateGitLabRepositoryAuthority(db, {
+      scopeId: "user-b",
+      externalId: replacement.repository.externalId,
+      claimToken: replacement.claimToken,
+    })
+
+    const env = {
+      OPENCLAW_STATE: makeKV({
+        [`gitlab-webhook-secret:5:${stale.claimToken}`]: "stale-secret",
+        "gitlab-connection:5": JSON.stringify({
+          userId: "user-a",
+          projectPath: "grp/api",
+          name: "api",
+          hookId: 9,
+          connectedAt: "t",
+          contextOwnerUserId: "user-a",
+          instanceOrigin: "https://gitlab.com",
+          authorityExternalId: stale.repository.externalId,
+          authorityClaimToken: stale.claimToken,
+        }),
+      }),
+      OPENCLAW_REPOSITORY_CONTEXT_API: "on",
+      SIGILIX_GITLAB_BASE_URL: "https://gitlab.com",
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+
+    const response = await handleGitLabWebhook(req("stale-secret", "Push Hook", 5), env, ctx)
+    expect(response.status).toBe(401)
   })
 
   it("falls back to the global env secret for a project with no per-project secret", async () => {

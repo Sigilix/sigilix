@@ -143,6 +143,9 @@ export async function handlePutRepositoryContext(
   if (written.status === "conflict") {
     return json({ error: "revision_conflict", currentRevision: written.currentRevision }, 409)
   }
+  // GitHub writes do not currently pass a strong-authority guard, but keep the
+  // shared store's fail-closed result exhaustive for future provider cutovers.
+  if (written.status === "scope_changed") return json({ error: "repository_scope_changed" }, 409)
 
   console.log(
     JSON.stringify({

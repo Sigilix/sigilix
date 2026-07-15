@@ -6,11 +6,12 @@
 // KV keys (all in OPENCLAW_STATE):
 //   gitlab_connect_state:<nonce>     CSRF nonce for the OAuth round-trip ({userId,createdAt}), single-use, short TTL.
 //   gitlab-connect-oauth:<userId>    the user's GitLab OAuth access token, ENCRYPTED at rest, short TTL (picker window).
-//   gitlab-project-token:<projectId> the REVIEW credential (a project access token), PLAINTEXT — the EXISTING
-//                                    contract `resolveGitLabProjectToken` reads; storing it ALSO auto-allowlists
-//                                    the project (isGitLabProjectAllowlisted treats a per-project token as onboarded).
-//   gitlab-webhook-secret:<projectId>  the per-project webhook secret (PLAINTEXT — a shared secret like the global
-//                                    env one), resolved by the webhook-verify extension before the constant-time compare.
+//   gitlab-project-token:<projectId>[:<claimToken>] the REVIEW credential (a project access token), PLAINTEXT.
+//                                    Authority-backed connections use the exact-generation suffix so an expired
+//                                    writer cannot overwrite a successor generation; legacy/global mode keeps the
+//                                    original unsuffixed contract.
+//   gitlab-webhook-secret:<projectId>[:<claimToken>] the matching per-project webhook secret. Authority-backed
+//                                    connections use the same generation fence.
 //   gitlab-connection:<projectId>    the connection record ({userId,projectPath,name,hookId,connectedAt}) — pins
 //                                    OWNERSHIP by userId so a second tenant can't take over a connected project.
 //   gitlab-connections:<userId>      per-user index (array of projectIds) so the portal can list what it connected.
@@ -33,6 +34,7 @@ const PROJECT_TOKEN_PREFIX = "gitlab-project-token:"
 const WEBHOOK_SECRET_PREFIX = "gitlab-webhook-secret:"
 const CONNECTION_PREFIX = "gitlab-connection:"
 const CONNECTIONS_INDEX_PREFIX = "gitlab-connections:"
+const CLAIM_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/
 
 /** CSRF nonce lives just long enough for the human OAuth round-trip. */
 const STATE_TTL_SECONDS = 600
@@ -52,6 +54,15 @@ export interface GitLabConnection {
    *  before the ~1-year GitLab project-access-token lifetime lapses. */
   reviewTokenExpiresAt?: string
   connectedAt: string
+  /** Stable provider-neutral session subject that owns canonical context.
+   *  Absent only on legacy connector rows created before D1 authority. */
+  contextOwnerUserId?: string
+  /** Canonical GitLab instance base used to qualify the instance-local id. */
+  instanceOrigin?: string
+  /** D1 authority identity + generation; retained after activation so retries
+   *  and disconnect can linearize against the exact connection. */
+  authorityExternalId?: string
+  authorityClaimToken?: string
 }
 
 /** CSRF state record carried through the OAuth round-trip. */
@@ -125,30 +136,70 @@ export async function deleteUserOAuthToken(env: ConnectStoreEnv, userId: string)
 
 // ── review token + webhook secret (plaintext, existing contracts) ─────────────
 
-export async function putProjectReviewToken(env: ConnectStoreEnv, projectId: number, token: string): Promise<void> {
-  await env.OPENCLAW_STATE.put(`${PROJECT_TOKEN_PREFIX}${projectId}`, token)
+export async function putProjectReviewToken(
+  env: ConnectStoreEnv,
+  projectId: number,
+  token: string,
+  claimToken?: string,
+): Promise<void> {
+  const key = credentialKey(PROJECT_TOKEN_PREFIX, projectId, claimToken)
+  if (!key) throw new Error("invalid GitLab credential generation")
+  await env.OPENCLAW_STATE.put(key, token)
 }
 
-export async function getProjectReviewToken(env: ConnectStoreEnv, projectId: number): Promise<string | null> {
-  return env.OPENCLAW_STATE.get(`${PROJECT_TOKEN_PREFIX}${projectId}`)
+export async function getProjectReviewToken(
+  env: ConnectStoreEnv,
+  projectId: number,
+  claimToken?: string,
+): Promise<string | null> {
+  const key = credentialKey(PROJECT_TOKEN_PREFIX, projectId, claimToken)
+  return key ? env.OPENCLAW_STATE.get(key) : null
 }
 
-export async function deleteProjectReviewToken(env: ConnectStoreEnv, projectId: number): Promise<void> {
-  await env.OPENCLAW_STATE.delete(`${PROJECT_TOKEN_PREFIX}${projectId}`)
+export async function deleteProjectReviewToken(
+  env: ConnectStoreEnv,
+  projectId: number,
+  claimToken?: string,
+): Promise<void> {
+  const key = credentialKey(PROJECT_TOKEN_PREFIX, projectId, claimToken)
+  if (key) await env.OPENCLAW_STATE.delete(key)
 }
 
-export async function putProjectWebhookSecret(env: ConnectStoreEnv, projectId: number, secret: string): Promise<void> {
-  await env.OPENCLAW_STATE.put(`${WEBHOOK_SECRET_PREFIX}${projectId}`, secret)
+export async function putProjectWebhookSecret(
+  env: ConnectStoreEnv,
+  projectId: number,
+  secret: string,
+  claimToken?: string,
+): Promise<void> {
+  const key = credentialKey(WEBHOOK_SECRET_PREFIX, projectId, claimToken)
+  if (!key) throw new Error("invalid GitLab credential generation")
+  await env.OPENCLAW_STATE.put(key, secret)
 }
 
 /** The per-project webhook secret, or null when the project connected via the
  *  global-env secret only. Used by the webhook-verify extension. */
-export async function getProjectWebhookSecret(env: ConnectStoreEnv, projectId: number): Promise<string | null> {
-  return env.OPENCLAW_STATE.get(`${WEBHOOK_SECRET_PREFIX}${projectId}`)
+export async function getProjectWebhookSecret(
+  env: ConnectStoreEnv,
+  projectId: number,
+  claimToken?: string,
+): Promise<string | null> {
+  const key = credentialKey(WEBHOOK_SECRET_PREFIX, projectId, claimToken)
+  return key ? env.OPENCLAW_STATE.get(key) : null
 }
 
-export async function deleteProjectWebhookSecret(env: ConnectStoreEnv, projectId: number): Promise<void> {
-  await env.OPENCLAW_STATE.delete(`${WEBHOOK_SECRET_PREFIX}${projectId}`)
+export async function deleteProjectWebhookSecret(
+  env: ConnectStoreEnv,
+  projectId: number,
+  claimToken?: string,
+): Promise<void> {
+  const key = credentialKey(WEBHOOK_SECRET_PREFIX, projectId, claimToken)
+  if (key) await env.OPENCLAW_STATE.delete(key)
+}
+
+function credentialKey(prefix: string, projectId: number, claimToken?: string): string | null {
+  if (!Number.isSafeInteger(projectId) || projectId <= 0) return null
+  if (claimToken === undefined) return `${prefix}${projectId}`
+  return CLAIM_TOKEN_RE.test(claimToken) ? `${prefix}${projectId}:${claimToken}` : null
 }
 
 // ── connection record + per-user index ─────────────────────────────────────────

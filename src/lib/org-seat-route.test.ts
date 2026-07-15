@@ -70,6 +70,9 @@ async function makeDb(): Promise<D1Database> {
   await db.exec(MIGRATION_STRIPE_SEATS_SQL)
   await db.exec(MIGRATION_STRIPE_SEAT_CONTEXT_SQL)
   await db.exec(MIGRATION_ORG_ACCESS_SQL)
+  await db.exec(
+    readFileSync(new URL("../../migrations/0028_create_org_workspace_seat_assignment.sql", import.meta.url), "utf8"),
+  )
   return db
 }
 
@@ -749,36 +752,6 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     expect(res.status).toBe(403)
     expect(res.headers.get("access-control-allow-origin")).toBe("https://app.sigilix.ai")
     expect(await readSeatRow(db, 1, "dev")).toBeNull()
-  })
-
-  it("end-to-end via worker.fetch: managed access lets an active stored admin update a seat", async () => {
-    const db = await makeDb()
-    const kv = makeKV()
-    await seedSession(kv, "sess-active", "octocat", 111)
-    await seedOrgAccess(db, { installationId: 1, githubUserId: "111", role: "admin" })
-    await insertRepo(db, 100, 1, "octocat/api")
-    await insertMemberActivity(db, { installationId: 1, repoId: 100, prNumber: 1, authorLogin: "dev" })
-    const env = { ...baseEnv(kv, db), OPENCLAW_ORG_MEMBERSHIP_MODE: "on" } as Env
-    const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
-    // Sigilix's stored role is authoritative in managed mode even when the
-    // separate GitHub organization role is only member.
-    stubGitHub({
-      installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
-      memberships: [{ role: "member", state: "active", organization: { login: "acme" } }],
-    })
-
-    const res = await worker.fetch(
-      new Request("https://x/v1/org/1/members/dev/seat", {
-        method: "POST",
-        headers: { "content-type": "application/json", cookie: `${SESSION_COOKIE}=sess-active` },
-        body: JSON.stringify({ assigned: false }),
-      }),
-      env,
-      ctx,
-    )
-
-    expect(res.status).toBe(200)
-    expect((await readSeatRow(db, 1, "dev"))?.assigned).toBe(0)
   })
 
   it("end-to-end via worker.fetch: a roster-only member can be assigned", async () => {

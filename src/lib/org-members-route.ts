@@ -174,12 +174,19 @@ export async function handleDeleteOrgMember(
     if (active.kind === "error") {
       return json({ error: "org_membership_unavailable" }, 503)
     }
-    if (active.kind === "ok" && (!target.ok || active.operation.login !== target.value.login.trim().toLowerCase())) {
-      // An installation has at most one expansion in flight. Settling another
-      // member's operation here would unassign that member; wait for recovery
-      // to finish instead. A departed target has no trustworthy login to join
-      // against, so it takes the same fail-closed retry path.
-      return json({ error: "org_membership_busy" }, 503)
+    if (active.kind === "ok") {
+      const sameTarget =
+        active.operation.targetIdentityKind === "managed_github"
+          ? active.operation.targetGithubUserId === githubUserId
+          : target.ok && active.operation.login === target.value.login.trim().toLowerCase()
+      if (!sameTarget) {
+        // An installation has at most one expansion in flight. Settling another
+        // member's operation here would unassign that member; wait for recovery
+        // to finish instead. A departed target has no trustworthy login to join
+        // against for a legacy operation, so it takes the same fail-closed
+        // retry path. Managed operations use the persisted immutable user ID.
+        return json({ error: "org_membership_busy" }, 503)
+      }
     }
     const preparedSettlement =
       active.kind === "ok"

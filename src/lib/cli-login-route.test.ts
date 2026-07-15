@@ -164,10 +164,15 @@ const SCHEMA_FILES = [
   "0008_create_email_verification_token.sql",
   "0009_add_api_key_name.sql",
   "0010_add_gitlab_id_to_user_identity.sql",
+  "0020_create_stripe_seat_reconciliation.sql",
   "0021_create_app_memory.sql",
 ]
 
-const ORG_ACCESS_SCHEMA = "0022_create_org_workspace_access.sql"
+const ORG_ACCESS_SCHEMA_FILES = [
+  "0022_create_org_workspace_access.sql",
+  "0023_add_org_seat_billing_operation_context.sql",
+  "0028_create_org_workspace_seat_assignment.sql",
+]
 
 async function applySchema(db: D1Database): Promise<void> {
   for (const f of SCHEMA_FILES) {
@@ -176,7 +181,9 @@ async function applySchema(db: D1Database): Promise<void> {
 }
 
 async function applyOrgAccessSchema(db: D1Database): Promise<void> {
-  await db.exec(readFileSync(new URL(`../../migrations/${ORG_ACCESS_SCHEMA}`, import.meta.url), "utf8"))
+  for (const file of ORG_ACCESS_SCHEMA_FILES) {
+    await db.exec(readFileSync(new URL(`../../migrations/${file}`, import.meta.url), "utf8"))
+  }
 }
 
 async function seedStoredAccess(

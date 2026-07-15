@@ -6,7 +6,7 @@
 //   GET  /v1/org/overview                              → org-overview-route.ts
 //   POST /v1/org/:installationId/members               → org-members-route.ts
 //   PATCH/DELETE /v1/org/:installationId/members/:id   → org-members-route.ts
-//   POST /v1/org/:installationId/members/:login/seat   → org-seat-route.ts
+//   POST /v1/org/:installationId/members/:memberKey/seat → org-seat-route.ts
 //   GET  /v1/org/:installationId/data-consent          → data-consent-route.ts
 //   POST /v1/org/:installationId/data-consent          → data-consent-route.ts
 //   GET  /v1/org/:installationId/repository-context     → repository-context-route.ts
@@ -116,8 +116,8 @@ export async function handleOrgRoutes(request: Request, env: Env, ctx: Execution
   const seatMatch = SEAT_PATH_RE.exec(url.pathname)
   if (request.method === "POST" && seatMatch) {
     const iid = Number(decodeURIComponent(seatMatch[1]!))
-    const who = decodeURIComponent(seatMatch[2]!)
-    return withPortalCors(request, await handleOrgSeatRoute(request, env, ctx, iid, who), env)
+    const memberKey = decodeURIComponent(seatMatch[2]!)
+    return withPortalCors(request, await handleOrgSeatRoute(request, env, ctx, iid, memberKey), env)
   }
   // sig-training-data-consent: read/set the org's model-training consent — data-consent-route.ts
   const consentMatch = DATA_CONSENT_PATH_RE.exec(url.pathname)

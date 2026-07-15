@@ -42,8 +42,8 @@ const SNAPSHOT_COLUMNS = `installation_id, stripe_customer_id, stripe_subscripti
   last_stripe_event_created_at_ms, last_stripe_event_received_at_ms, last_refreshed_at_ms,
   refresh_due_at_ms, created_at_ms, updated_at_ms`
 
-const OPERATION_COLUMNS = `operation_id, installation_id, revision, login, actor_login, target_is_admin,
-  requested_assigned, previous_assigned, desired_quantity, state, stripe_subscription_id,
+const OPERATION_COLUMNS = `operation_id, installation_id, revision, login, target_identity_kind,
+  target_github_user_id, actor_login, target_is_admin, requested_assigned, previous_assigned, desired_quantity, state, stripe_subscription_id,
   stripe_subscription_item_id, stripe_observed_quantity, idempotency_key, attempts, error_code,
   next_attempt_at_ms, created_at_ms, updated_at_ms, stripe_applied_at_ms, completed_at_ms`
 

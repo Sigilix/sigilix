@@ -197,7 +197,8 @@ export async function setOrgWorkspaceRole(db: D1Database, args: RoleMutationArgs
 
 /**
  * Revoke Sigilix access. The tombstone, exact-installation key revocation,
- * legacy seat unassign, and durable audit commit in one D1 transaction.
+ * immutable managed-seat unassign, optional legacy seat unassign, and durable
+ * audit commit in one D1 transaction.
  */
 export async function removeOrgWorkspaceAccess(
   db: D1Database,
@@ -306,6 +307,25 @@ function removalMutationStatements(
             )`,
       )
       .bind(args.nowIso, args.installationId, args.githubUserId, args.installationId, args.githubUserId, auditId),
+    db
+      .prepare(
+        `UPDATE org_workspace_seat_assignment
+            SET assigned = 0, updated_at = ?, updated_by = ?
+          WHERE installation_id = ? AND github_user_id = ?
+            AND EXISTS (
+              SELECT 1 FROM org_workspace_access
+               WHERE installation_id = ? AND github_user_id = ? AND last_audit_id = ?
+            )`,
+      )
+      .bind(
+        args.nowIso,
+        args.updatedBy,
+        args.installationId,
+        args.githubUserId,
+        args.installationId,
+        args.githubUserId,
+        auditId,
+      ),
   ]
   if (loginKey !== null) {
     statements.push(

@@ -12,11 +12,17 @@ export const ORG_SEAT_BILLING_OPERATION_STATES = [
 
 export type OrgSeatBillingOperationState = (typeof ORG_SEAT_BILLING_OPERATION_STATES)[number]
 
+export const ORG_SEAT_TARGET_IDENTITY_KINDS = ["legacy_login", "managed_github"] as const
+
+export type OrgSeatTargetIdentityKind = (typeof ORG_SEAT_TARGET_IDENTITY_KINDS)[number]
+
 export interface OrgSeatBillingOperation {
   operationId: string
   installationId: number
   revision: number
   login: string
+  targetIdentityKind: OrgSeatTargetIdentityKind
+  targetGithubUserId: string | null
   actorLogin: string | null
   targetIsAdmin: boolean | null
   requestedAssigned: boolean
@@ -94,6 +100,8 @@ type OperationRow = {
   installation_id: unknown
   revision: unknown
   login: unknown
+  target_identity_kind: unknown
+  target_github_user_id: unknown
   actor_login: unknown
   target_is_admin: unknown
   requested_assigned: unknown
@@ -119,6 +127,16 @@ function isSnapshotState(value: unknown): value is StripeSnapshotState {
 
 function isOperationState(value: unknown): value is OrgSeatBillingOperationState {
   return typeof value === "string" && (ORG_SEAT_BILLING_OPERATION_STATES as readonly string[]).includes(value)
+}
+
+function isTargetIdentityKind(value: unknown): value is OrgSeatTargetIdentityKind {
+  return typeof value === "string" && (ORG_SEAT_TARGET_IDENTITY_KINDS as readonly string[]).includes(value)
+}
+
+function isCanonicalGithubUserId(value: unknown): value is string {
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) return false
+  const numeric = Number(value)
+  return Number.isSafeInteger(numeric) && numeric > 0 && String(numeric) === value
 }
 
 function nullableString(value: unknown): string | null | undefined {
@@ -225,6 +243,7 @@ export function decodeOrgSeatBillingOperationRow(value: unknown): OrgSeatBilling
   const row = value as OperationRow
   const operationId = nullableString(row.operation_id)
   const login = nullableString(row.login)
+  const targetGithubUserId = nullableString(row.target_github_user_id)
   const actorLogin = nullableString(row.actor_login)
   const targetIsAdmin = nullableBoolean(row.target_is_admin)
   const stripeSubscriptionId = nullableString(row.stripe_subscription_id)
@@ -243,6 +262,8 @@ export function decodeOrgSeatBillingOperationRow(value: unknown): OrgSeatBilling
     row.revision === 0 ||
     login == null ||
     login.trim() === "" ||
+    !isTargetIdentityKind(row.target_identity_kind) ||
+    targetGithubUserId === undefined ||
     actorLogin === undefined ||
     targetIsAdmin === undefined ||
     (row.requested_assigned !== 0 && row.requested_assigned !== 1) ||
@@ -260,6 +281,12 @@ export function decodeOrgSeatBillingOperationRow(value: unknown): OrgSeatBilling
     !nonNegativeInteger(row.updated_at_ms) ||
     stripeAppliedAtMs === undefined ||
     completedAtMs === undefined
+  ) {
+    return null
+  }
+  if (
+    (row.target_identity_kind === "legacy_login" && targetGithubUserId !== null) ||
+    (row.target_identity_kind === "managed_github" && !isCanonicalGithubUserId(targetGithubUserId))
   ) {
     return null
   }
@@ -297,6 +324,8 @@ export function decodeOrgSeatBillingOperationRow(value: unknown): OrgSeatBilling
     installationId: row.installation_id,
     revision: row.revision,
     login,
+    targetIdentityKind: row.target_identity_kind,
+    targetGithubUserId,
     actorLogin,
     targetIsAdmin,
     requestedAssigned: row.requested_assigned === 1,

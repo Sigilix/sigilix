@@ -1,15 +1,14 @@
-// sig seat management — POST /v1/org/:installationId/members/:login/seat.
+// sig seat management — POST /v1/org/:installationId/members/:memberKey/seat.
 //
 // Admin-only assign (`{ assigned: true }`) / unassign (`{ assigned: false }`) of
 // one member's BILLABLE seat, driving the org's billed-seat count. Powers the
 // portal Organization → Members seat control (OrganizationPanel.tsx →
 // setMemberSeat in the portal's api.ts).
 //
-// A "seat" is DERIVED from real activity (distinct usage_ledger.author_login for
-// the installation — see org-overview-route.ts); this route stores an admin's
-// explicit OVERRIDE of the default-assigned state in org_seat_assignment (0007).
-// The overview reads that override back as each seat's `assigned` flag +
-// `assignedSeatCount` (the billed subset).
+// Rollout off preserves the legacy activity/login override in
+// org_seat_assignment (0007). Rollout on resolves the target through the exact
+// App roster, authorizes its immutable GitHub id in org_workspace_access, and
+// stores only org_workspace_seat_assignment (0028). Login is display metadata.
 //
 // AUTH — SESSION-ONLY, by design. Unlike the dual-authed READ routes (overview /
 // usage accept a bearer api key), this billing-affecting WRITE requires a portal
@@ -23,9 +22,10 @@
 // while rollout is off). A revoked stored admin cannot mutate billable seats.
 // Cross-tenant targets fail closed and no row is written.
 //
-// TARGET — must be a MEMBER of the installation, proven case-insensitively by
-// either real usage activity or the installed App's GitHub roster. A complete
-// activity + roster miss → 404; an incomplete/unavailable proof source → 503.
+// TARGET — rollout off accepts the legacy login proven by activity or roster.
+// Rollout on prefers the immutable numeric GitHub id; a roster-resolved login
+// remains a transition-only Portal compatibility path but never becomes the
+// stored authority. Active exact-installation Sigilix access is also required.
 //
 // LAST-ADMIN GUARD — fail-closed. Unassigning a KNOWN admin seat (the caller's
 // own seat is always known-admin; other seats via org_seat_assignment.is_admin)
@@ -38,6 +38,7 @@
 
 import { requireSession } from "@/src/lib/auth-middleware"
 import { reconcileOrgSeatAssignment } from "@/src/features/billing"
+import { readOrgWorkspaceAccess } from "@/src/features/org-membership"
 import { fetchInstallationRoster } from "@/src/lib/org-members-roster"
 import { requireOrgAccess } from "@/src/lib/org-access"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
@@ -46,6 +47,7 @@ import type { Env } from "@/src/shared/types/env"
 /** Success body — mirrors the portal's SeatMutationResponse (setup/api.ts). */
 export interface SeatMutationResponse {
   installationId: number
+  githubUserId?: string
   login: string
   assigned: boolean
   updatedAt: string
@@ -138,6 +140,79 @@ async function resolveInstallationMember(
   }
 }
 
+type ManagedInstallationMemberResolution =
+  | { kind: "member"; githubUserId: string; login: string }
+  | { kind: "not_member" }
+  | { kind: "unavailable" }
+
+/**
+ * Resolve managed targets through the exact installation roster, then require
+ * active stored access by immutable GitHub id. A non-numeric key remains a
+ * temporary compatibility path for the Portal's login-addressed client; it is
+ * never persisted or compared as authority. Numeric-looking keys are treated
+ * only as ids, so they cannot fall through and spoof a login.
+ */
+async function resolveManagedInstallationMember(
+  env: Env,
+  installationId: number,
+  memberKey: string,
+): Promise<ManagedInstallationMemberResolution> {
+  const db = env.SIGILIX_PLATFORM_DB
+  if (!db || installationId <= 0) return { kind: "unavailable" }
+
+  let account: { login: string; type: "Organization" | "User" }
+  try {
+    const tenant = await db
+      .prepare("SELECT account_login, account_type FROM tenant WHERE installation_id = ?")
+      .bind(installationId)
+      .first<{ account_login: unknown; account_type: unknown }>()
+    if (
+      tenant == null ||
+      typeof tenant.account_login !== "string" ||
+      tenant.account_login === "" ||
+      (tenant.account_type !== "Organization" && tenant.account_type !== "User")
+    ) {
+      return { kind: "unavailable" }
+    }
+    account = { login: tenant.account_login, type: tenant.account_type }
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "org-seat-managed-tenant-read-failed",
+        installationId,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return { kind: "unavailable" }
+  }
+
+  try {
+    const roster = await fetchInstallationRoster(env, installationId, account.login, account.type)
+    const numericMemberKey = Number(memberKey)
+    const byId =
+      /^[1-9]\d*$/.test(memberKey) &&
+      Number.isSafeInteger(numericMemberKey) &&
+      numericMemberKey > 0 &&
+      String(numericMemberKey) === memberKey
+    const member = roster.members.find((candidate) =>
+      byId ? candidate.githubUserId === memberKey : candidate.login.toLowerCase() === memberKey.toLowerCase(),
+    )
+    if (!member) return roster.complete ? { kind: "not_member" } : { kind: "unavailable" }
+    const access = await readOrgWorkspaceAccess(db, installationId, member.githubUserId)
+    if (access === null || access.revokedAt !== null) return { kind: "not_member" }
+    return { kind: "member", githubUserId: member.githubUserId, login: member.login }
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "org-seat-managed-member-check-failed",
+        installationId,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return { kind: "unavailable" }
+  }
+}
+
 /**
  * Count assigned admin seats for `installationId` EXCLUDING `targetKey`
  * (lowercased). Reads org_seat_assignment rows with is_admin = 1 AND
@@ -202,21 +277,21 @@ async function storedTargetIsAdmin(
 }
 
 /**
- * POST /v1/org/:installationId/members/:login/seat — see file header.
- * `installationId` / `login` are the already-decoded path segments.
+ * POST /v1/org/:installationId/members/:memberKey/seat — see file header.
+ * `installationId` / `memberKey` are the already-decoded path segments.
  */
 export async function handleOrgSeatRoute(
   request: Request,
   env: Env,
   ctx: ExecutionContext | undefined,
   installationId: number,
-  login: string,
+  memberKey: string,
 ): Promise<Response> {
   if (!Number.isInteger(installationId) || installationId <= 0) {
     return json({ error: "invalid installation id" }, 400)
   }
-  const targetLogin = login.trim()
-  if (targetLogin === "") return json({ error: "invalid member login" }, 400)
+  const targetMemberKey = memberKey.trim()
+  if (targetMemberKey === "") return json({ error: "invalid member login" }, 400)
 
   const session = await requireSession(request, env, ctx)
   if (!session) return json({ error: "unauthorized" }, 401)
@@ -242,8 +317,63 @@ export async function handleOrgSeatRoute(
     return json({ error: "seat_unavailable" }, 503)
   }
 
-  const targetKey = targetLogin.toLowerCase()
+  const targetKey = targetMemberKey.toLowerCase()
   const callerKey = callerLogin.toLowerCase()
+
+  if (env.OPENCLAW_ORG_MEMBERSHIP_MODE === "on") {
+    const member = await resolveManagedInstallationMember(env, installationId, targetMemberKey)
+    if (member.kind === "unavailable") return json({ error: "seat_unavailable" }, 503)
+    if (member.kind === "not_member") return json({ error: "not a member of this installation" }, 404)
+
+    const reconciled = await reconcileOrgSeatAssignment(env, {
+      installationId,
+      target: {
+        kind: "managed_github",
+        githubUserId: member.githubUserId,
+        lastKnownLogin: member.login,
+      },
+      requestedAssigned: assigned,
+      actorLogin: callerLogin,
+      ...(ctx ? { ctx } : {}),
+    })
+    if (reconciled.kind === "busy") return json({ error: "seat_reconciliation_busy" }, 503)
+    if (reconciled.kind === "last_admin") return json({ error: "cannot unassign the last admin seat" }, 409)
+    if (reconciled.kind === "pending") {
+      return json(
+        {
+          installationId,
+          githubUserId: member.githubUserId,
+          login: member.login,
+          assigned: reconciled.assigned,
+          updatedAt: reconciled.updatedAt,
+          pending: true,
+          operationId: reconciled.operationId,
+        },
+        202,
+      )
+    }
+    if (reconciled.kind !== "applied") {
+      console.warn(
+        JSON.stringify({
+          event: "org-seat-reconcile-failed",
+          installationId,
+          kind: reconciled.kind,
+          error: reconciled.error,
+        }),
+      )
+      return json({ error: reconciled.error }, reconciled.kind === "invalid" ? 400 : 503)
+    }
+    return json(
+      {
+        installationId,
+        githubUserId: member.githubUserId,
+        login: member.login,
+        assigned: reconciled.assigned,
+        updatedAt: reconciled.updatedAt,
+      } satisfies SeatMutationResponse,
+      200,
+    )
+  }
 
   // The target must be proven by activity or the installed-App roster. Roster
   // presence is positive proof; only a roster miss needs complete pagination.
@@ -276,18 +406,18 @@ export async function handleOrgSeatRoute(
 
   const reconciled = await reconcileOrgSeatAssignment(env, {
     installationId,
-    login: targetKey,
+    target: { kind: "legacy_login", login: targetKey, targetIsAdmin: targetKey === callerKey },
     requestedAssigned: assigned,
-    targetIsAdmin: targetKey === callerKey,
     actorLogin: callerLogin,
     ...(ctx ? { ctx } : {}),
   })
   if (reconciled.kind === "busy") return json({ error: "seat_reconciliation_busy" }, 503)
+  if (reconciled.kind === "last_admin") return json({ error: "cannot unassign the last admin seat" }, 409)
   if (reconciled.kind === "pending") {
     return json(
       {
         installationId,
-        login: targetLogin,
+        login: targetMemberKey,
         assigned: reconciled.assigned,
         updatedAt: reconciled.updatedAt,
         pending: true,
@@ -310,7 +440,7 @@ export async function handleOrgSeatRoute(
   return json(
     {
       installationId,
-      login: targetLogin,
+      login: targetMemberKey,
       assigned: reconciled.assigned,
       updatedAt: reconciled.updatedAt,
     } satisfies SeatMutationResponse,

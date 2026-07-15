@@ -28,7 +28,10 @@ async function makeDb(): Promise<D1Database> {
   await db.exec(migration("0001_create_tenant_repo_usage.sql"))
   await db.exec(migration("0003_create_account_tenant_and_api_key.sql"))
   await db.exec(migration("0007_create_org_seat_assignment.sql"))
+  await db.exec(migration("0020_create_stripe_seat_reconciliation.sql"))
   await db.exec(migration("0022_create_org_workspace_access.sql"))
+  await db.exec(migration("0023_add_org_seat_billing_operation_context.sql"))
+  await db.exec(migration("0028_create_org_workspace_seat_assignment.sql"))
   await db
     .prepare(
       "INSERT INTO tenant (installation_id, tier, account_login, account_type, created_at, updated_at)" +

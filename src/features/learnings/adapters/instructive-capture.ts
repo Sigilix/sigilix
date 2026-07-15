@@ -39,6 +39,7 @@
 // can never block the surface's user-facing reply.
 
 import { classifyLearningMemory } from "@/src/features/learnings/domain/classify"
+import { classifyLearningVerification } from "@/src/features/learnings/domain/verify-provenance"
 import type { ExtractionSurface } from "@/src/features/learnings/domain/extractor"
 import { resolveLearningsMode, resolveOrgMemoryCaptureMode } from "@/src/features/learnings/domain/mode"
 import { computeLearningId, normalizeRule } from "@/src/features/learnings/domain/store-ops"
@@ -141,6 +142,10 @@ export async function captureInstructiveLearning(
       polarity: extracted.polarity,
       suggestedType: extracted.memoryType ?? null,
     })
+    // Instructive teachings carry no runnable evidence — classify records the
+    // honest `unverified` provenance. A future evidence-carrying capture path
+    // passes the finding's evidence to get `verified` (SIG-600).
+    const verification = classifyLearningVerification()
     const entry: LearningEntry = {
       id: learningId,
       rule,
@@ -155,6 +160,7 @@ export async function captureInstructiveLearning(
       ...(actor !== undefined ? { authorLogin: actor } : {}),
       type,
       lifespanAnchor,
+      verification,
     }
 
     const appended = await appendLearning(env, scope, subjectId, entry, Date.parse(createdTs))

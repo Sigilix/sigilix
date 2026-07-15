@@ -10,6 +10,7 @@ import {
   validateCheckoutRequest,
   resolvePriceForTier,
   buildCheckoutForm,
+  fingerprintCheckoutIntent,
   trialDaysForTier,
 } from "@/src/features/billing/domain/checkout-session"
 
@@ -130,6 +131,7 @@ describe("trialDaysForTier — the Pro-only trial gate", () => {
 })
 
 describe("buildCheckoutForm — the Stripe form fields", () => {
+  const expiresAtEpochSeconds = 1_800_000_000
   const form = buildCheckoutForm({
     priceId: "price_teams",
     seats: 12,
@@ -140,6 +142,7 @@ describe("buildCheckoutForm — the Stripe form fields", () => {
     customerId: "cus_ABC",
     successUrl: "https://app.sigilix.ai/org?checkout=success",
     cancelUrl: "https://app.sigilix.ai/org?checkout=cancel",
+    expiresAtEpochSeconds,
   })
 
   it("sets a 14-day trial for PRO only", () => {
@@ -153,6 +156,7 @@ describe("buildCheckoutForm — the Stripe form fields", () => {
       customerId: "cus_ABC",
       successUrl: "https://app.sigilix.ai/org?checkout=success",
       cancelUrl: "https://app.sigilix.ai/org?checkout=cancel",
+      expiresAtEpochSeconds,
     })
     expect(proForm.get("subscription_data[trial_period_days]")).toBe("14")
   })
@@ -169,6 +173,7 @@ describe("buildCheckoutForm — the Stripe form fields", () => {
         customerId: "cus_ABC",
         successUrl: "https://app.sigilix.ai/org?checkout=success",
         cancelUrl: "https://app.sigilix.ai/org?checkout=cancel",
+        expiresAtEpochSeconds,
       })
       expect(f.has("subscription_data[trial_period_days]")).toBe(false)
       expect(f.get("subscription_data[trial_period_days]")).toBeNull()
@@ -194,5 +199,28 @@ describe("buildCheckoutForm — the Stripe form fields", () => {
     expect(form.get("customer")).toBe("cus_ABC")
     expect(form.get("success_url")).toBe("https://app.sigilix.ai/org?checkout=success")
     expect(form.get("cancel_url")).toBe("https://app.sigilix.ai/org?checkout=cancel")
+    expect(form.get("expires_at")).toBe(String(expiresAtEpochSeconds))
+  })
+
+  it("keeps intent identity stable across attempt expiries but changes for purchase semantics", async () => {
+    const base = {
+      priceId: "price_pro",
+      seats: 1,
+      bounds: SEAT_BOUNDS.pro,
+      tier: "pro" as const,
+      billingPeriod: "monthly" as const,
+      installationId: 987654,
+      customerId: "cus_ABC",
+      successUrl: "https://app.sigilix.ai/org?checkout=success",
+      cancelUrl: "https://app.sigilix.ai/org?checkout=cancel",
+      expiresAtEpochSeconds,
+    }
+    const original = await fingerprintCheckoutIntent(base)
+    const laterExpiry = await fingerprintCheckoutIntent({ ...base, expiresAtEpochSeconds: expiresAtEpochSeconds + 600 })
+    const changedSeats = await fingerprintCheckoutIntent({ ...base, seats: 2 })
+
+    expect(original).toMatch(/^[0-9a-f]{64}$/)
+    expect(laterExpiry).toBe(original)
+    expect(changedSeats).not.toBe(original)
   })
 })

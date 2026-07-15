@@ -174,6 +174,9 @@ export async function dispatchGitLabMrReview(
     env,
     ensembleConfig: parseEnsembleConfig(env),
     githubClient: client as unknown as GitHubClient,
+    ...(resolved.repositoryContextIdentity !== undefined
+      ? { repositoryContextIdentity: resolved.repositoryContextIdentity }
+      : {}),
     ...(backgroundWaitUntil !== undefined ? { backgroundWaitUntil } : {}),
   })
 

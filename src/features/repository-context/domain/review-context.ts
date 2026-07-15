@@ -1,9 +1,4 @@
-import type {
-  RepositoryContextProvider,
-  RepositoryContextRelationship,
-  RepositoryContextRepository,
-  RepositoryContextSnapshot,
-} from "./types"
+import type { RepositoryContextRelationship, RepositoryContextRepository, RepositoryContextSnapshot } from "./types"
 
 export const REPOSITORY_CONTEXT_REVIEW_FORMAT = "r1" as const
 export const MAX_REPOSITORY_CONTEXT_REVIEW_CHARS = 8_000
@@ -21,13 +16,24 @@ const TRUST_AFTER = [
 ].join("\n")
 const ELLIPSIS = "…"
 
-export type RepositoryContextReviewMode = "off" | "shadow"
+export type RepositoryContextReviewMode = "off" | "shadow" | "post"
 
-export interface RepositoryContextReviewIdentity {
-  provider: RepositoryContextProvider
+export interface GitHubRepositoryContextReviewIdentity {
+  provider: "github"
   scopeId: string
   repositoryExternalId: string
 }
+
+export interface GitLabRepositoryContextReviewIdentity {
+  provider: "gitlab"
+  scopeId: string
+  repositoryExternalId: string
+  authorityClaimToken: string
+}
+
+export type RepositoryContextReviewIdentity =
+  | GitHubRepositoryContextReviewIdentity
+  | GitLabRepositoryContextReviewIdentity
 
 interface ReviewRepository {
   name: string
@@ -63,19 +69,34 @@ export type RepositoryContextReviewRenderResult =
 
 export function parseRepositoryContextReviewMode(raw: string | undefined): RepositoryContextReviewMode {
   const normalized = (raw ?? "").trim().toLowerCase()
-  return normalized === "shadow" ? "shadow" : "off"
+  return normalized === "shadow" || normalized === "post" ? normalized : "off"
 }
 
 export function makeGitHubRepositoryContextReviewIdentity(
   installationId: number,
   repositoryId: number,
-): RepositoryContextReviewIdentity | null {
+): GitHubRepositoryContextReviewIdentity | null {
   if (!validPositiveSafeInteger(installationId) || !validPositiveSafeInteger(repositoryId)) return null
   return {
     provider: "github",
     scopeId: String(installationId),
     repositoryExternalId: String(repositoryId),
   }
+}
+
+export function makeGitLabRepositoryContextReviewIdentity(
+  scopeId: string,
+  repositoryExternalId: string,
+  authorityClaimToken: string,
+): GitLabRepositoryContextReviewIdentity | null {
+  if (
+    !validScopeId(scopeId) ||
+    !/^gl:v1:[A-Za-z0-9_-]{43}$/u.test(repositoryExternalId) ||
+    !/^[A-Za-z0-9_-]{43}$/u.test(authorityClaimToken)
+  ) {
+    return null
+  }
+  return { provider: "gitlab", scopeId, repositoryExternalId, authorityClaimToken }
 }
 
 export function renderRepositoryContextForReview(
@@ -230,4 +251,8 @@ function compareCodepoints(left: string, right: string): number {
 
 function validPositiveSafeInteger(value: number): boolean {
   return Number.isSafeInteger(value) && value > 0
+}
+
+function validScopeId(value: string): boolean {
+  return value.length >= 1 && value.length <= 128 && value.trim() === value && !value.includes("\u0000")
 }

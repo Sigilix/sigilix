@@ -383,12 +383,12 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       })
     }
 
+    const repositoryContextIdentity =
+      args.repositoryContextIdentity?.provider === args.scmProvider ? args.repositoryContextIdentity : undefined
     const repositoryContextPromise = readRepositoryContextForReview({
       mode: ensembleConfig.flags.repositoryContextReviewMode,
       ...(env.SIGILIX_PLATFORM_DB !== undefined ? { db: env.SIGILIX_PLATFORM_DB } : {}),
-      ...(args.scmProvider === "github" && args.repositoryContextIdentity !== undefined
-        ? { identity: args.repositoryContextIdentity }
-        : {}),
+      ...(repositoryContextIdentity !== undefined ? { identity: repositoryContextIdentity } : {}),
     })
     const evidence = await gatherRetrievalEvidence({
       scmProvider: args.scmProvider,
@@ -482,7 +482,6 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     // Prompt fact-blocks, manifest, hints, factsByRole, stack, and evidence live in
     // ensemble/app/context/assemble-prompts. Closures (maybePostAstAutoInline /
     // messageForRole) are RETURNED (hiding captures); other values flow out unchanged.
-    await repositoryContextPromise
     const prompts = await assembleSpecialistPrompts({
       scmProvider: args.scmProvider,
       env,
@@ -512,6 +511,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       secretHits,
       depVulnFindings,
       depVulnBlock,
+      repositoryContextBlock: (await repositoryContextPromise).promptBlock,
       retrievalSnapshot,
       perfRetrievalSnapshot,
       logicSymbolSnapshot,

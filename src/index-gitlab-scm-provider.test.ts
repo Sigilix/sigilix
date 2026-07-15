@@ -107,6 +107,58 @@ describe("resolveGitLabProjectToken (per-tenant token: KV-first, global fall-bac
     await expect(resolveGitLabProjectToken(env, 42)).resolves.toEqual({ token: "global", source: "global" })
   })
 
+  it("returns repository context identity only with the exact active authority generation token", async () => {
+    const db = makeD1()
+    await db.exec(AUTHORITY_MIGRATION)
+    const claim = await claimGitLabRepositoryAuthority(db, {
+      scopeId: "user-a",
+      instanceOrigin: "https://gitlab.com",
+      sourceId: 42,
+      fullName: "grp/api",
+    })
+    if (claim.status !== "claimed") throw new Error("expected authority claim")
+    await expect(
+      activateGitLabRepositoryAuthority(db, {
+        scopeId: "user-a",
+        externalId: claim.repository.externalId,
+        claimToken: claim.claimToken,
+      }),
+    ).resolves.toMatchObject({ status: "activated" })
+
+    const env = envWith(
+      {
+        OPENCLAW_REPOSITORY_CONTEXT_API: "on",
+        SIGILIX_GITLAB_BASE_URL: "https://gitlab.com",
+        SIGILIX_PLATFORM_DB: db,
+      },
+      {
+        [`gitlab-project-token:42:${claim.claimToken}`]: "generation-token",
+        "gitlab-connection:42": JSON.stringify({
+          userId: "user-a",
+          projectPath: "grp/api",
+          name: "api",
+          hookId: 9,
+          connectedAt: "t",
+          contextOwnerUserId: "user-a",
+          instanceOrigin: "https://gitlab.com",
+          authorityExternalId: claim.repository.externalId,
+          authorityClaimToken: claim.claimToken,
+        }),
+      },
+    )
+
+    await expect(resolveGitLabProjectToken(env, 42)).resolves.toEqual({
+      token: "generation-token",
+      source: "per-project",
+      repositoryContextIdentity: {
+        provider: "gitlab",
+        scopeId: "user-a",
+        repositoryExternalId: claim.repository.externalId,
+        authorityClaimToken: claim.claimToken,
+      },
+    })
+  })
+
   it("returns null when neither is configured", async () => {
     await expect(resolveGitLabProjectToken(envWith(), 42)).resolves.toBeNull()
   })

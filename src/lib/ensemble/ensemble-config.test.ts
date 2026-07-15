@@ -354,9 +354,12 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
     })
   })
 
-  it("parses the shadow-only repository-context review rollout fail-closed", () => {
+  it("parses the exact shadow/post repository-context review rollout fail-closed", () => {
     expect(parseEnsembleConfig({ OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE: "  SHADOW  " }).flags).toMatchObject({
       repositoryContextReviewMode: "shadow",
+    })
+    expect(parseEnsembleConfig({ OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE: "  POST  " }).flags).toMatchObject({
+      repositoryContextReviewMode: "post",
     })
     expect(parseEnsembleConfig({ OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE: "On" }).flags).toMatchObject({
       repositoryContextReviewMode: "off",

@@ -1203,9 +1203,10 @@ SIGILIX_DYNAMIC_DISPATCHER_MODE = "shadow"
 # (telemetry only, output unchanged) or "off" (inert).
 SIGILIX_REVIEW_MULTIBATCH_MODE = "on"
 
-# Canonical repository context for GitHub PR review. Shadow reads and measures
-# the exact installation/repository tuple while leaving model prompts unchanged.
-SIGILIX_REPOSITORY_CONTEXT_REVIEW_MODE = "shadow"
+# Canonical repository context for GitHub and GitLab PR review. Post reads the
+# exact provider authority and supplies the bounded untrusted block only to the
+# review specialists. Roll back to "shadow" to measure without prompt changes.
+SIGILIX_REPOSITORY_CONTEXT_REVIEW_MODE = "post"
 
 # Canonical repository descriptions for Linear triage and mention replies.
 # Shadow reads the exact installation + team-bound immutable repository ids,

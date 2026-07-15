@@ -39,6 +39,7 @@ export {
   resolveLearningsMode,
   resolveMemoryConsolidateMode,
   resolveMemoryDecayMode,
+  resolveMemoryProvenanceMode,
   resolveOrgMemoryApplyMode,
   resolveOrgMemoryCaptureMode,
   resolveSurfaceMemoryApplyMode,
@@ -47,10 +48,13 @@ export type {
   CliOrgMemoryMode,
   MemoryConsolidateMode,
   MemoryDecayMode,
+  MemoryProvenanceMode,
   OrgMemoryApplyMode,
   OrgMemoryCaptureMode,
   SurfaceMemoryApplyMode,
 } from "./domain/mode"
+export { buildMemoryProvenance, renderMemoryProvenance, resolveAppliedMemoryProvenance } from "./domain/provenance"
+export type { MemoryProvenance, MemoryProvenanceItem } from "./domain/provenance"
 export {
   renderBoostedCategoriesForPrompt,
   renderConfirmReply,

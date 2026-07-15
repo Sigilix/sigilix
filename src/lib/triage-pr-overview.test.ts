@@ -16,6 +16,8 @@ import {
 } from "@/src/lib/triage-pr-overview"
 import type { CachedFileRow } from "@/src/lib/pr-overview-file-cache"
 import type { PrCommit, PullRequestMeta } from "@/src/shared/types/github"
+import { buildMemoryProvenance, renderMemoryProvenance } from "@/src/features/learnings"
+import type { LearningEntry } from "@/src/features/learnings"
 
 describe("parseOverviewResponse", () => {
   const valid: PrOverviewVerdict = {
@@ -226,6 +228,78 @@ describe("formatOverviewComment", () => {
   it("omits the warmup marker entirely when warmup is none", () => {
     const md = formatOverviewComment({ verdict, isFirstRun: true, warmup: "none" })
     expect(md).not.toContain("sigilix:warmup-callout")
+  })
+
+  // SIG memory-provenance ("show your work"): the display-only overview footer.
+  // The provenance is built from the SAME LearningEntry[] the review injected, so
+  // these are end-to-end over the real render path.
+  describe("memory provenance footer", () => {
+    const learning = (over: Partial<LearningEntry> = {}): LearningEntry => ({
+      id: over.id ?? "l1",
+      rule: over.rule ?? "Prefer the service layer for database access.",
+      polarity: over.polarity ?? "context",
+      category: over.category ?? null,
+      pathGlob: over.pathGlob ?? null,
+      scope: over.scope ?? "repo",
+      subjectId: over.subjectId ?? "123",
+      source: over.source ?? { kind: "command", prNumber: 7 },
+      createdTs: over.createdTs ?? "2026-06-15T12:00:00.000Z",
+      appliedCount: over.appliedCount ?? 0,
+    })
+
+    it("renders the provenance note when applied learnings are threaded (flag on)", () => {
+      const prov = buildMemoryProvenance([
+        learning({ id: "org-1", scope: "org", rule: "No raw SQL in request handlers." }),
+        learning({ id: "repo-1", scope: "repo", rule: "The worker entry point is src/index.ts." }),
+      ])!
+      const md = formatOverviewComment({ verdict, isFirstRun: true, memoryProvenance: prov })
+      expect(md).toContain("<b>Memory</b> · Grounded on 2 memories (1 org guardrail, 1 repo fact)")
+      expect(md).toContain("- [org] No raw SQL in request handlers.")
+      expect(md).toContain("- [repo] The worker entry point is src/index.ts.")
+    })
+
+    it("is additive-only: the flag-off (omitted) render is a byte-exact prefix, delta is exactly the note", () => {
+      // Flag off → assemble-prompts threads `undefined`, and publish.ts OMITS the
+      // key (conditional spread) → formatOverviewComment gets no `memoryProvenance`
+      // → the body must equal the pre-feature output, and turning the flag on may
+      // only APPEND the footer (never mutate the body above it).
+      const prov = buildMemoryProvenance([learning({ id: "repo-1", scope: "repo", rule: "Batch KV writes." })])!
+      const off = formatOverviewComment({ verdict, isFirstRun: true })
+      const on = formatOverviewComment({ verdict, isFirstRun: true, memoryProvenance: prov })
+      expect(off).not.toContain("<b>Memory</b>")
+      expect(on).toBe(`${off}\n\n${renderMemoryProvenance(prov)}`)
+    })
+
+    it("renders no note when no learnings applied (empty set → null provenance)", () => {
+      expect(buildMemoryProvenance([])).toBeNull()
+      const md = formatOverviewComment({ verdict, isFirstRun: true })
+      expect(md).not.toContain("<b>Memory</b>")
+    })
+
+    it("recall-safety: a suppress-polarity rule's TEXT never appears, the verdict/body is unchanged, and it is only aggregated", () => {
+      const secret = "Silence unhandled-promise-rejection warnings in the legacy worker."
+      const prov = buildMemoryProvenance([
+        learning({ id: "ctx-1", scope: "repo", rule: "Batch KV writes." }),
+        learning({ id: "sup-1", scope: "org", polarity: "suppress", rule: secret }),
+      ])!
+      const withProvenance = formatOverviewComment({ verdict, isFirstRun: true, memoryProvenance: prov })
+      const withoutProvenance = formatOverviewComment({ verdict, isFirstRun: true })
+
+      // The suppressed rule's text is NEVER surfaced (would reveal a silenced finding).
+      expect(withProvenance).not.toContain(secret)
+      // But it IS counted in the aggregate + flagged as noise-reduction context.
+      // The suppressed org rule is NOT tallied as a guardrail (visible-only counts).
+      expect(withProvenance).toContain("Grounded on 2 memories (0 org guardrails, 1 repo fact)")
+      expect(withProvenance).toContain("noise-reduction rule applied as context")
+      // The visible list carries only the non-suppress rule.
+      expect(withProvenance).toContain("- [repo] Batch KV writes.")
+
+      // Display-only: everything the review actually decided is unchanged — the
+      // provenance footer is purely additive after the pre-feature body.
+      expect(withProvenance.startsWith(withoutProvenance)).toBe(true)
+      expect(withProvenance).toContain(verdict.summary)
+      expect(withProvenance).toContain("### Confidence: 4/5")
+    })
   })
 })
 

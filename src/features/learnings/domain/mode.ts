@@ -166,3 +166,28 @@ export function resolveSurfaceMemoryApplyMode(env: Pick<Env, "OPENCLAW_SURFACE_M
   const v = env.OPENCLAW_SURFACE_MEMORY_APPLY?.trim().toLowerCase()
   return v === "on" ? "on" : "off"
 }
+
+/**
+ * PR-review memory PROVENANCE ("show your work") — display-only overview note.
+ *
+ * Two-state, off-by-default (the two-state off/on shape of
+ * `resolveSurfaceMemoryApplyMode` — a review either shows the provenance note or it
+ * does not; there is no shadow "bake the signal" state for a purely display-only
+ * note). Reads the SIGILIX_MEMORY_PROVENANCE var (SIGILIX_-first; the OPENCLAW_
+ * fallback is auto-covered by `normalizeEnv`, so the reader reads the OPENCLAW_
+ * sibling that the shim mirrors):
+ *   - `"off"` — (default / unset / any other value) the review overview is
+ *               byte-identical to before — no provenance note is rendered.
+ *   - `"on"`  — the overview carries a compact, display-only note listing which
+ *               repo/org learnings actually informed the review. NEVER gates,
+ *               suppresses, reorders, or downgrades any finding; a suppress-polarity
+ *               rule's text is never surfaced.
+ *
+ * Pure: the only import is the `Env` TYPE (type-only, zero runtime cost).
+ */
+export type MemoryProvenanceMode = "off" | "on"
+
+export function resolveMemoryProvenanceMode(env: Pick<Env, "OPENCLAW_MEMORY_PROVENANCE">): MemoryProvenanceMode {
+  const v = env.OPENCLAW_MEMORY_PROVENANCE?.trim().toLowerCase()
+  return v === "on" ? "on" : "off"
+}

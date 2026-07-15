@@ -22,6 +22,7 @@ import type { SigilixConfig } from "@/src/shared/domain/config/types"
 import { OVERVIEW_MARKER } from "./triage-pr-overview-scan"
 import type { PrOverviewReviewContext, PrOverviewVerdict } from "./triage-pr-overview"
 import { renderConnectedAppEvidence, type PrReviewAppEvidence } from "@/src/features/pr-review-app-evidence"
+import { renderMemoryProvenance, type MemoryProvenance } from "@/src/features/learnings"
 
 /**
  * SIG-216: render the review-time context for the prompt. Compact —
@@ -68,6 +69,10 @@ interface FormatArgs {
   /** Deterministic evidence rendered after quality gates. It never enters the
    * overview prompt or any review-model context. */
   connectedAppEvidence?: readonly PrReviewAppEvidence[]
+  /** SIG memory-provenance: display-only note of the repo/org learnings that
+   * informed this review, rendered as a collapsible footer. Never enters any
+   * model prompt and never affects findings/verdict. Undefined → no note. */
+  memoryProvenance?: MemoryProvenance
   /** Effective committed-wins overview presentation configuration. */
   overviewConfig?: SigilixConfig["overview"]
 }
@@ -83,6 +88,7 @@ export function formatOverviewComment({
   warmup = "none",
   gateResults = [],
   connectedAppEvidence = [],
+  memoryProvenance,
   overviewConfig,
 }: FormatArgs): string {
   const lines: string[] = [OVERVIEW_MARKER, ""]
@@ -203,6 +209,16 @@ export function formatOverviewComment({
     for (const url of verdict.relatedPrUrls) {
       lines.push(`- ${url}`)
     }
+  }
+
+  // SIG memory-provenance: display-only "show your work" footer of the repo/org
+  // learnings that informed this review. Placed last (metadata-last convention,
+  // like the footer trio). Undefined / empty → no section (byte-identical). It
+  // NEVER gates or reorders a finding — it only annotates what already shipped.
+  const provenanceSection = memoryProvenance ? renderMemoryProvenance(memoryProvenance) : null
+  if (provenanceSection !== null) {
+    lines.push("")
+    lines.push(provenanceSection)
   }
 
   return lines.join("\n")

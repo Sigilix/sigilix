@@ -21,6 +21,7 @@ import { deleteLegacyWarmupSticky, findExistingOverviewComment, scanComments } f
 import { graftReviewStatusBlock } from "./pr-review-status-render"
 import { buildClient } from "./triage-pr-overview-client"
 import type { PrReviewAppEvidence } from "@/src/features/pr-review-app-evidence"
+import type { MemoryProvenance } from "@/src/features/learnings"
 
 // SIG-376: re-export every symbol relocated into the leaves so external
 // importers (`./index`, `./pr-overview-stub`, `./ensemble/app/publish`) and
@@ -129,23 +130,21 @@ export interface PrOverviewArgs {
   /** Deterministic connected-app evidence for the sticky renderer only. It is
    * intentionally excluded from the overview model prompt. */
   connectedAppEvidence?: readonly PrReviewAppEvidence[]
+  /** SIG memory-provenance: display-only note of the learnings that informed this
+   * review, for the sticky renderer only (never a model prompt / verdict input). */
+  memoryProvenance?: MemoryProvenance
   /**
-   * SIG-216 fix-up: bypass the per-(PR, headSha) KV dedupe lock
-   * WITHOUT bypassing the stale-head guards. Used by the inline-from-
-   * review path so a sibling queued run's lock can't block us, while
-   * still aborting if the head moves during the Ollama window. Prefer
-   * this over `force` for new callers — `force` bypasses both, which
-   * is only correct for the legacy review-success refresh path that
-   * has already been validated against the live head.
+   * SIG-216 fix-up: bypass the per-(PR, headSha) KV dedupe lock WITHOUT bypassing
+   * the stale-head guards. Used by the inline-from-review path so a sibling queued
+   * run's lock can't block us, while still aborting if the head moves during the
+   * Ollama window. Prefer this over `force` for new callers (`force` bypasses both).
    */
   skipDedupe?: boolean
   /**
-   * SIG-216 fix-up: optional external abort signal threaded through
-   * to the Ollama `generate` call. The inline-overview retry helper
-   * passes a per-attempt controller so the first attempt's in-flight
-   * fetch can actually be cancelled when the second attempt fires
-   * (otherwise overlapping attempts burn budget against the same
-   * deadline). Absent on queue-driven calls.
+   * SIG-216 fix-up: optional external abort signal threaded to the Ollama `generate`
+   * call. The inline-overview retry helper passes a per-attempt controller so the
+   * first attempt's in-flight fetch is cancelled when the second fires. Absent on
+   * queue-driven calls.
    */
   abortSignal?: AbortSignal
   /** SIG-304 CLI seam: inject a GitHub client to bypass the App `buildClient`. */
@@ -167,6 +166,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
     force,
     reviewContext,
     connectedAppEvidence,
+    memoryProvenance,
     skipDedupe,
     abortSignal,
     githubClient,
@@ -612,6 +612,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
       // skips the section.
       gateResults,
       ...(connectedAppEvidence !== undefined ? { connectedAppEvidence } : {}),
+      ...(memoryProvenance !== undefined ? { memoryProvenance } : {}),
       overviewConfig: effectiveSigilixConfig.overview,
     })
 

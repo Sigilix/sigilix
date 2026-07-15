@@ -67,6 +67,7 @@ import { withSubmissionAffordance, buildSuggestionEmissionLogEvents, type Submis
 import { finalize, type EnsembleResult, type FinalizeTelemetry, type ReviewMeta } from "./session"
 import { runInlineOverviewWithRetry, countBySeverity, countByCategory } from "./publish-helpers"
 import { computeProofCounts, formatManageLine } from "@/src/lib/pr-review-status-render"
+import type { MemoryProvenance } from "@/src/features/learnings"
 import type { PrReviewAppEvidence } from "@/src/features/pr-review-app-evidence"
 import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 
@@ -154,6 +155,11 @@ export interface PublishArgs<Tel extends PublishTelemetry> {
   /** Bounded, additive evidence started before review fan-out. It is consumed
    * only by the deterministic overview renderer. */
   connectedAppEvidence?: Promise<readonly PrReviewAppEvidence[]>
+  /** SIG memory-provenance: display-only note of the repo/org learnings that
+   * informed this review. Consumed only by the deterministic overview renderer;
+   * never enters a model prompt and never affects findings/verdict. Undefined
+   * unless SIGILIX_MEMORY_PROVENANCE is "on". */
+  appliedMemoryProvenance?: MemoryProvenance
 }
 
 export async function publishReviewSubmission<Tel extends PublishTelemetry>(
@@ -203,6 +209,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
     deterministicCheckAnnotationMeta,
     deterministicErroredReviewMeta,
     connectedAppEvidence,
+    appliedMemoryProvenance,
   } = a
   // SIG-318/SIG-507: shared deps for the post-submit persistence tail (persistSubmittedReview),
   // invoked by BOTH the primary inline-anchored and the anchorless-422-fallback success paths.
@@ -285,6 +292,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
             skipDedupe: true,
             reviewContext: overviewReviewContext,
             connectedAppEvidence: resolvedConnectedAppEvidence,
+            ...(appliedMemoryProvenance !== undefined ? { memoryProvenance: appliedMemoryProvenance } : {}),
           },
           overviewBudgetMs,
         )

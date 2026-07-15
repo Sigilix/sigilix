@@ -60,6 +60,12 @@ describe("normalizeEnv", () => {
     expect(out.OPENCLAW_ENTITLEMENTS_MODE).toBe("enforce")
   })
 
+  it("mirrors the canonical Slack memory-scope rollout var to its legacy reader", () => {
+    const out = rec(asEnv({ SIGILIX_SLACK_MEMORY_SCOPE_MODE: "shadow" }))
+    expect(out.SIGILIX_SLACK_MEMORY_SCOPE_MODE).toBe("shadow")
+    expect(out.OPENCLAW_SLACK_MEMORY_SCOPE_MODE).toBe("shadow")
+  })
+
   it("mirrors a SIGILIX-native var's (unread) OPENCLAW_ sibling — harmless, nothing reads it", () => {
     const out = rec(asEnv({ SIGILIX_FAIRNESS_MODE: "enforce" }))
     expect(out.SIGILIX_FAIRNESS_MODE).toBe("enforce")

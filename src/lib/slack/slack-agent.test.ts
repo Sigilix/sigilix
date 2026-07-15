@@ -419,6 +419,15 @@ describe("runSlackAgent — qa path", () => {
     expect(typeof captureArgs.content).toBe("string")
   })
 
+  it("passes the trusted installation, channel, and complete immutable repo set to memory", async () => {
+    const env = makeEnv()
+    const ctx = makeMultiRepoCtx({ channelId: "C_UNTRUSTED_DUPLICATE" })
+    await runSlackAgent(env, ctx)
+
+    expect(recallSlackMemoryMock).toHaveBeenCalledWith(env, ctx.scope, ctx.mentionText)
+    expect(captureSlackMemoryMock).toHaveBeenCalledWith(env, ctx.scope, expect.objectContaining({ kind: "task_state" }))
+  })
+
   it("scopes allowedRepos to the channel repos only", async () => {
     const env = makeEnv()
     const ctx = makeCtx({

@@ -17,4 +17,8 @@ export type {
   RemoveOrgWorkspaceAccessResult,
   SetOrgWorkspaceRoleResult,
 } from "./domain/types"
-export { canonicalizeInstallationRosterMemberIds, isOrgWorkspaceGithubUserId } from "./domain/types"
+export {
+  canonicalizeInstallationRosterMemberIds,
+  isCompleteInstallationRosterSnapshot,
+  isOrgWorkspaceGithubUserId,
+} from "./domain/types"

@@ -207,7 +207,7 @@ beforeEach(() => {
   routeMocks.getValidGithubToken.mockReset()
   routeMocks.getValidGithubToken.mockResolvedValue("ghu_refreshed_token")
   routeMocks.renderChatSurfaceMemoryForPrompt.mockReset()
-  routeMocks.renderChatSurfaceMemoryForPrompt.mockResolvedValue("")
+  routeMocks.renderChatSurfaceMemoryForPrompt.mockResolvedValue({ block: "" })
 })
 
 afterEach(() => {
@@ -477,7 +477,7 @@ describe("handleAgentRunCreateRoute (POST /v1/agent/runs)", () => {
     await seedSession(kv, "s1")
     stubGithubOwning42()
     const memoryBlock = "## Team & repository guidance\n- [org policy — must follow] Require a rollback plan."
-    routeMocks.renderChatSurfaceMemoryForPrompt.mockResolvedValue(memoryBlock)
+    routeMocks.renderChatSurfaceMemoryForPrompt.mockResolvedValue({ block: memoryBlock })
     const env = baseEnv(kv, {
       OPENCLAW_AGENT_RUNNER_MODE: "on",
       SIGILIX_PORTAL_AGENT_RUNNER_MODE: "on",
@@ -508,7 +508,7 @@ describe("handleAgentRunCreateRoute (POST /v1/agent/runs)", () => {
     const kv = makeKV()
     await seedSession(kv, "s1")
     stubGithubOwning42()
-    routeMocks.renderChatSurfaceMemoryForPrompt.mockResolvedValue("") // flag off / nothing to apply
+    routeMocks.renderChatSurfaceMemoryForPrompt.mockResolvedValue({ block: "" }) // flag off / nothing to apply
     const env = baseEnv(kv, {
       OPENCLAW_AGENT_RUNNER_MODE: "on",
       SIGILIX_PORTAL_AGENT_RUNNER_MODE: "on",
@@ -522,6 +522,42 @@ describe("handleAgentRunCreateRoute (POST /v1/agent/runs)", () => {
     expect(routeMocks.dispatchAgentRun).toHaveBeenCalledTimes(1)
     const dispatchArg = routeMocks.dispatchAgentRun.mock.calls[0]![1] as Record<string, unknown>
     expect(dispatchArg).not.toHaveProperty("grounding")
+  })
+
+  it("surfaces the helper's display-only provenance on the run response (flag on); omits it otherwise", async () => {
+    const kv = makeKV()
+    await seedSession(kv, "s1")
+    stubGithubOwning42()
+    const provenance = {
+      items: [{ id: "o1", label: "no raw SQL", scope: "org" }],
+      total: 1,
+      orgCount: 1,
+      repoCount: 0,
+      suppressCount: 0,
+    }
+    routeMocks.renderChatSurfaceMemoryForPrompt.mockResolvedValue({ block: "## guidance", provenance })
+    const env = baseEnv(kv, {
+      OPENCLAW_AGENT_RUNNER_MODE: "on",
+      SIGILIX_PORTAL_AGENT_RUNNER_MODE: "on",
+      OLLAMA_API_KEY: "model-key",
+    })
+    const res = await handleAgentRunCreateRoute(
+      reqPost("https://x/v1/agent/runs", "s1", { installationId: 42, repo: "acme/api", prompt: "fix" }),
+      env,
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body.provenance).toEqual(provenance)
+
+    // Helper returns no provenance (flag off) → no field on the response.
+    routeMocks.dispatchAgentRun.mockClear()
+    routeMocks.renderChatSurfaceMemoryForPrompt.mockResolvedValue({ block: "## guidance" })
+    const res2 = await handleAgentRunCreateRoute(
+      reqPost("https://x/v1/agent/runs", "s1", { installationId: 42, repo: "acme/api", prompt: "fix" }),
+      env,
+    )
+    const body2 = (await res2.json()) as Record<string, unknown>
+    expect("provenance" in body2).toBe(false)
   })
 
   it("does not dispatch when the durable run-owner binding cannot be written", async () => {

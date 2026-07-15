@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { renderSurfaceMemoryForPrompt } from "@/src/features/learnings/adapters/surface-apply"
+import { applySurfaceMemory, renderSurfaceMemoryForPrompt } from "@/src/features/learnings/adapters/surface-apply"
 import { appendLearning } from "@/src/features/learnings/adapters/store"
 import { learningsKey } from "@/src/features/learnings/domain/store-ops"
 import type { LearningEntry } from "@/src/features/learnings/domain/types"
@@ -152,5 +152,88 @@ describe("renderSurfaceMemoryForPrompt (surface memory apply — Slack/Linear)",
 
     const out = await renderSurfaceMemoryForPrompt({ env, installationId: INSTALL_ID, repoId: REPO_ID })
     expect(out).toBe("")
+  })
+})
+
+describe("applySurfaceMemory (block + display-only provenance in one read — flag-gated)", () => {
+  it("apply OFF — { block: '' }, no provenance, NEVER reads any learnings key (true no-op)", async () => {
+    const { env, getCalls } = makeEnv({ OPENCLAW_MEMORY_PROVENANCE: "on" }) // provenance on, apply off
+    await appendLearning(env, "org", String(INSTALL_ID), ORG_POLICY, TS)
+    getCalls.length = 0
+    const applied = await applySurfaceMemory({ env, installationId: INSTALL_ID, repoId: REPO_ID })
+    expect(applied.block).toBe("")
+    expect(applied.provenance).toBeUndefined()
+    expect(getCalls).not.toContain(ORG_KEY)
+    expect(getCalls).not.toContain(REPO_KEY)
+  })
+
+  it("apply ON but provenance OFF — the block renders, provenance is undefined (byte-identical wire)", async () => {
+    const { env } = makeEnv({ OPENCLAW_SURFACE_MEMORY_APPLY: "on" }) // provenance unset
+    await appendLearning(env, "org", String(INSTALL_ID), ORG_POLICY, TS)
+    const applied = await applySurfaceMemory({ env, installationId: INSTALL_ID, repoId: REPO_ID })
+    expect(applied.block).toContain(ORG_POLICY.rule) // the applied block is unchanged
+    expect(applied.provenance).toBeUndefined()
+  })
+
+  it("both ON — the block AND #955-shape provenance come from the SAME applied org∪repo set", async () => {
+    const { env } = makeEnv({ OPENCLAW_SURFACE_MEMORY_APPLY: "on", OPENCLAW_MEMORY_PROVENANCE: "on" })
+    await appendLearning(env, "org", String(INSTALL_ID), ORG_POLICY, TS)
+    await appendLearning(env, "repo", String(REPO_ID), REPO_FACT, TS)
+    const applied = await applySurfaceMemory({ env, installationId: INSTALL_ID, repoId: REPO_ID })
+    // The applied block is unchanged by the provenance flag.
+    expect(applied.block).toContain(ORG_POLICY.rule)
+    expect(applied.block).toContain(REPO_FACT.rule)
+    const prov = applied.provenance
+    expect(prov).toBeDefined()
+    expect(prov!.total).toBe(2)
+    expect(prov!.orgCount).toBe(1)
+    expect(prov!.repoCount).toBe(1)
+    expect(prov!.suppressCount).toBe(0)
+    expect(prov!.items.map((i) => i.id).sort()).toEqual(["org111", "repo222"])
+  })
+
+  it("RECALL-SAFETY — a suppress-polarity rule is counted but its TEXT never surfaces", async () => {
+    const { env } = makeEnv({ OPENCLAW_SURFACE_MEMORY_APPLY: "on", OPENCLAW_MEMORY_PROVENANCE: "on" })
+    const suppressRule = "Silence the legacy lint warning."
+    await appendLearning(env, "repo", String(REPO_ID), REPO_FACT, TS)
+    await appendLearning(
+      env,
+      "org",
+      String(INSTALL_ID),
+      makeEntry("sup999", { rule: suppressRule, scope: "org", subjectId: String(INSTALL_ID), polarity: "suppress" }),
+      TS,
+    )
+    const { provenance: prov } = await applySurfaceMemory({ env, installationId: INSTALL_ID, repoId: REPO_ID })
+    expect(prov!.total).toBe(2)
+    expect(prov!.suppressCount).toBe(1)
+    expect(prov!.orgCount).toBe(0) // the suppress entry is NOT a guardrail
+    expect(prov!.repoCount).toBe(1)
+    expect(JSON.stringify(prov)).not.toContain(suppressRule)
+    expect(prov!.items.some((i) => i.id === "sup999")).toBe(false)
+  })
+
+  it("both ON but nothing to apply — no provenance (empty set → no note)", async () => {
+    const { env } = makeEnv({ OPENCLAW_SURFACE_MEMORY_APPLY: "on", OPENCLAW_MEMORY_PROVENANCE: "on" })
+    const applied = await applySurfaceMemory({ env, installationId: INSTALL_ID, repoId: REPO_ID })
+    expect(applied.block).toBe("")
+    expect(applied.provenance).toBeUndefined()
+  })
+
+  it("fail-soft — a KV read fault degrades to { block: '' } and never throws", async () => {
+    const env = {
+      OPENCLAW_SURFACE_MEMORY_APPLY: "on",
+      OPENCLAW_MEMORY_PROVENANCE: "on",
+      OPENCLAW_STATE: {
+        get: vi.fn(async () => {
+          throw new Error("kv exploded")
+        }),
+        put: vi.fn(async () => {}),
+        delete: vi.fn(async () => {}),
+      },
+    } as unknown as Env
+    vi.spyOn(console, "log").mockImplementation(() => undefined)
+    const applied = await applySurfaceMemory({ env, installationId: INSTALL_ID, repoId: REPO_ID })
+    expect(applied.block).toBe("")
+    expect(applied.provenance).toBeUndefined()
   })
 })

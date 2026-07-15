@@ -24,6 +24,7 @@
 // Slack channel / Linear team only ever loads ITS installation's memory.
 
 import { resolveSurfaceMemoryApplyMode } from "@/src/features/learnings/domain/mode"
+import { resolveAppliedMemoryProvenance, type MemoryProvenance } from "@/src/features/learnings/domain/provenance"
 import { renderSurfaceLearningsForPrompt } from "@/src/features/learnings/domain/render"
 import type { LearningEntry } from "@/src/features/learnings/domain/types"
 import type { Env } from "@/src/shared/types/env"
@@ -49,30 +50,86 @@ export async function renderSurfaceMemoryForPrompt(args: {
   if (resolveSurfaceMemoryApplyMode(env) === "off") return ""
 
   try {
-    const [orgStore, repoStore] = await Promise.all([
-      loadLearnings(env, "org", String(installationId)),
-      repoId != null ? loadLearnings(env, "repo", String(repoId)) : Promise.resolve(null),
-    ])
-    const orgEntries = orgStore?.entries ?? []
-    const repoEntries = repoStore?.entries ?? []
-
-    // Union deduped by id — every repo entry, then each org entry whose id is
-    // NOT already present (a repo copy wins a collision, matching
-    // loadEffectiveLearnings; a learning mirrored repo→org shares its
-    // content-addressed id, so it applies exactly once).
-    const repoIds = new Set(repoEntries.map((e) => e.id))
-    const merged: LearningEntry[] = [...repoEntries, ...orgEntries.filter((e) => !repoIds.has(e.id))]
-
+    const merged = await loadSurfaceMergedEntries(env, installationId, repoId)
     return renderSurfaceLearningsForPrompt(merged)
   } catch (err) {
-    console.log(
-      JSON.stringify({
-        event: "surface-memory-apply-failed",
-        installationId,
-        repoId,
-        err: err instanceof Error ? err.message : String(err),
-      }),
-    )
+    logSurfaceMemoryFailure("surface-memory-apply-failed", installationId, repoId, err)
     return ""
   }
+}
+
+/**
+ * Load the SAME org ∪ repo applied set `renderSurfaceMemoryForPrompt` renders — the
+ * single source of truth for "what memory shaped this surface answer". Union deduped
+ * by id (a repo copy wins a collision), matching `loadEffectiveLearnings`; a learning
+ * mirrored repo→org shares its content-addressed id, so it applies exactly once.
+ */
+async function loadSurfaceMergedEntries(
+  env: Env,
+  installationId: number,
+  repoId: number | null,
+): Promise<LearningEntry[]> {
+  const [orgStore, repoStore] = await Promise.all([
+    loadLearnings(env, "org", String(installationId)),
+    repoId != null ? loadLearnings(env, "repo", String(repoId)) : Promise.resolve(null),
+  ])
+  const orgEntries = orgStore?.entries ?? []
+  const repoEntries = repoStore?.entries ?? []
+  const repoIds = new Set(repoEntries.map((e) => e.id))
+  return [...repoEntries, ...orgEntries.filter((e) => !repoIds.has(e.id))]
+}
+
+/** The applied org ∪ repo memory for a surface: the rendered prompt block plus its
+ *  display-only #955-shape provenance (present only when the flag is on). */
+export interface SurfaceMemoryApplied {
+  block: string
+  provenance?: MemoryProvenance
+}
+
+/**
+ * Apply the org ∪ repo surface memory in ONE read: render the prompt block AND — from
+ * the SAME merged set — its display-only "show your work" provenance. Because the block
+ * and the provenance come from one load, the note can never describe a different set
+ * than the answer actually applied (no re-read, no TOCTOU).
+ *
+ * `block` is "" when the apply gate is off (a true no-op: no KV read), when there is
+ * nothing to apply, or on any load failure. `provenance` is present only when
+ * `SIGILIX_MEMORY_PROVENANCE` is "on" AND the applied set is non-empty; otherwise
+ * absent → byte-identical to before.
+ *
+ * RECALL-SAFETY: `provenance` is DISPLAY-ONLY — it is derived from `merged` and never
+ * gates/reorders/suppresses what `block` renders; a `suppress`-polarity rule is counted
+ * but its text is never surfaced (see `buildMemoryProvenance`). Fail-soft: any load
+ * fault degrades to `{ block: "" }` (never throws — memory must never block an answer).
+ */
+export async function applySurfaceMemory(args: {
+  env: Env
+  installationId: number
+  repoId: number | null
+}): Promise<SurfaceMemoryApplied> {
+  const { env, installationId, repoId } = args
+  // OFF: no KV read, no injection — byte-identical to before this slice.
+  if (resolveSurfaceMemoryApplyMode(env) === "off") return { block: "" }
+
+  try {
+    const merged = await loadSurfaceMergedEntries(env, installationId, repoId)
+    const block = renderSurfaceLearningsForPrompt(merged)
+    // Provenance from the SAME merged set — flag-gated (undefined when off).
+    const provenance = resolveAppliedMemoryProvenance(env, merged)
+    return { block, ...(provenance ? { provenance } : {}) }
+  } catch (err) {
+    logSurfaceMemoryFailure("surface-memory-apply-failed", installationId, repoId, err)
+    return { block: "" }
+  }
+}
+
+function logSurfaceMemoryFailure(event: string, installationId: number, repoId: number | null, err: unknown): void {
+  console.log(
+    JSON.stringify({
+      event,
+      installationId,
+      repoId,
+      err: err instanceof Error ? err.message : String(err),
+    }),
+  )
 }

@@ -12,10 +12,16 @@ import { sha256Hex } from "@/src/lib/auth-bearer"
 vi.mock("./agent-context", () => ({ gatherAgentContext: vi.fn() }))
 vi.mock("@/src/shared/adapters/github/github-installation", () => ({ resolveInstallation: vi.fn() }))
 vi.mock("@/src/lib/ensemble/adapters/review-sink", () => ({ buildClient: vi.fn() }))
-vi.mock("@/src/features/learnings", () => ({
-  loadLearnings: vi.fn(),
-  resolveSurfaceMemoryApplyMode: vi.fn(() => "off"),
-}))
+// Keep the real learnings barrel (so resolveAppliedMemoryProvenance / buildMemoryProvenance
+// run for real), stubbing ONLY the KV load + the org-apply gate the route depends on.
+vi.mock("@/src/features/learnings", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/src/features/learnings")>()
+  return {
+    ...actual,
+    loadLearnings: vi.fn(),
+    resolveSurfaceMemoryApplyMode: vi.fn(() => "off"),
+  }
+})
 // #146: self-heal seams. `indexNamespace` is pure — keep the real impl so the marker key is real.
 vi.mock("./index-producer", () => ({ enqueueIndexJobsForRepos: vi.fn(), isIndexerEnabled: vi.fn() }))
 vi.mock("./repo-index-manifest", () => ({
@@ -395,6 +401,118 @@ describe("handleAgentContextRoute — surface-memory-apply (Part 1: CLI org gap)
     expect(res.status).toBe(200) // request never breaks on a memory fault
     const call = mockGather.mock.calls[0]?.[0] as { learnings?: readonly string[] }
     expect(call.learnings).toEqual(["[required] cents are integers"]) // repo facts still surface
+  })
+})
+
+// SIG memory-provenance: when SIGILIX_MEMORY_PROVENANCE is "on", the response ALSO
+// carries a display-only `provenance` note (the #955 MemoryProvenance shape) for the
+// org∪repo learnings this turn actually applied. OFF (default) → no field, response
+// byte-identical. Display-only: never gates retrieval, never surfaces suppress text.
+describe("handleAgentContextRoute — memory provenance (display-only, flag-gated)", () => {
+  // Entries carry `scope` (buildMemoryProvenance keys per-scope counts on it).
+  const provRepoStore = {
+    schemaVersion: 1,
+    scope: "repo",
+    subjectId: "1",
+    entries: [{ id: "r1", rule: "cents are integers", polarity: "require", scope: "repo", createdTs: "2026-06-01" }],
+  }
+  const provOrgStore = {
+    schemaVersion: 1,
+    scope: "org",
+    subjectId: "42",
+    entries: [
+      {
+        id: "o1",
+        rule: "all PRs need a design doc",
+        polarity: "require",
+        type: "durable_preference",
+        scope: "org",
+        createdTs: "2026-06-05",
+      },
+    ],
+  }
+  function byScope(repo: unknown, org: unknown) {
+    return async (_e: unknown, scope: string) => (scope === "repo" ? repo : org) as never
+  }
+
+  it("flag ON — response carries #955-shape provenance for the applied org∪repo set", async () => {
+    mockSurfaceMode.mockReturnValue("on")
+    mockLoadLearnings.mockImplementation(byScope(provRepoStore, provOrgStore))
+    const res = await handleAgentContextRoute(req(validBody), appEnv({ OPENCLAW_MEMORY_PROVENANCE: "on" }))
+    const body = (await res.json()) as {
+      status: string
+      context: unknown
+      telemetry: unknown
+      provenance?: {
+        total: number
+        orgCount: number
+        repoCount: number
+        suppressCount: number
+        items: { id: string }[]
+      }
+    }
+    // The retrieval payload is unchanged by the flag.
+    expect(body.status).toBe("grounded")
+    expect(body.context).toBe("GROUNDED")
+    expect(body.telemetry).toEqual(okResult.telemetry)
+    // Provenance describes exactly the applied org guardrail + repo fact.
+    expect(body.provenance).toBeDefined()
+    expect(body.provenance!.total).toBe(2)
+    expect(body.provenance!.orgCount).toBe(1)
+    expect(body.provenance!.repoCount).toBe(1)
+    expect(body.provenance!.suppressCount).toBe(0)
+    expect(body.provenance!.items.map((i) => i.id).sort()).toEqual(["o1", "r1"])
+  })
+
+  it("flag OFF (default) — NO provenance field, response byte-identical to before", async () => {
+    mockSurfaceMode.mockReturnValue("on")
+    mockLoadLearnings.mockImplementation(byScope(provRepoStore, provOrgStore))
+    const res = await handleAgentContextRoute(req(validBody), appEnv()) // provenance unset
+    const body = (await res.json()) as Record<string, unknown>
+    expect("provenance" in body).toBe(false)
+    expect(body).toEqual({ status: "grounded", context: "GROUNDED", telemetry: okResult.telemetry })
+  })
+
+  it("flag ON but no learnings applied — no provenance field (empty set → no note)", async () => {
+    mockSurfaceMode.mockReturnValue("on")
+    mockLoadLearnings.mockResolvedValue(null) // nothing to apply
+    const res = await handleAgentContextRoute(req(validBody), appEnv({ OPENCLAW_MEMORY_PROVENANCE: "on" }))
+    const body = (await res.json()) as Record<string, unknown>
+    expect("provenance" in body).toBe(false)
+  })
+
+  it("RECALL-SAFETY — provenance never changes the applied set and never surfaces suppress text", async () => {
+    mockSurfaceMode.mockReturnValue("on")
+    const suppressRule = "silence the legacy lint warning"
+    const orgWithSuppress = {
+      ...provOrgStore,
+      entries: [
+        provOrgStore.entries[0],
+        { id: "sup1", rule: suppressRule, polarity: "suppress", scope: "org", createdTs: "2026-06-06" },
+      ],
+    }
+    mockLoadLearnings.mockImplementation(byScope(provRepoStore, orgWithSuppress))
+
+    // OFF vs ON: the learnings actually injected into the prompt must be identical.
+    const off = await handleAgentContextRoute(req(validBody), appEnv())
+    const offLearnings = (mockGather.mock.calls[0]?.[0] as { learnings?: readonly string[] }).learnings
+    mockGather.mockClear()
+    const on = await handleAgentContextRoute(req(validBody), appEnv({ OPENCLAW_MEMORY_PROVENANCE: "on" }))
+    const onLearnings = (mockGather.mock.calls[0]?.[0] as { learnings?: readonly string[] }).learnings
+
+    expect(onLearnings).toEqual(offLearnings) // the flag never reorders/filters the applied set
+    const onBody = (await on.json()) as {
+      context: unknown
+      provenance?: { total: number; orgCount: number; repoCount: number; suppressCount: number }
+    }
+    const offBody = (await off.json()) as { context: unknown }
+    expect(onBody.context).toBe(offBody.context) // the grounded answer is unchanged
+    // The suppress rule is counted, but its TEXT never appears anywhere in the payload.
+    expect(onBody.provenance!.suppressCount).toBe(1)
+    expect(onBody.provenance!.orgCount).toBe(1) // the suppress entry is NOT a guardrail
+    expect(onBody.provenance!.repoCount).toBe(1)
+    expect(onBody.provenance!.total).toBe(3)
+    expect(JSON.stringify(onBody)).not.toContain(suppressRule)
   })
 })
 

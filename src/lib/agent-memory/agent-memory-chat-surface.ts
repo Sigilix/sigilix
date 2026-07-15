@@ -33,7 +33,7 @@
 // route already proved the caller controls (`userControlsRepo`); the seat
 // `userId` is derived from the trusted session identity — never message content.
 
-import { renderSurfaceMemoryForPrompt, resolveSurfaceMemoryApplyMode } from "@/src/features/learnings"
+import { applySurfaceMemory, resolveSurfaceMemoryApplyMode, type MemoryProvenance } from "@/src/features/learnings"
 import { lookupRepoByFullName } from "@/src/features/tenancy"
 import type { AuthedSession } from "@/src/lib/auth-middleware"
 import type { Env } from "@/src/shared/types/env"
@@ -108,9 +108,24 @@ async function loadSeatMemoryBlock(env: Env, installationId: number, session: Au
 }
 
 /**
+ * The assembled memory a portal-chat run should apply. `block` is the prompt text
+ * (the applied grounding); `provenance` is the display-only "show your work" summary
+ * of the applied org∪repo learnings (only when SIGILIX_MEMORY_PROVENANCE is on).
+ */
+export interface ChatSurfaceMemory {
+  block: string
+  /**
+   * Display-only #955-shape provenance for the applied ORG∪REPO learnings. Seat
+   * memory is `AgentMemoryRecord` (not a `LearningEntry`), so it is not represented
+   * in this LearningEntry-based shape — a follow-up may extend the vocabulary.
+   */
+  provenance?: MemoryProvenance
+}
+
+/**
  * The org∪repo∪(own-seat) memory block a portal-chat run's prompt should carry,
  * with ORG guardrails labeled/ordered above repo facts above the caller's own
- * seat preferences. Returns "" when the flag is off (a true no-op: no KV read),
+ * seat preferences. `block` is "" when the flag is off (a true no-op: no KV read),
  * when there is nothing to apply, or on any load failure. Never throws.
  *
  * `installationId` is the numeric GitHub App installation the session was already
@@ -124,21 +139,22 @@ export async function renderChatSurfaceMemoryForPrompt(args: {
   installationId: number
   repo: { owner: string; name: string }
   session: AuthedSession
-}): Promise<string> {
+}): Promise<ChatSurfaceMemory> {
   const { env, installationId, repo, session } = args
   // OFF: no KV read, no seat read, no injection — byte-identical to before.
-  if (resolveSurfaceMemoryApplyMode(env) === "off") return ""
+  if (resolveSurfaceMemoryApplyMode(env) === "off") return { block: "" }
 
-  // ORG∪REPO — reuse #946's helper (org labeled above repo). Guard the one D1
-  // await outside its own try/catch so a lookup fault degrades to org-only / "".
+  // ORG∪REPO — reuse #946's helper (org labeled above repo). ONE read yields both
+  // the applied block AND its display-only provenance, so the note can never describe
+  // a different set than the block. Guard the D1 lookup outside its own try/catch so a
+  // lookup fault degrades to org-only / "" (and no provenance).
   let orgRepoBlock = ""
+  let provenance: MemoryProvenance | undefined
   try {
     const repoLookup = await lookupRepoByFullName(env, `${repo.owner}/${repo.name}`)
-    orgRepoBlock = await renderSurfaceMemoryForPrompt({
-      env,
-      installationId,
-      repoId: repoLookup?.repoId ?? null,
-    })
+    const applied = await applySurfaceMemory({ env, installationId, repoId: repoLookup?.repoId ?? null })
+    orgRepoBlock = applied.block
+    provenance = applied.provenance
   } catch {
     orgRepoBlock = ""
   }
@@ -147,5 +163,10 @@ export async function renderChatSurfaceMemoryForPrompt(args: {
   const seatBlock = await loadSeatMemoryBlock(env, installationId, session)
 
   // Order reinforces the labels: org∪repo (org first) above the seat block.
-  return [orgRepoBlock, seatBlock].filter((b) => b !== "").join("\n\n")
+  const block = [orgRepoBlock, seatBlock].filter((b) => b !== "").join("\n\n")
+
+  // `provenance` (org∪repo only) is undefined when SIGILIX_MEMORY_PROVENANCE is off →
+  // no field on the wire → byte-identical response. Seat memory is a separate record
+  // type not represented in this LearningEntry-based shape. Display-only, never gates.
+  return { block, ...(provenance ? { provenance } : {}) }
 }

@@ -23,7 +23,13 @@ import { resolveInstallation } from "@/src/shared/adapters/github/github-install
 import { buildClient } from "@/src/lib/ensemble/adapters/review-sink"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import { gatherAgentContext } from "./agent-context"
-import { loadLearnings, resolveSurfaceMemoryApplyMode, type LearningEntry } from "@/src/features/learnings"
+import {
+  loadLearnings,
+  resolveAppliedMemoryProvenance,
+  resolveSurfaceMemoryApplyMode,
+  type LearningEntry,
+  type MemoryProvenance,
+} from "@/src/features/learnings"
 import { enqueueIndexJobsForRepos, isIndexerEnabled, type EnqueueIndexJobsResult } from "./index-producer"
 import { indexNamespace, readRepoIndexManifest } from "./repo-index-manifest"
 
@@ -153,7 +159,7 @@ async function loadLearningEntriesSoft(env: Env, scope: "repo" | "org", subjectI
   }
 }
 
-/** Newest-first by createdTs (unparseable sorts last), matching loadRepoLearnings' original order. */
+/** Newest-first by createdTs (unparseable sorts last) — the repo-learnings surface order. */
 function sortNewestFirst(entries: readonly LearningEntry[]): LearningEntry[] {
   return [...entries].sort((a, b) => learningTs(b.createdTs) - learningTs(a.createdTs))
 }
@@ -168,12 +174,6 @@ function formatOrgLearning(e: LearningEntry): string {
   const label = e.type === "durable_preference" ? "[org policy — must follow]" : "[org guidance]"
   const cat = e.category ? ` (${e.category})` : ""
   return `${label} ${e.rule.trim()}${cat}`
-}
-
-/** Load the repo's review learnings as readable rules (most-recent first, capped). Soft-fail. */
-async function loadRepoLearnings(env: Env, repoId: number): Promise<string[]> {
-  const entries = await loadLearningEntriesSoft(env, "repo", String(repoId))
-  return sortNewestFirst(entries).slice(0, MAX_LEARNINGS).map(formatLearning)
 }
 
 /**
@@ -195,10 +195,15 @@ async function loadRepoLearnings(env: Env, repoId: number): Promise<string[]> {
 async function loadContextLearnings(
   env: Env,
   args: { repoId: number | null; installationId: number | null; orgApply: boolean },
-): Promise<string[]> {
+): Promise<{ lines: string[]; entries: LearningEntry[] }> {
   const { repoId, installationId, orgApply } = args
-  // OFF: repo-scope only, exactly as before — no org KV read.
-  if (!orgApply) return repoId !== null ? await loadRepoLearnings(env, repoId) : []
+  // OFF: repo-scope only, exactly as before — no org KV read. Capture the same
+  // capped entries that produced the lines for the display-only provenance note.
+  if (!orgApply) {
+    if (repoId === null) return { lines: [], entries: [] }
+    const entries = sortNewestFirst(await loadLearningEntriesSoft(env, "repo", String(repoId))).slice(0, MAX_LEARNINGS)
+    return { lines: entries.map(formatLearning), entries }
+  }
 
   const [orgEntries, repoEntries] = await Promise.all([
     installationId !== null
@@ -210,10 +215,17 @@ async function loadContextLearnings(
   // Org guardrails win the dedup: drop a repo copy of a learning also present in
   // org, so it surfaces once as the higher-precedence org guardrail.
   const orgIds = new Set(orgEntries.map((e) => e.id))
-  const orgLines = sortNewestFirst(orgEntries).map(formatOrgLearning)
-  const repoLines = sortNewestFirst(repoEntries.filter((e) => !orgIds.has(e.id))).map(formatLearning)
+  const orgApplied = sortNewestFirst(orgEntries)
+  const repoApplied = sortNewestFirst(repoEntries.filter((e) => !orgIds.has(e.id)))
+  const orgLines = orgApplied.map(formatOrgLearning)
+  const repoLines = repoApplied.map(formatLearning)
   // Org first (inviolable), then repo facts; the cap keeps org guardrails first.
-  return [...orgLines, ...repoLines].slice(0, MAX_LEARNINGS)
+  // `lines` and `entries` are 1:1 in the same order, so the SAME slice yields the
+  // exact entries that produced the capped lines (display-only provenance capture).
+  return {
+    lines: [...orgLines, ...repoLines].slice(0, MAX_LEARNINGS),
+    entries: [...orgApplied, ...repoApplied].slice(0, MAX_LEARNINGS),
+  }
 }
 
 /**
@@ -354,11 +366,16 @@ export async function handleAgentContextRoute(request: Request, env: Env): Promi
   const { fetchFileContent, repoId, installationId } = await resolveGrounding(env, parsed.owner, parsed.repo)
   // OFF (flag unset/off): repo-scope learnings only — byte-identical to before.
   // ON: also fold in the installation's ORG guardrails, ordered/labeled above repo facts.
-  const learnings = await loadContextLearnings(env, {
+  const { lines: learnings, entries: appliedLearnings } = await loadContextLearnings(env, {
     repoId,
     installationId,
     orgApply: resolveSurfaceMemoryApplyMode(env) === "on",
   })
+  // SIG memory-provenance: the display-only "show your work" summary of the org∪repo
+  // learnings ACTUALLY applied to this turn's grounding, in the #955 MemoryProvenance
+  // shape. Undefined unless SIGILIX_MEMORY_PROVENANCE is "on" → no `provenance` key on
+  // the wire → byte-identical response when off. Display-only, never gates retrieval.
+  const memoryProvenance: MemoryProvenance | undefined = resolveAppliedMemoryProvenance(env, appliedLearnings)
 
   try {
     const result = await gatherAgentContext({
@@ -392,7 +409,15 @@ export async function handleAgentContextRoute(request: Request, env: Env): Promi
       status = await resolveInstalledStatus(env, parsed.owner, parsed.repo, installationId, repoId)
     }
 
-    return json({ status, context: result.context, telemetry: result.telemetry }, 200)
+    return json(
+      {
+        status,
+        context: result.context,
+        telemetry: result.telemetry,
+        ...(memoryProvenance !== undefined ? { provenance: memoryProvenance } : {}),
+      },
+      200,
+    )
   } catch (err) {
     return json({ error: "context_failed", detail: err instanceof Error ? err.message : String(err) }, 500)
   }

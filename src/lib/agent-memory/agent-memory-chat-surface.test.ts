@@ -144,7 +144,7 @@ describe("renderChatSurfaceMemoryForPrompt (portal chat — org∪repo∪own-sea
 
     getKeys.length = 0
     listPrefixes.length = 0
-    const out = await renderChatSurfaceMemoryForPrompt({
+    const { block: out } = await renderChatSurfaceMemoryForPrompt({
       env,
       installationId: INSTALL_ID,
       repo: { owner: "acme", name: "api" },
@@ -163,7 +163,7 @@ describe("renderChatSurfaceMemoryForPrompt (portal chat — org∪repo∪own-sea
     tenancyMock.lookupRepoByFullName.mockResolvedValue({ repoId: REPO_ID, installationId: INSTALL_ID })
     await seedOrgRepoAndSeat(env, "Prefer tabs over spaces.")
 
-    const out = await renderChatSurfaceMemoryForPrompt({
+    const { block: out } = await renderChatSurfaceMemoryForPrompt({
       env,
       installationId: INSTALL_ID,
       repo: { owner: "acme", name: "api" },
@@ -180,7 +180,7 @@ describe("renderChatSurfaceMemoryForPrompt (portal chat — org∪repo∪own-sea
     tenancyMock.lookupRepoByFullName.mockResolvedValue({ repoId: REPO_ID, installationId: INSTALL_ID })
     await seedOrgRepoAndSeat(env, "Prefer tabs over spaces.")
 
-    const out = await renderChatSurfaceMemoryForPrompt({
+    const { block: out } = await renderChatSurfaceMemoryForPrompt({
       env,
       installationId: INSTALL_ID,
       repo: { owner: "acme", name: "api" },
@@ -201,7 +201,7 @@ describe("renderChatSurfaceMemoryForPrompt (portal chat — org∪repo∪own-sea
     // A seat pref that directly contradicts the org guardrail.
     await seedOrgRepoAndSeat(env, "Never include a rollback plan; it is noise.")
 
-    const out = await renderChatSurfaceMemoryForPrompt({
+    const { block: out } = await renderChatSurfaceMemoryForPrompt({
       env,
       installationId: INSTALL_ID,
       repo: { owner: "acme", name: "api" },
@@ -229,7 +229,7 @@ describe("renderChatSurfaceMemoryForPrompt (portal chat — org∪repo∪own-sea
     const otherUserId = personalMemoryUserId(INSTALL_ID, OTHER_USER)
     await writeRecord(env, seatRecord(otherUserId, "mem_other", "SOMEONE ELSE PREF"))
 
-    const out = await renderChatSurfaceMemoryForPrompt({
+    const { block: out } = await renderChatSurfaceMemoryForPrompt({
       env,
       installationId: INSTALL_ID,
       repo: { owner: "acme", name: "api" },
@@ -245,7 +245,7 @@ describe("renderChatSurfaceMemoryForPrompt (portal chat — org∪repo∪own-sea
     tenancyMock.lookupRepoByFullName.mockResolvedValue({ repoId: REPO_ID, installationId: INSTALL_ID })
     await seedOrgRepoAndSeat(env, "OWN PREF")
 
-    const out = await renderChatSurfaceMemoryForPrompt({
+    const { block: out } = await renderChatSurfaceMemoryForPrompt({
       env,
       installationId: INSTALL_ID,
       repo: { owner: "acme", name: "api" },
@@ -262,7 +262,7 @@ describe("renderChatSurfaceMemoryForPrompt (portal chat — org∪repo∪own-sea
     tenancyMock.lookupRepoByFullName.mockResolvedValue(null)
     await seedOrgRepoAndSeat(env, "OWN PREF")
 
-    const out = await renderChatSurfaceMemoryForPrompt({
+    const { block: out } = await renderChatSurfaceMemoryForPrompt({
       env,
       installationId: INSTALL_ID,
       repo: { owner: "acme", name: "api" },
@@ -284,7 +284,7 @@ describe("renderChatSurfaceMemoryForPrompt (portal chat — org∪repo∪own-sea
     })
     vi.spyOn(console, "log").mockImplementation(() => undefined)
 
-    const out = await renderChatSurfaceMemoryForPrompt({
+    const { block: out } = await renderChatSurfaceMemoryForPrompt({
       env,
       installationId: INSTALL_ID,
       repo: { owner: "acme", name: "api" },
@@ -300,7 +300,7 @@ describe("renderChatSurfaceMemoryForPrompt (portal chat — org∪repo∪own-sea
     await seedOrgRepoAndSeat(env, "OWN PREF")
     vi.spyOn(console, "log").mockImplementation(() => undefined)
 
-    const out = await renderChatSurfaceMemoryForPrompt({
+    const { block: out } = await renderChatSurfaceMemoryForPrompt({
       env,
       installationId: INSTALL_ID,
       repo: { owner: "acme", name: "api" },
@@ -309,6 +309,111 @@ describe("renderChatSurfaceMemoryForPrompt (portal chat — org∪repo∪own-sea
 
     // org∪repo leg degraded to "", but the seat leg still applies — never throws.
     expect(out).toContain("OWN PREF")
+  })
+})
+
+describe("renderChatSurfaceMemoryForPrompt — memory provenance (display-only, flag-gated)", () => {
+  it("flag ON — returns #955-shape provenance for the applied org∪repo set (block unchanged)", async () => {
+    const { env } = makeEnv({ OPENCLAW_SURFACE_MEMORY_APPLY: "on", OPENCLAW_MEMORY_PROVENANCE: "on" })
+    tenancyMock.lookupRepoByFullName.mockResolvedValue({ repoId: REPO_ID, installationId: INSTALL_ID })
+    await seedOrgRepoAndSeat(env, "Prefer tabs over spaces.")
+
+    const { block, provenance } = await renderChatSurfaceMemoryForPrompt({
+      env,
+      installationId: INSTALL_ID,
+      repo: { owner: "acme", name: "api" },
+      session: SESSION,
+    })
+
+    expect(provenance).toBeDefined()
+    expect(provenance!.total).toBe(2) // org guardrail + repo fact (seat is not in this shape)
+    expect(provenance!.orgCount).toBe(1)
+    expect(provenance!.repoCount).toBe(1)
+    expect(provenance!.suppressCount).toBe(0)
+    expect(provenance!.items.map((i) => i.id).sort()).toEqual(["org111", "repo222"])
+    // Provenance is additive: the applied block is exactly the flag-off block.
+    expect(block).toContain(ORG_POLICY.rule)
+    expect(block).toContain(REPO_FACT.rule)
+    expect(block).toContain("Prefer tabs over spaces.")
+  })
+
+  it("flag OFF (default) — no provenance field AND a byte-identical block", async () => {
+    const applyOnly = makeEnv({ OPENCLAW_SURFACE_MEMORY_APPLY: "on" })
+    const withProv = makeEnv({ OPENCLAW_SURFACE_MEMORY_APPLY: "on", OPENCLAW_MEMORY_PROVENANCE: "on" })
+    tenancyMock.lookupRepoByFullName.mockResolvedValue({ repoId: REPO_ID, installationId: INSTALL_ID })
+    await seedOrgRepoAndSeat(applyOnly.env, "Prefer tabs over spaces.")
+    await seedOrgRepoAndSeat(withProv.env, "Prefer tabs over spaces.")
+
+    const off = await renderChatSurfaceMemoryForPrompt({
+      env: applyOnly.env,
+      installationId: INSTALL_ID,
+      repo: { owner: "acme", name: "api" },
+      session: SESSION,
+    })
+    const on = await renderChatSurfaceMemoryForPrompt({
+      env: withProv.env,
+      installationId: INSTALL_ID,
+      repo: { owner: "acme", name: "api" },
+      session: SESSION,
+    })
+
+    expect(off.provenance).toBeUndefined()
+    expect("provenance" in off).toBe(false)
+    // The prompt block the run applies is identical whether provenance is on or off.
+    expect(off.block).toBe(on.block)
+  })
+
+  it("flag ON but no org/repo memory applied — no provenance field", async () => {
+    const { env } = makeEnv({ OPENCLAW_SURFACE_MEMORY_APPLY: "on", OPENCLAW_MEMORY_PROVENANCE: "on" })
+    tenancyMock.lookupRepoByFullName.mockResolvedValue(null) // no repo row
+    // Seed ONLY a seat pref — no org, no repo learnings.
+    const ownUserId = personalMemoryUserId(INSTALL_ID, STABLE_USER)
+    await writeRecord(env, seatRecord(ownUserId, "mem_own", "OWN PREF"))
+
+    const { block, provenance } = await renderChatSurfaceMemoryForPrompt({
+      env,
+      installationId: INSTALL_ID,
+      repo: { owner: "acme", name: "api" },
+      session: SESSION,
+    })
+
+    expect(provenance).toBeUndefined() // no org∪repo entries → no note
+    expect(block).toContain("OWN PREF") // seat still applies to the prompt
+  })
+
+  it("RECALL-SAFETY — a suppress-polarity learning is counted but its TEXT never surfaces", async () => {
+    const { env } = makeEnv({ OPENCLAW_SURFACE_MEMORY_APPLY: "on", OPENCLAW_MEMORY_PROVENANCE: "on" })
+    tenancyMock.lookupRepoByFullName.mockResolvedValue({ repoId: REPO_ID, installationId: INSTALL_ID })
+    const suppressRule = "Silence the legacy lint warning in auth.ts."
+    await appendLearning(env, "repo", String(REPO_ID), REPO_FACT, TS)
+    await appendLearning(
+      env,
+      "org",
+      String(INSTALL_ID),
+      makeLearning("sup999", {
+        rule: suppressRule,
+        scope: "org",
+        subjectId: String(INSTALL_ID),
+        polarity: "suppress",
+      }),
+      TS,
+    )
+
+    const { provenance } = await renderChatSurfaceMemoryForPrompt({
+      env,
+      installationId: INSTALL_ID,
+      repo: { owner: "acme", name: "api" },
+      session: SESSION,
+    })
+
+    expect(provenance).toBeDefined()
+    expect(provenance!.total).toBe(2)
+    expect(provenance!.suppressCount).toBe(1)
+    expect(provenance!.repoCount).toBe(1)
+    expect(provenance!.orgCount).toBe(0) // the suppress entry is NOT counted as a guardrail
+    // The silenced rule's text is NEVER present in the provenance payload.
+    expect(JSON.stringify(provenance)).not.toContain(suppressRule)
+    expect(provenance!.items.some((i) => i.id === "sup999")).toBe(false)
   })
 })
 

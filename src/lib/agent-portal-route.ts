@@ -44,6 +44,7 @@ import {
 } from "@/src/lib/agent-runner/dispatch"
 import { resolveAgentRunnerMode, resolvePortalEngine } from "@/src/lib/agent-runner/mode"
 import { renderChatSurfaceMemoryForPrompt } from "@/src/lib/agent-memory"
+import type { MemoryProvenance } from "@/src/features/learnings"
 import type { Env } from "@/src/shared/types/env"
 
 const MAX_BRANCH_PAGES = 10
@@ -467,6 +468,12 @@ export interface AgentRunResponse {
   status: "preview" | "started" | "opened" | "no-change" | "error"
   prUrl?: string
   error?: string
+  /**
+   * Display-only #955-shape provenance for the org∪repo memory applied to this run's
+   * grounding. Present only when SIGILIX_MEMORY_PROVENANCE is on; absent otherwise →
+   * byte-identical response. Never gates or reshapes the run — "show your work" only.
+   */
+  provenance?: MemoryProvenance
 }
 
 /** One changed file in a run's opened pull request. `patch` is the unified diff
@@ -600,7 +607,7 @@ export async function handleAgentRunCreateRoute(request: Request, env: Env, ctx?
       body: prompt,
       url: "",
     },
-    ...(surfaceMemory ? { grounding: surfaceMemory } : {}),
+    ...(surfaceMemory.block ? { grounding: surfaceMemory.block } : {}),
     model: { id: AGENT_MODEL_ID, key: modelKey, baseUrl: AGENT_MODEL_BASE_URL },
     // Portal runs default to the bounded minimal engine (5-tool loop). The full
     // CLI agent is gated behind SIGILIX_PORTAL_FULL_ENGINE_MODE="on" (default
@@ -617,6 +624,7 @@ export async function handleAgentRunCreateRoute(request: Request, env: Env, ctx?
       status,
       ...(result.outcome?.prUrl ? { prUrl: result.outcome.prUrl } : {}),
       ...(result.outcome?.error ? { error: result.outcome.error } : {}),
+      ...(surfaceMemory.provenance ? { provenance: surfaceMemory.provenance } : {}),
     } satisfies AgentRunResponse,
     200,
   )

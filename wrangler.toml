@@ -1213,11 +1213,11 @@ SIGILIX_REPOSITORY_CONTEXT_REVIEW_MODE = "post"
 # measures the bounded prompt block, and returns zero prompt bytes.
 SIGILIX_REPOSITORY_CONTEXT_LINEAR_MODE = "shadow"
 
-# Canonical repository descriptions for Slack Q&A. Shadow reads the exact
-# installation + channel-authorized immutable repository ids, renders the bounded
-# prompt block, and emits content-free telemetry while returning zero prompt bytes.
-# Flip to "on" only after timeout/error telemetry and adversarial scope checks pass.
-SIGILIX_REPOSITORY_CONTEXT_SLACK_MODE = "shadow"
+# Canonical repository descriptions for Slack Q&A and offer revision. On reads
+# the exact installation + channel-authorized immutable repository ids and supplies
+# the bounded untrusted block to the model. Roll back to "shadow" to keep the same
+# scoped read and content-free telemetry while returning zero prompt bytes.
+SIGILIX_REPOSITORY_CONTEXT_SLACK_MODE = "on"
 
 # Verified repo-qualified Slack code citations. Shadow inspects immutable
 # repo-tenant manifests + active-index membership but leaves prompts, tool bytes,

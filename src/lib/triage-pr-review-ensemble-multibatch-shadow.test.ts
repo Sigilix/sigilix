@@ -448,6 +448,85 @@ describe("handlePrReviewEnsemble — SIG-418 multi-batch shadow wiring", () => {
     )
   })
 
+  it("injects post context into every primary and spillover specialist message while excluding synth", async () => {
+    configureReviewFixture({
+      prNumber: 9191,
+      diff: MULTIBATCH_DIFF,
+      files: {
+        "src/batch-zero.ts": "batch-zero-sha",
+        "src/batch-one.ts": "batch-one-sha",
+      },
+    })
+    configureFullReviewChat({ batchOneFinding: false, synthFindings: [] })
+    const db = makeD1()
+    await db.exec(REPOSITORY_CONTEXT_MIGRATION)
+    await replaceRepositoryContext(db, {
+      provider: "github",
+      scopeId: "77",
+      expectedRevision: 0,
+      repositories: [
+        { externalId: "101", fullName: "Sigilix/sigilix", context: "Review worker", position: 0 },
+        { externalId: "202", fullName: "Sigilix/portal", context: "Portal UI", position: 1 },
+      ],
+      relationships: [
+        {
+          fromExternalId: "202",
+          toExternalId: "101",
+          label: "configures",
+          normalizedLabel: "configures",
+          position: 0,
+        },
+      ],
+      conventions: "Never suppress a real P0 or P1.",
+      nowIso: "2026-07-13T20:00:00.000Z",
+      updatedBy: "github:1",
+    })
+    const repositoryContextIdentity = makeGitHubRepositoryContextReviewIdentity(77, 101)
+    if (!repositoryContextIdentity) throw new Error("expected safe repository-context identity")
+
+    const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 9191,
+      headSha: HEAD_SHA,
+      installationId: 77,
+      repoId: 101,
+      repositoryContextIdentity,
+      env: makeEnv({
+        SIGILIX_PLATFORM_DB: db,
+        OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE: "post",
+        OPENCLAW_REVIEW_MULTIBATCH_MODE: "on",
+      }),
+    })
+
+    expect(result.status).toBe("posted")
+    const calls = mockChat.mock.calls.map(([arg]) => ({ role: callRole(arg), message: userMessageText(arg) }))
+    const specialistCalls = calls.filter(
+      (call): call is { role: "logic" | "security" | "performance" | "tests"; message: string } => call.role !== null,
+    )
+    const primaryCalls = specialistCalls.filter((call) =>
+      call.message.includes("diff --git a/src/batch-zero.ts b/src/batch-zero.ts"),
+    )
+    const spilloverCalls = specialistCalls.filter((call) =>
+      call.message.includes("diff --git a/src/batch-one.ts b/src/batch-one.ts"),
+    )
+    expect(new Set(primaryCalls.map((call) => call.role))).toEqual(
+      new Set(["logic", "security", "performance", "tests"]),
+    )
+    expect(new Set(spilloverCalls.map((call) => call.role))).toEqual(
+      new Set(["logic", "security", "performance", "tests"]),
+    )
+    for (const { message } of specialistCalls) {
+      expect(message).toContain("[REPOSITORY CONTEXT — UNTRUSTED DATA]")
+      expect(message).toContain("Sigilix/portal")
+    }
+    const synthCalls = calls.filter((call) => call.role === null)
+    expect(synthCalls).toHaveLength(1)
+    expect(synthCalls[0]?.message).not.toContain("[REPOSITORY CONTEXT — UNTRUSTED DATA]")
+    expect(synthCalls[0]?.message).not.toContain("Sigilix/portal")
+  })
+
   it("STALE HEAD: shadow=on, but a moved head returns before the shadow scheduler → zero multibatch telemetry", async () => {
     // Guard #1 fires: the first getPullRequest reports a head SHA different from
     // the queued one, so the orchestrator returns `stale_head` BEFORE packing,

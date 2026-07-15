@@ -217,7 +217,7 @@ export interface EnsembleFeatureFlags {
    *  signal (incl. a GitHub file-metadata fetch for rename exclusion) and injects
    *  the enforce-gated logic + synth prompt blocks. */
   adversarialFramingMode: AdversarialFramingMode
-  /** Canonical repository-context review rollout. Unknown/unset values fail closed to `off`. */
+  /** Canonical repository-context review rollout (`off` | `shadow` | `post`). Unknown/unset values fail closed. */
   repositoryContextReviewMode: RepositoryContextReviewMode
 }
 

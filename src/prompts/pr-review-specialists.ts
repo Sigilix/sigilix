@@ -346,6 +346,14 @@ export interface SpecialistInitialMessageCtx {
    */
   dynamicEvidenceBlock?: string
   /**
+   * Canonical multi-repository descriptions selected for this exact review
+   * authority. This block is explicitly labeled untrusted descriptive data,
+   * never rules or evidence, and is intentionally omitted from synthesis.
+   *
+   * Empty/absent → block is not emitted.
+   */
+  repositoryContextBlock?: string
+  /**
    * SIG-172: pre-rendered directory-scoped + glob-scoped rules block
    * discovered from SIGILIX.md / .sigilix/rules/*.md at index time
    * and matched against the PR's reviewable changed files at review
@@ -476,6 +484,9 @@ export function buildSpecialistInitialMessage(ctx: SpecialistInitialMessageCtx):
   }
   if (ctx.dynamicEvidenceBlock && ctx.dynamicEvidenceBlock.trim()) {
     lines.push("", ctx.dynamicEvidenceBlock.trim())
+  }
+  if (ctx.repositoryContextBlock && ctx.repositoryContextBlock.trim()) {
+    lines.push("", ctx.repositoryContextBlock.trim())
   }
   lines.push("", `[CODEBASE NAMESPACE FOR FOLLOW-UP retrieve_codebase CALLS]`, ctx.namespace)
   return lines.join("\n")

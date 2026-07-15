@@ -17,9 +17,11 @@ It is **Sigilix on Slack** — the app name, icon, and voice are Sigilix's, not 
 
 Grounding (`gatherAgentContext`/`runAgentLoop`), memory (SIG-522 Vectorize+KV), and Linear triage
 (`triageIssue` + `LinearClient.createIssue`) are all reused **in-process**, bounded by a per-channel
-**scope resolver**: a channel can only reach a repo that has an **exact** `owner/repo` entry in
-`OPENCLAW_GITHUB_INSTALLATION_MAP` — a Slack channel can never broaden access beyond where the
-GitHub App is installed.
+**scope resolver**. The customer-managed D1 binding for the exact workspace + channel pins one GitHub
+App installation and immutable repository IDs. Every request reconciles those IDs against the
+installation's complete current GitHub repository list before agent work starts, so renamed repos use
+their live names and removed repos lose access. A healthy missing D1 binding may use the exact legacy
+env map; malformed bindings and D1 failures deny instead of falling back.
 
 ## One-time setup (founder)
 
@@ -44,7 +46,11 @@ wrangler secret put SLACK_BOT_TOKEN          # xoxb-… ; getSlackBotToken falls
 
 ### 3. Configure channel → repo / Linear scope
 
-Set `SIGILIX_SLACK_SCOPE_MAP` (a `[vars]` entry or a secret) — JSON keyed by `"<teamId>:<channelId>"`:
+Production channel configuration is stored in D1 as an exact workspace + channel binding, one GitHub
+installation, and either all repositories or an explicit immutable repository-ID set. The organization
+settings use the admin-gated `GET/PUT /v1/org/:installationId/slack-config` routes for this state. For a
+legacy deployment without a D1 binding, `SIGILIX_SLACK_SCOPE_MAP` remains available as an exact
+`"<teamId>:<channelId>"` fallback:
 
 ```json
 {
@@ -52,8 +58,8 @@ Set `SIGILIX_SLACK_SCOPE_MAP` (a `[vars]` entry or a secret) — JSON keyed by `
 }
 ```
 
-- `repos` must be **exact** `owner/repo` strings that already exist in `OPENCLAW_GITHUB_INSTALLATION_MAP`
-  (any repo without an exact install entry is dropped — scope-safety).
+- Legacy `repos` must be **exact** `owner/repo` strings that already exist in
+  `OPENCLAW_GITHUB_INSTALLATION_MAP` (any repo without an exact install entry is dropped).
 - `linearTeam` is the Linear **team UUID** (not the team key like `SIG`). Required for the
   "make a Linear triage" action; omit it and triage replies with a "not connected to Linear" notice.
 
@@ -106,6 +112,24 @@ back exact-path code with the exact mode still enabled rather than attempting a 
 > isolation. Broad GA is gated on the SOC 2 work (SIG-188) — keep `SIGILIX_SLACK_MODE` limited to the
 > beta workspace until then.
 
+## Canonical multi-repository context
+
+Slack Q&A and implementation-offer revision receive the admin-authored purpose for every repository
+authorized to the channel plus relationships whose endpoints are both authorized. Stored repository
+names are replaced with the live names returned for the immutable IDs. Installation-wide conventions,
+unselected sibling repositories, and cross-boundary relationships are excluded.
+
+`SIGILIX_REPOSITORY_CONTEXT_SLACK_MODE` controls the model boundary:
+
+- `off` — no context read.
+- `shadow` — performs the exact bounded read and emits content-free telemetry, but adds zero prompt
+  bytes.
+- `on` (production rollout) — adds the bounded block to the model prompt as explicitly untrusted data.
+
+The read has a 500 ms deadline and fails soft to an empty block. Repository descriptions never grant
+tool access: the request-start D1 + GitHub scope is resolved independently, and only that trusted scope
+builds the agent's repository allowlist.
+
 ## Implementation note
 
 The route is implemented natively on the Worker (request-signature verification in
@@ -117,5 +141,3 @@ plumbing directly and stays fully unit-testable.
 
 - **PR authoring from Slack** (`@Sigilix open a PR …`) — fast-follow (SIG-545 #2); heavier + needs
   tighter caps/governance.
-- **Portal connection UI / full connection registry** (SIG-193 / SIG-197) — v1 uses the lightweight
-  `SIGILIX_SLACK_SCOPE_MAP`; the portal "Add to Slack" + scope editor come later.

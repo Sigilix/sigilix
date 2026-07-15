@@ -1299,7 +1299,7 @@ export interface Env extends AwsBedrockEnv {
   SIGILIX_PLATFORM_DB?: D1Database // Optional; unprovisioned deploys stay metering-off.
   OPENCLAW_REPO_ACTIVE_INDEX_MODE?: string // off | shadow | on; unknown/unset → off.
   OPENCLAW_REPOSITORY_CONTEXT_API?: string // Exact "on" exposes the canonical org repository-context API.
-  OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE?: string // off | shadow; unknown/unset (including on) → off.
+  OPENCLAW_REPOSITORY_CONTEXT_REVIEW_MODE?: string // off | shadow | post; unknown/unset (including on) → off.
   OPENCLAW_REPOSITORY_CONTEXT_SLACK_MODE?: string // off | shadow | on; unknown/unset → off.
   OPENCLAW_REPOSITORY_CONTEXT_LINEAR_MODE?: string // off | shadow | on; unknown/unset → off.
   OPENCLAW_SLACK_CODE_CITATIONS_MODE?: string // off | shadow | on; unknown/unset → off.

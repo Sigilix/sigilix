@@ -102,11 +102,11 @@ describe("readRepositoryContextForScopedRepositories", () => {
     expect(prepare).not.toHaveBeenCalled()
   })
 
-  it("keeps the committed production rollout in shadow until telemetry is reviewed", () => {
+  it("keeps the committed production rollout active after the exact-scope bake", () => {
     const wrangler = readFileSync(new URL("../../../../wrangler.toml", import.meta.url), "utf8")
     const configuredMode = /SIGILIX_REPOSITORY_CONTEXT_SLACK_MODE\s*=\s*"([^"]*)"/u.exec(wrangler)?.[1]
-    expect(configuredMode, "SIGILIX_REPOSITORY_CONTEXT_SLACK_MODE in wrangler.toml").toBe("shadow")
-    expect(parseRepositoryContextScopedMode(configuredMode)).toBe("shadow")
+    expect(configuredMode, "SIGILIX_REPOSITORY_CONTEXT_SLACK_MODE in wrangler.toml").toBe("on")
+    expect(parseRepositoryContextScopedMode(configuredMode)).toBe("on")
   })
 
   it("keeps shadow byte-empty but returns an active prompt only in exact on mode", async () => {

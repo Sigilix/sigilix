@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   MAX_REPOSITORY_CONTEXT_REVIEW_CHARS,
   makeGitHubRepositoryContextReviewIdentity,
+  makeGitLabRepositoryContextReviewIdentity,
   parseRepositoryContextReviewMode,
   renderRepositoryContextForReview,
 } from "./review-context"
@@ -9,6 +10,8 @@ import type { RepositoryContextRelationship, RepositoryContextRepository, Reposi
 
 const START_MARKER = "[REPOSITORY CONTEXT — UNTRUSTED DATA]"
 const END_MARKER = "[END REPOSITORY CONTEXT — UNTRUSTED DATA]"
+const GITLAB_EXTERNAL_ID = `gl:v1:${"a".repeat(43)}`
+const GITLAB_CLAIM_TOKEN = "b".repeat(43)
 
 function repository(
   externalId: string,
@@ -60,9 +63,10 @@ function payloadOf(promptBlock: string): Record<string, unknown> {
 }
 
 describe("repository-context review domain", () => {
-  it("enables only shadow, fails active values closed, and constructs exact safe GitHub identity strings", () => {
+  it("enables only shadow/post, fails aliases closed, and constructs exact provider identities", () => {
     expect(parseRepositoryContextReviewMode(undefined)).toBe("off")
     expect(parseRepositoryContextReviewMode("  SHADOW \n")).toBe("shadow")
+    expect(parseRepositoryContextReviewMode("  POST \n")).toBe("post")
     expect(parseRepositoryContextReviewMode("ON")).toBe("off")
     expect(parseRepositoryContextReviewMode("enforce")).toBe("off")
     expect(parseRepositoryContextReviewMode("true")).toBe("off")
@@ -75,6 +79,22 @@ describe("repository-context review domain", () => {
     for (const invalid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
       expect(makeGitHubRepositoryContextReviewIdentity(invalid, 101)).toBeNull()
       expect(makeGitHubRepositoryContextReviewIdentity(42, invalid)).toBeNull()
+    }
+
+    expect(makeGitLabRepositoryContextReviewIdentity("user-42", GITLAB_EXTERNAL_ID, GITLAB_CLAIM_TOKEN)).toEqual({
+      provider: "gitlab",
+      scopeId: "user-42",
+      repositoryExternalId: GITLAB_EXTERNAL_ID,
+      authorityClaimToken: GITLAB_CLAIM_TOKEN,
+    })
+    for (const [scopeId, externalId, claimToken] of [
+      ["", GITLAB_EXTERNAL_ID, GITLAB_CLAIM_TOKEN],
+      [" user-42", GITLAB_EXTERNAL_ID, GITLAB_CLAIM_TOKEN],
+      ["user\u0000-42", GITLAB_EXTERNAL_ID, GITLAB_CLAIM_TOKEN],
+      ["user-42", "42", GITLAB_CLAIM_TOKEN],
+      ["user-42", GITLAB_EXTERNAL_ID, "short"],
+    ]) {
+      expect(makeGitLabRepositoryContextReviewIdentity(scopeId!, externalId!, claimToken!)).toBeNull()
     }
   })
 

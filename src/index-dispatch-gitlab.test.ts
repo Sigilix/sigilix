@@ -9,10 +9,13 @@
 // per-project token + allowlist gate work, and that a degraded/errored run
 // SURFACES on the MR and is never a silent clean pass.
 
+import { readFileSync } from "node:fs"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { activateGitLabRepositoryAuthority, claimGitLabRepositoryAuthority } from "@/src/features/repository-context"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
 import type { EnsembleHandlerArgs, EnsembleResult } from "@/src/lib/triage-pr-review-ensemble"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 
 // ─── the ensemble seam: partial-mock (keeps every other real export + the
 // load-time budget assertion) and override only `handlePrReviewEnsemble`. ─────
@@ -96,7 +99,11 @@ function makeEnv(over: Partial<Env> = {}, kv: Record<string, string> = {}): Env 
   return {
     SIGILIX_GITLAB_TOKEN: "glpat-global",
     OPENCLAW_STATE: {
-      get: async (key: string) => kv[key] ?? null,
+      get: async (key: string, type?: "json") => {
+        const value = kv[key]
+        if (value === undefined) return null
+        return type === "json" ? JSON.parse(value) : value
+      },
       put: async (key: string, value: string) => {
         kv[key] = value
       },
@@ -104,6 +111,11 @@ function makeEnv(over: Partial<Env> = {}, kv: Record<string, string> = {}): Env 
     ...over,
   } as unknown as Env
 }
+
+const AUTHORITY_MIGRATION = readFileSync(
+  new URL("../migrations/0026_create_repository_context_authority.sql", import.meta.url),
+  "utf8",
+)
 
 const doneKey = (headSha = "c".repeat(40)) => `gitlab-mr-review-done:42:7:${headSha}`
 
@@ -194,12 +206,67 @@ describe("dispatchJob — gitlab-mr-review consumer (e2e: a real MR gets a poste
     ensembleMock.mockImplementation(postingEnsemble)
     await dispatchJob(JOB, makeEnv())
     expect(findCall((c) => c.method === "POST").token).toBe("glpat-global")
+    expect(ensembleMock.mock.calls[0]![0].repositoryContextIdentity).toBeUndefined()
   })
 
   it("uses the PER-PROJECT token from KV when present (mirrors GitHub installation->token)", async () => {
     ensembleMock.mockImplementation(postingEnsemble)
     await dispatchJob(JOB, makeEnv({}, { "gitlab-project-token:42": "glpat-project-42" }))
     expect(findCall((c) => c.method === "POST").token).toBe("glpat-project-42")
+    expect(ensembleMock.mock.calls[0]![0].repositoryContextIdentity).toBeUndefined()
+  })
+
+  it("forwards repository context identity from the exact active GitLab authority generation", async () => {
+    const db = makeD1()
+    await db.exec(AUTHORITY_MIGRATION)
+    const claim = await claimGitLabRepositoryAuthority(db, {
+      scopeId: "user-a",
+      instanceOrigin: "https://gitlab.com",
+      sourceId: 42,
+      fullName: "grp/sub/proj",
+    })
+    if (claim.status !== "claimed") throw new Error("expected authority claim")
+    await expect(
+      activateGitLabRepositoryAuthority(db, {
+        scopeId: "user-a",
+        externalId: claim.repository.externalId,
+        claimToken: claim.claimToken,
+      }),
+    ).resolves.toMatchObject({ status: "activated" })
+
+    ensembleMock.mockResolvedValue({ status: "skipped", telemetry: {} } as EnsembleResult)
+    await dispatchJob(
+      JOB,
+      makeEnv(
+        {
+          OPENCLAW_REPOSITORY_CONTEXT_API: "on",
+          SIGILIX_GITLAB_BASE_URL: "https://gitlab.com",
+          SIGILIX_PLATFORM_DB: db,
+        },
+        {
+          [`gitlab-project-token:42:${claim.claimToken}`]: "glpat-generation-42",
+          "gitlab-connection:42": JSON.stringify({
+            userId: "user-a",
+            projectPath: "grp/sub/proj",
+            name: "proj",
+            hookId: 9,
+            connectedAt: "2026-07-15T00:00:00.000Z",
+            contextOwnerUserId: "user-a",
+            instanceOrigin: "https://gitlab.com",
+            authorityExternalId: claim.repository.externalId,
+            authorityClaimToken: claim.claimToken,
+          }),
+        },
+      ),
+    )
+
+    expect(ensembleMock).toHaveBeenCalledTimes(1)
+    expect(ensembleMock.mock.calls[0]![0].repositoryContextIdentity).toEqual({
+      provider: "gitlab",
+      scopeId: "user-a",
+      repositoryExternalId: claim.repository.externalId,
+      authorityClaimToken: claim.claimToken,
+    })
   })
 })
 

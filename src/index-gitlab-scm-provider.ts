@@ -30,7 +30,9 @@ import { verifyGitLabWebhook } from "@/src/shared/adapters/gitlab/gitlab-webhook
 import { decidePullRequestJobs } from "@/src/index-internals"
 import {
   canonicalGitLabRepositoryAuthorityIdentity,
+  makeGitLabRepositoryContextReviewIdentity,
   normalizeGitLabInstanceOrigin,
+  type GitLabRepositoryContextReviewIdentity,
   verifyActiveGitLabRepositoryAuthorityGeneration,
 } from "@/src/features/repository-context"
 import { getConnection, getProjectReviewToken } from "@/src/lib/gitlab-connect/gitlab-connect-store"
@@ -67,7 +69,11 @@ export function mapGitLabActionToGitHubAction(action: string): string | null {
 export async function resolveGitLabProjectToken(
   env: Env,
   projectId: number,
-): Promise<{ token: string; source: "per-project" | "global" } | null> {
+): Promise<{
+  token: string
+  source: "per-project" | "global"
+  repositoryContextIdentity?: GitLabRepositoryContextReviewIdentity
+} | null> {
   try {
     if (env.OPENCLAW_REPOSITORY_CONTEXT_API === "on") {
       const connection = await getConnection(env, projectId)
@@ -102,7 +108,15 @@ export async function resolveGitLabProjectToken(
           return null
         }
         const perProject = await getProjectReviewToken(env, projectId, connection.authorityClaimToken)
-        return perProject ? { token: perProject, source: "per-project" } : null
+        if (!perProject) return null
+        const repositoryContextIdentity = makeGitLabRepositoryContextReviewIdentity(
+          connection.contextOwnerUserId,
+          connection.authorityExternalId,
+          connection.authorityClaimToken,
+        )
+        return repositoryContextIdentity
+          ? { token: perProject, source: "per-project", repositoryContextIdentity }
+          : null
       }
       // An unsuffixed token is a legacy connection, not authority. Do not let
       // it fall through to a different issuer's global credential.

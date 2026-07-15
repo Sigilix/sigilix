@@ -359,28 +359,27 @@ export interface Env extends AwsBedrockEnv {
 
   // Seat∪Org memory layering — Phase 3 (CLI read side). Three-state, DEFAULT
   // OFF. Gates whether POST /v1/memory/query (the CLI's own seat-memory read)
-  // ALSO unions the caller-installation's ORG-scope corpus — a different call
-  // site from OPENCLAW_ORG_MEMORY_APPLY (PR review), so its own flag:
-  //   - "off" (default/any other value): seat-memory ONLY, byte-identical to
-  //           before — no installation check, no `learnings:org:*` KV read.
-  //   - "shadow": ALSO loads the caller-installation's org corpus and LOGS the
-  //           delta (`cli-org-memory-shadow`); results stay seat-only.
-  //   - "on": results are seat ∪ org, deduped by id (a seat memory wins a
-  //           collision) — a fresh CLI session inherits the org's learnings.
-  // ADDITIVE ONLY (never suppresses/reorders a seat result). Fail-soft: the
-  // legacy global key or any org-store read error degrades to seat-only, never
-  // throws. Parsed by resolveCliOrgMemoryMode (@/features/learnings).
+  // ALSO unions the caller-installation's ORG corpus — a different call site from
+  // OPENCLAW_ORG_MEMORY_APPLY (PR review), so its own flag. "shadow" logs the
+  // delta only; "on" returns seat ∪ org (deduped by id, seat wins). ADDITIVE ONLY
+  // (never suppresses/reorders a seat result); fail-soft (never throws). Full
+  // contract on resolveCliOrgMemoryMode (@/features/learnings).
   OPENCLAW_CLI_ORG_MEMORY?: string
 
   // Surface memory apply — Slack + Linear ANSWERS read org∪repo learnings.
-  // Two-state, DEFAULT OFF. "off" (default/any other value): byte-identical to
-  // before — no org/repo learnings read for these surfaces, no injection. "on":
-  // the answer prompt carries repo ∪ org learnings (deduped by id, repo wins a
-  // collision) with ORG durable_preference guardrails labeled above repo facts;
-  // SEAT memory is never applied here (shared channels — org + repo scope only).
-  // Fail-soft: a load error degrades to answering without memory (never throws).
-  // Parsed by resolveSurfaceMemoryApplyMode (@/features/learnings).
+  // Two-state, DEFAULT OFF. "on": the answer prompt carries repo ∪ org learnings
+  // (ORG guardrails ranked above repo facts); SEAT memory is never applied here.
+  // Fail-soft (never throws). Parsed by resolveSurfaceMemoryApplyMode; full
+  // contract lives on that resolver (@/features/learnings).
   OPENCLAW_SURFACE_MEMORY_APPLY?: string
+
+  // PR-review memory PROVENANCE ("show your work"). Two-state, DEFAULT OFF. "on":
+  // a compact, DISPLAY-ONLY note in the review overview lists which repo/org
+  // learnings informed the review (never gates/suppresses/reorders a finding; a
+  // suppress rule's text is never surfaced). Canonical name SIGILIX_MEMORY_PROVENANCE
+  // (OPENCLAW_ sibling auto-mirrored by normalizeEnv). Parsed by
+  // resolveMemoryProvenanceMode (@/features/learnings).
+  OPENCLAW_MEMORY_PROVENANCE?: string
 
   // ARC-184 kill-switch for the review-provenance + stale-marker
   // pipeline. When set to "off", manifest writes and stale-mark

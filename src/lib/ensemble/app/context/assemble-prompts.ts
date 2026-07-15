@@ -77,8 +77,10 @@ import {
   loadEffectiveLearnings,
   renderBoostedCategoriesForPrompt,
   renderLearningsForPrompt,
+  resolveAppliedMemoryProvenance,
   resolveLearningsMode,
   selectRelevantForPaths,
+  type MemoryProvenance,
 } from "@/src/features/learnings"
 import { isCategoryBoosted, loadPrecisionProfile } from "@/src/features/precision-profile"
 import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
@@ -184,6 +186,11 @@ export interface AssemblePromptsResult {
    *  `[repo-rule:<id>]` marker only attributes when the id matches a rule
    *  this review's context actually saw. Empty when off, or no match. */
   matchedCustomRules: MatchedSigilixCustomRule[]
+  /** SIG memory-provenance: the display-only provenance for the repo/org learnings
+   *  actually injected into this review's prompt. Undefined unless
+   *  SIGILIX_MEMORY_PROVENANCE is "on" (and learnings applied) → threaded to the
+   *  overview renderer. Never influences findings/verdict. */
+  appliedMemoryProvenance?: MemoryProvenance
 }
 
 export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise<AssemblePromptsResult> {
@@ -765,6 +772,11 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
   // store, output byte-unchanged); `on` → inject. Best-effort (loader no-throws).
   const learningsMode = resolveLearningsMode(env.OPENCLAW_LEARNINGS_MODE)
   let learningsBlock = ""
+  // SIG memory-provenance: the subset of learnings ACTUALLY injected into this
+  // review's prompt (`relevantLearnings` when `on`), captured for the display-only
+  // provenance note in the overview. Undefined unless SIGILIX_MEMORY_PROVENANCE is
+  // "on" → nothing threads downstream → byte-identical review output when off.
+  let appliedMemoryProvenance: MemoryProvenance | undefined
   if (scmProvider === "github" && learningsMode !== "off" && repoId !== undefined) {
     const candidateLearnings = await loadEffectiveLearnings({ env, owner, repo, repoId, prNumber })
     // Select over the FULL PR path scope (changed + not-yet-reviewed) so the
@@ -783,7 +795,13 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
         selected: relevantLearnings.length,
       }),
     )
-    if (learningsMode === "on") learningsBlock = renderLearningsForPrompt(relevantLearnings)
+    if (learningsMode === "on") {
+      learningsBlock = renderLearningsForPrompt(relevantLearnings)
+      // Capture the APPLIED set (post path-select + budget cap) — display-only,
+      // flag-gated. Not the raw candidate set: only what shaped the review. The
+      // note excludes suppress-rule TEXT itself (see buildMemoryProvenance).
+      appliedMemoryProvenance = resolveAppliedMemoryProvenance(env, relevantLearnings)
+    }
   }
   // SIG-104 PR-3: co-locate the precision-profile BOOST at this learnings gate
   // (spec §5 + the precision-profile README integration note). The boost is the
@@ -976,5 +994,6 @@ export async function assembleSpecialistPrompts(a: AssemblePromptsArgs): Promise
     adversarialFramingSynthBlock,
     matchedSdkPacks,
     matchedCustomRules,
+    ...(appliedMemoryProvenance !== undefined ? { appliedMemoryProvenance } : {}),
   }
 }

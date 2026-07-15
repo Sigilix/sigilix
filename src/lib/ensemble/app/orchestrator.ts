@@ -479,11 +479,9 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     } = graphEvidence
 
     // ─── SIG-318 (PR 12g-3): the ASSEMBLE-PROMPTS seam ────────
-    // The prompt fact-blocks, security manifest, asymmetry/toctou hints, `factsByRole`,
-    // the `maybePostAstAutoInline` + `messageForRole` closures, stack detection, the
-    // testing-evidence pack, and the dynamic evidence block live in ensemble/app/
-    // context/assemble-prompts. The two closures are RETURNED (they hide their
-    // captures); every other value the downstream phases consume flows out unchanged.
+    // Prompt fact-blocks, manifest, hints, factsByRole, stack, and evidence live in
+    // ensemble/app/context/assemble-prompts. Closures (maybePostAstAutoInline /
+    // messageForRole) are RETURNED (hiding captures); other values flow out unchanged.
     await repositoryContextPromise
     const prompts = await assembleSpecialistPrompts({
       scmProvider: args.scmProvider,
@@ -548,6 +546,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       adversarialFramingSynthBlock,
       matchedSdkPacks,
       matchedCustomRules,
+      appliedMemoryProvenance,
     } = prompts
 
     statusReporter?.report(
@@ -932,6 +931,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
         deterministicCheckAnnotationMeta,
         deterministicErroredReviewMeta,
         ...(connectedAppEvidence !== undefined ? { connectedAppEvidence } : {}),
+        ...(appliedMemoryProvenance !== undefined ? { appliedMemoryProvenance } : {}),
       }),
       {
         env,

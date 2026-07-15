@@ -80,6 +80,7 @@ describe("D1 seat reconciliation store", () => {
     await db.exec(migration("0012_add_tenant_billing_source.sql"))
     await db.exec(migration("0020_create_stripe_seat_reconciliation.sql"))
     await db.exec(migration("0023_add_org_seat_billing_operation_context.sql"))
+    await db.exec(migration("0028_create_org_workspace_seat_assignment.sql"))
     await db
       .prepare("INSERT INTO tenant (installation_id, tier, created_at, updated_at) VALUES (?, 'teams', 't', 't')")
       .bind(42)
@@ -921,6 +922,7 @@ describe("D1 seat reconciliation store", () => {
       )
       .run()
     await historicalDb.exec(migration("0023_add_org_seat_billing_operation_context.sql"))
+    await historicalDb.exec(migration("0028_create_org_workspace_seat_assignment.sql"))
     await expect(listDueOrgSeatBillingOperations(env(historicalDb), { nowMs: 1, limit: 10 })).resolves.toEqual({
       kind: "error",
       reason: "invalid_row",

@@ -18,11 +18,12 @@ const PRICE_ID = "price_pro_monthly"
 const migration = (name: string): string =>
   readFileSync(new URL(`../../../../migrations/${name}`, import.meta.url), "utf8")
 
-function env(db: D1Database): Env {
+function env(db: D1Database, overrides: Partial<Env> = {}): Env {
   return {
     SIGILIX_PLATFORM_DB: db,
     SIGILIX_STRIPE_SECRET_KEY: "sk_test_secret",
     SIGILIX_STRIPE_PRICE_PRO: PRICE_ID,
+    ...overrides,
   } as Env
 }
 
@@ -33,7 +34,9 @@ async function makeDb(): Promise<D1Database> {
   await db.exec(migration("0012_add_tenant_billing_source.sql"))
   await db.exec(migration("0007_create_org_seat_assignment.sql"))
   await db.exec(migration("0020_create_stripe_seat_reconciliation.sql"))
+  await db.exec(migration("0022_create_org_workspace_access.sql"))
   await db.exec(migration("0023_add_org_seat_billing_operation_context.sql"))
+  await db.exec(migration("0028_create_org_workspace_seat_assignment.sql"))
   await db
     .prepare(
       `INSERT INTO tenant
@@ -72,6 +75,36 @@ async function makeDb(): Promise<D1Database> {
   return db
 }
 
+async function seedManagedAccess(
+  db: D1Database,
+  args: { githubUserId: string; role?: "admin" | "member" },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO org_workspace_access
+        (installation_id, github_user_id, role, created_at, updated_at, revoked_at,
+         updated_by, last_audit_id, last_action)
+       VALUES (?, ?, ?, '2026-07-15T00:00:00.000Z', '2026-07-15T00:00:00.000Z', NULL,
+               'github:owner', ?, 'member_added_or_regranted')`,
+    )
+    .bind(INSTALLATION_ID, args.githubUserId, args.role ?? "member", `audit-${INSTALLATION_ID}-${args.githubUserId}`)
+    .run()
+}
+
+async function seedManagedAssignment(
+  db: D1Database,
+  args: { githubUserId: string; lastKnownLogin: string; assigned?: boolean },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO org_workspace_seat_assignment
+        (installation_id, github_user_id, assigned, last_known_login, created_at, updated_at, updated_by)
+       VALUES (?, ?, ?, ?, '2026-07-15T00:00:00.000Z', '2026-07-15T00:00:00.000Z', 'github:owner')`,
+    )
+    .bind(INSTALLATION_ID, args.githubUserId, args.assigned === false ? 0 : 1, args.lastKnownLogin)
+    .run()
+}
+
 function stripeItem(quantity: number): object {
   return {
     id: "si_42",
@@ -106,6 +139,52 @@ function stubLiveStripe(quantity: number): ReturnType<typeof vi.fn> {
   })
   vi.stubGlobal("fetch", fetchMock)
   return fetchMock
+}
+
+function stubStripeUpdateFailure(quantity: number): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url === "https://api.stripe.com/v1/subscription_items?subscription=sub_42&limit=100") {
+      expect(init?.method).toBe("GET")
+      return new Response(JSON.stringify({ data: [stripeItem(quantity)], has_more: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }
+    if (url === "https://api.stripe.com/v1/subscription_items/si_42") {
+      expect(init?.method).toBe("POST")
+      return new Response(JSON.stringify({ error: { message: "try again" } }), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      })
+    }
+    throw new Error(`unexpected fetch: ${url}`)
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  return fetchMock
+}
+
+async function startPendingManagedExpansion(
+  db: D1Database,
+  args: { githubUserId?: string; lastKnownLogin?: string } = {},
+): Promise<{ operationId: string; fetchMock: ReturnType<typeof vi.fn> }> {
+  const githubUserId = args.githubUserId ?? "111"
+  const lastKnownLogin = args.lastKnownLogin ?? "shared-login"
+  await seedManagedAccess(db, { githubUserId })
+  await seedManagedAccess(db, { githubUserId: "222" })
+  await seedManagedAccess(db, { githubUserId: "333" })
+  await seedManagedAssignment(db, { githubUserId: "222", lastKnownLogin: "shared-login" })
+  await seedManagedAssignment(db, { githubUserId: "333", lastKnownLogin: "third-member" })
+  const fetchMock = stubStripeUpdateFailure(2)
+  const result = await reconcileOrgSeatAssignment(env(db, { OPENCLAW_ORG_MEMBERSHIP_MODE: "on" }), {
+    installationId: INSTALLATION_ID,
+    target: { kind: "managed_github", githubUserId, lastKnownLogin },
+    requestedAssigned: true,
+    actorLogin: "owner",
+  })
+  expect(result).toMatchObject({ kind: "pending", assigned: false })
+  if (result.kind !== "pending") throw new Error("managed expansion was not persisted")
+  return { operationId: result.operationId, fetchMock }
 }
 
 async function seedPendingOperation(db: D1Database): Promise<OrgSeatBillingOperation> {
@@ -174,9 +253,8 @@ describe("organization seat billing reconciliation", () => {
     await expect(
       reconcileOrgSeatAssignment(env(db), {
         installationId: INSTALLATION_ID,
-        login: "alice",
+        target: { kind: "legacy_login", login: "alice", targetIsAdmin: false },
         requestedAssigned: false,
-        targetIsAdmin: false,
         actorLogin: "owner",
       }),
     ).resolves.toEqual({ kind: "busy" })
@@ -226,9 +304,8 @@ describe("organization seat billing reconciliation", () => {
     await expect(
       reconcileOrgSeatAssignment(env(db), {
         installationId: INSTALLATION_ID,
-        login: "charlie",
+        target: { kind: "legacy_login", login: "charlie", targetIsAdmin: false },
         requestedAssigned: true,
-        targetIsAdmin: false,
         actorLogin: "owner",
       }),
     ).resolves.toMatchObject({ kind: "applied", assigned: true })
@@ -268,9 +345,8 @@ describe("organization seat billing reconciliation", () => {
     await expect(
       reconcileOrgSeatAssignment(env(db), {
         installationId: INSTALLATION_ID,
-        login: "charlie",
+        target: { kind: "legacy_login", login: "charlie", targetIsAdmin: false },
         requestedAssigned: false,
-        targetIsAdmin: false,
         actorLogin: "owner",
       }),
     ).resolves.toMatchObject({ kind: "applied", assigned: false })
@@ -282,6 +358,165 @@ describe("organization seat billing reconciliation", () => {
         .bind(INSTALLATION_ID)
         .first(),
     ).resolves.toEqual({ assigned: 0 })
+  })
+
+  it("unassigns the same managed GitHub identity after its display login changes", async () => {
+    const db = await makeDb()
+    await seedManagedAccess(db, { githubUserId: "111" })
+    await seedManagedAssignment(db, { githubUserId: "111", lastKnownLogin: "old-login" })
+    const fetchMock = vi.fn(() => Promise.reject(new Error("Stripe must not be called")))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      reconcileOrgSeatAssignment(env(db, { OPENCLAW_ORG_MEMBERSHIP_MODE: "on" }), {
+        installationId: INSTALLATION_ID,
+        target: { kind: "managed_github", githubUserId: "111", lastKnownLogin: "renamed-login" },
+        requestedAssigned: false,
+        actorLogin: "owner",
+      }),
+    ).resolves.toMatchObject({ kind: "applied", assigned: false })
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    await expect(
+      db
+        .prepare(
+          "SELECT github_user_id, assigned, last_known_login FROM org_workspace_seat_assignment" +
+            " WHERE installation_id = ?",
+        )
+        .bind(INSTALLATION_ID)
+        .all(),
+    ).resolves.toMatchObject({
+      results: [{ github_user_id: "111", assigned: 0, last_known_login: "renamed-login" }],
+    })
+  })
+
+  it("persists managed expansion identity and a v2 Stripe idempotency key", async () => {
+    const db = await makeDb()
+    const { operationId, fetchMock } = await startPendingManagedExpansion(db, {
+      lastKnownLogin: "renamed-target",
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    await expect(
+      db
+        .prepare(
+          `SELECT operation_id, login, target_identity_kind, target_github_user_id,
+                  idempotency_key, state
+             FROM org_seat_billing_operation WHERE operation_id = ?`,
+        )
+        .bind(operationId)
+        .first(),
+    ).resolves.toEqual({
+      operation_id: operationId,
+      login: "renamed-target",
+      target_identity_kind: "managed_github",
+      target_github_user_id: "111",
+      idempotency_key: `sigilix-seat-v2-${operationId}`,
+      state: "pending",
+    })
+  })
+
+  it("recovers a managed expansion from persisted identity after membership mode flips off", async () => {
+    const db = await makeDb()
+    const { operationId } = await startPendingManagedExpansion(db, {
+      lastKnownLogin: "persisted-login",
+    })
+    const recoveryFetch = stubLiveStripe(3)
+
+    await recoverOrgSeatBillingOperation(env(db, { OPENCLAW_ORG_MEMBERSHIP_MODE: "off" }), {
+      type: "org-seat-billing-reconcile",
+      installationId: INSTALLATION_ID,
+      operationId,
+    })
+
+    expect(recoveryFetch).toHaveBeenCalledTimes(1)
+    expect(String(recoveryFetch.mock.calls[0]?.[0])).toContain("/v1/subscription_items?")
+    await expect(
+      db.prepare("SELECT state FROM org_seat_billing_operation WHERE operation_id = ?").bind(operationId).first(),
+    ).resolves.toEqual({ state: "committed" })
+    await expect(
+      db
+        .prepare(
+          "SELECT assigned, last_known_login FROM org_workspace_seat_assignment" +
+            " WHERE installation_id = ? AND github_user_id = '111'",
+        )
+        .bind(INSTALLATION_ID)
+        .first(),
+    ).resolves.toEqual({ assigned: 1, last_known_login: "persisted-login" })
+    await expect(
+      db
+        .prepare("SELECT assigned FROM org_seat_assignment WHERE installation_id = ? AND login = 'persisted-login'")
+        .bind(INSTALLATION_ID)
+        .first(),
+    ).resolves.toBeNull()
+  })
+
+  it("keeps a same-login managed operation busy when the immutable GitHub target differs", async () => {
+    const db = await makeDb()
+    const { operationId, fetchMock } = await startPendingManagedExpansion(db, {
+      githubUserId: "111",
+      lastKnownLogin: "shared-login",
+    })
+
+    await expect(
+      reconcileOrgSeatAssignment(env(db, { OPENCLAW_ORG_MEMBERSHIP_MODE: "on" }), {
+        installationId: INSTALLATION_ID,
+        target: { kind: "managed_github", githubUserId: "222", lastKnownLogin: "shared-login" },
+        requestedAssigned: false,
+        actorLogin: "owner",
+      }),
+    ).resolves.toEqual({ kind: "busy" })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    await expect(
+      db.prepare("SELECT state FROM org_seat_billing_operation WHERE operation_id = ?").bind(operationId).first(),
+    ).resolves.toEqual({ state: "pending" })
+    await expect(
+      db
+        .prepare(
+          "SELECT assigned FROM org_workspace_seat_assignment" +
+            " WHERE installation_id = ? AND github_user_id = '222'",
+        )
+        .bind(INSTALLATION_ID)
+        .first(),
+    ).resolves.toEqual({ assigned: 1 })
+    await expect(
+      db
+        .prepare(
+          "SELECT assigned FROM org_workspace_seat_assignment" +
+            " WHERE installation_id = ? AND github_user_id = '111'",
+        )
+        .bind(INSTALLATION_ID)
+        .first(),
+    ).resolves.toBeNull()
+  })
+
+  it("refuses to unassign the sole, and therefore last, assigned active managed admin", async () => {
+    const db = await makeDb()
+    await seedManagedAccess(db, { githubUserId: "111", role: "admin" })
+    await seedManagedAssignment(db, { githubUserId: "111", lastKnownLogin: "owner" })
+    const fetchMock = vi.fn(() => Promise.reject(new Error("Stripe must not be called")))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      reconcileOrgSeatAssignment(env(db, { OPENCLAW_ORG_MEMBERSHIP_MODE: "on" }), {
+        installationId: INSTALLATION_ID,
+        target: { kind: "managed_github", githubUserId: "111", lastKnownLogin: "owner-renamed" },
+        requestedAssigned: false,
+        actorLogin: "owner",
+      }),
+    ).resolves.toEqual({ kind: "last_admin" })
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    await expect(
+      db
+        .prepare(
+          "SELECT assigned, last_known_login FROM org_workspace_seat_assignment" +
+            " WHERE installation_id = ? AND github_user_id = '111'",
+        )
+        .bind(INSTALLATION_ID)
+        .first(),
+    ).resolves.toEqual({ assigned: 1, last_known_login: "owner" })
   })
 
   it("fails closed when a stripe-applied operation observes provider quantity regression", async () => {

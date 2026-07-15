@@ -218,6 +218,8 @@ interface OrgScope {
   role: UserRole
   /** The caller's own login (session path); null on the api-key path (no GitHub identity). */
   login: string | null
+  /** Immutable caller identity for managed session responses; null for API keys/legacy fallback. */
+  githubUserId: string | null
 }
 
 type OrgScopeResult = { scope: OrgScope } | { response: Response }
@@ -253,7 +255,7 @@ async function resolveSessionScope(
     // installationId is forced to 0 (never the caller-supplied, unverified
     // explicit selection) so readAccountInfo's `installationId <= 0`
     // guard short-circuits — a genuinely empty panel, not a cross-tenant leak.
-    return { scope: { installationId: 0, ledgerScope: [], role: "member", login } }
+    return { scope: { installationId: 0, ledgerScope: [], role: "member", login, githubUserId } }
   }
 
   let accessToken: string
@@ -280,7 +282,7 @@ async function resolveSessionScope(
     if (env.OPENCLAW_ORG_MEMBERSHIP_MODE === "on") {
       return { response: json({ error: "org_access_failed" }, 500) }
     }
-    return { scope: { installationId: 0, ledgerScope: [], role: "member", login } }
+    return { scope: { installationId: 0, ledgerScope: [], role: "member", login, githubUserId } }
   }
 
   const resolved =
@@ -291,7 +293,7 @@ async function resolveSessionScope(
     return { response: json({ error: "forbidden" }, 403) }
   }
   if (resolved === null) {
-    return { scope: { installationId: 0, ledgerScope: [], role: "member", login } }
+    return { scope: { installationId: 0, ledgerScope: [], role: "member", login, githubUserId } }
   }
 
   const policy = await resolveOrgRolePolicyForVisibleInstallation(env, {
@@ -308,6 +310,7 @@ async function resolveSessionScope(
       ledgerScope: [resolved.installationId],
       role: policy.role,
       login,
+      githubUserId,
     },
   }
 }
@@ -316,9 +319,9 @@ async function resolveSessionScope(
 function resolveApiKeyScope(installationId: number): OrgScope {
   if (installationId === LEGACY_TENANT_INSTALLATION_ID) {
     // Legacy global key — broad by design (Sigilix-internal); scans every installation.
-    return { installationId, ledgerScope: "all", role: "admin", login: null }
+    return { installationId, ledgerScope: "all", role: "admin", login: null, githubUserId: null }
   }
-  return { installationId, ledgerScope: [installationId], role: "admin", login: null }
+  return { installationId, ledgerScope: [installationId], role: "admin", login: null, githubUserId: null }
 }
 
 // ─── D1 reads (raw, scoped by installation_id) ────────────────
@@ -478,6 +481,75 @@ function applySeatAssignments(seats: OrgSeat[], overrides: Map<string, boolean>)
     if (seat.assigned) assignedCount++
   }
   return assignedCount
+}
+
+interface ManagedSeatAssignmentState {
+  byGithubUserId: Map<string, boolean>
+  assignedQuantity: number
+}
+
+/**
+ * Managed billing state is authoritative and therefore fail-closed. Only an
+ * explicit immutable-id seat row joined to active access can count; neither a
+ * mutable login nor historical activity can synthesize a managed charge.
+ */
+async function readManagedSeatAssignmentState(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  installationId: number,
+): Promise<ManagedSeatAssignmentState | null> {
+  if (!env.SIGILIX_PLATFORM_DB || installationId <= 0) return null
+  try {
+    const { results } = await env.SIGILIX_PLATFORM_DB.prepare(
+      `SELECT seat.github_user_id, seat.assigned, access.role, access.revoked_at
+         FROM org_workspace_seat_assignment AS seat
+         LEFT JOIN org_workspace_access AS access
+           ON access.installation_id = seat.installation_id
+          AND access.github_user_id = seat.github_user_id
+        WHERE seat.installation_id = ?`,
+    )
+      .bind(installationId)
+      .all<{
+        github_user_id: unknown
+        assigned: unknown
+        role: unknown
+        revoked_at: unknown
+      }>()
+    const byGithubUserId = new Map<string, boolean>()
+    let assignedQuantity = 0
+    for (const row of results) {
+      if (
+        !isOrgWorkspaceGithubUserId(row.github_user_id) ||
+        (row.assigned !== 0 && row.assigned !== 1) ||
+        (row.role !== "admin" && row.role !== "member") ||
+        (row.revoked_at !== null && typeof row.revoked_at !== "string") ||
+        byGithubUserId.has(row.github_user_id)
+      ) {
+        throw new Error("invalid managed seat assignment row")
+      }
+      const assigned = row.assigned === 1 && row.revoked_at === null
+      byGithubUserId.set(row.github_user_id, assigned)
+      if (assigned) assignedQuantity += 1
+    }
+    return { byGithubUserId, assignedQuantity }
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "org-overview-managed-seat-read-failed",
+        installationId,
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return null
+  }
+}
+
+function applyManagedSeatAssignments(seats: OrgSeat[], state: ManagedSeatAssignmentState): void {
+  for (const seat of seats) {
+    seat.assigned =
+      seat.identityProvenance === "roster" && seat.accessState === "active"
+        ? (state.byGithubUserId.get(seat.githubUserId) ?? false)
+        : false
+  }
 }
 
 /**
@@ -688,10 +760,21 @@ export async function handleOrgOverviewRoute(request: Request, env: Env, ctx?: E
   const org = { account: accountInfo.login, installationId: scope.installationId, plan }
   const seatCount = seats.length
 
-  // Apply persisted assign/unassign overrides (org_seat_assignment, 0007) so the
-  // billed-seat count reflects an admin's explicit choices, not just activity.
-  const overrides = await readSeatAssignmentMap(env, scope.installationId)
-  const assignedSeatCount = applySeatAssignments(seats, overrides)
+  let assignedSeatCount: number
+  if (env.OPENCLAW_ORG_MEMBERSHIP_MODE === "on" && scope.installationId > 0) {
+    const managedSeats = await readManagedSeatAssignmentState(env, scope.installationId)
+    if (managedSeats === null) return json({ error: "seat_billing_unavailable" }, 503)
+    applyManagedSeatAssignments(seats, managedSeats)
+    assignedSeatCount = managedSeats.assignedQuantity
+    if (scope.role !== "admin" && scope.githubUserId !== null) {
+      const ownSeat = seats.find((seat) => seat.login.toLowerCase() === scope.login?.toLowerCase())
+      if (ownSeat) ownSeat.assigned = managedSeats.byGithubUserId.get(scope.githubUserId) ?? false
+    }
+  } else {
+    // Rollout-off keeps the activity/login override contract byte-for-byte.
+    const overrides = await readSeatAssignmentMap(env, scope.installationId)
+    assignedSeatCount = applySeatAssignments(seats, overrides)
+  }
 
   // MEMBER: never expose other members' logins/activity/roles — return only the
   // caller's own seat (if present), no pagination.

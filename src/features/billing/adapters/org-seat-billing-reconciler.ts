@@ -12,7 +12,15 @@ import {
   readTenantBillingState,
   releaseOrgSeatBillingLease,
   writeLocalOrgSeatAssignment,
+  type LocalSeatCapacityGuard,
 } from "./d1-seat-reconciliation-store"
+import {
+  cancelActiveManagedOrgSeatBillingOperation,
+  commitManagedOrgSeatExpansion,
+  createPendingManagedOrgSeatExpansion,
+  readManagedOrgSeatAssignment,
+  writeLocalManagedOrgSeatAssignment,
+} from "./managed-seat-reconciliation-store"
 import { listSubscriptionItems, updateSubscriptionItemQuantity } from "./stripe-api"
 import { resolvePriceTierConfig } from "./stripe-webhook-route"
 import { decideSeatCapacityChange } from "@/src/features/billing/domain/seat-capacity"
@@ -30,11 +38,14 @@ const PROVIDER_TIMEOUT_MS = 20_000
 const RETRY_DELAY_MS = 30_000
 const DUE_OPERATION_LIMIT = 20
 
+export type OrgSeatReconcileTarget =
+  | { kind: "legacy_login"; login: string; targetIsAdmin: boolean }
+  | { kind: "managed_github"; githubUserId: string; lastKnownLogin: string }
+
 interface ReconcileArgs {
   installationId: number
-  login: string
+  target: OrgSeatReconcileTarget
   requestedAssigned: boolean
-  targetIsAdmin: boolean
   actorLogin: string
   ctx?: ExecutionContext
 }
@@ -43,6 +54,7 @@ export type OrgSeatAssignmentReconcileResult =
   | { kind: "applied"; assigned: boolean; updatedAt: string }
   | { kind: "pending"; assigned: boolean; updatedAt: string; operationId: string }
   | { kind: "busy" }
+  | { kind: "last_admin" }
   | { kind: "invalid"; error: string }
   | { kind: "unavailable"; error: string }
 
@@ -56,6 +68,28 @@ type LiveTargetResult = { kind: "ready"; target: StripeSeatTarget } | { kind: "u
 
 function validInstallationId(value: number): boolean {
   return Number.isSafeInteger(value) && value > 0
+}
+
+function validGithubUserId(value: string): boolean {
+  return /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)) && String(Number(value)) === value
+}
+
+function normalizeTarget(target: OrgSeatReconcileTarget): OrgSeatReconcileTarget | null {
+  if (target.kind === "legacy_login") {
+    const login = target.login.trim().toLowerCase()
+    return login === "" ? null : { ...target, login }
+  }
+  const githubUserId = target.githubUserId.trim()
+  const lastKnownLogin = target.lastKnownLogin.trim()
+  return validGithubUserId(githubUserId) && lastKnownLogin !== ""
+    ? { kind: "managed_github", githubUserId, lastKnownLogin }
+    : null
+}
+
+function operationMatchesTarget(operation: OrgSeatBillingOperation, target: OrgSeatReconcileTarget): boolean {
+  return target.kind === "managed_github"
+    ? operation.targetIdentityKind === "managed_github" && operation.targetGithubUserId === target.githubUserId
+    : operation.targetIdentityKind === "legacy_login" && operation.login === target.login
 }
 
 function retryAt(nowMs: number): number {
@@ -160,6 +194,57 @@ async function deferOperation(
   return true
 }
 
+async function readEffectiveSeat(env: Env, installationId: number, target: OrgSeatReconcileTarget, fence: LeaseFence) {
+  return target.kind === "managed_github"
+    ? readManagedOrgSeatAssignment(env, { installationId, githubUserId: target.githubUserId, ...fence })
+    : readEffectiveOrgSeatAssignment(env, { installationId, login: target.login, ...fence })
+}
+
+async function writeLocalSeat(
+  env: Env,
+  args: {
+    installationId: number
+    target: OrgSeatReconcileTarget
+    assigned: boolean
+    actorLogin: string
+    nowIso: string
+    capacity: LocalSeatCapacityGuard
+    fence: LeaseFence
+  },
+) {
+  return args.target.kind === "managed_github"
+    ? writeLocalManagedOrgSeatAssignment(env, {
+        installationId: args.installationId,
+        githubUserId: args.target.githubUserId,
+        lastKnownLogin: args.target.lastKnownLogin,
+        assigned: args.assigned,
+        actorLogin: args.actorLogin,
+        nowIso: args.nowIso,
+        capacity: args.capacity,
+        ...args.fence,
+      })
+    : writeLocalOrgSeatAssignment(env, {
+        installationId: args.installationId,
+        login: args.target.login,
+        assigned: args.assigned,
+        targetIsAdmin: args.target.targetIsAdmin,
+        actorLogin: args.actorLogin,
+        nowIso: args.nowIso,
+        capacity: args.capacity,
+        ...args.fence,
+      })
+}
+
+function resultFromLocalWrite(
+  written: Awaited<ReturnType<typeof writeLocalSeat>>,
+  assigned: boolean,
+  updatedAt: string,
+): OrgSeatAssignmentReconcileResult {
+  if (written.kind === "written") return { kind: "applied", assigned, updatedAt }
+  if (written.kind === "last_admin") return { kind: "last_admin" }
+  return { kind: "unavailable", error: "seat_billing_unavailable" }
+}
+
 async function commitAppliedOperation(
   env: Env,
   operation: OrgSeatBillingOperation,
@@ -180,7 +265,9 @@ async function commitAppliedOperation(
     })
     if (marked.kind !== "written") return "pending"
   }
-  const committed = await commitOrgSeatExpansion(env, {
+  const commit =
+    operation.targetIdentityKind === "managed_github" ? commitManagedOrgSeatExpansion : commitOrgSeatExpansion
+  const committed = await commit(env, {
     installationId: operation.installationId,
     operationId: operation.operationId,
     revision: operation.revision,
@@ -197,7 +284,11 @@ async function settleActiveForUnassign(
   actorLogin: string,
   fence: LeaseFence,
 ): Promise<boolean> {
-  const settled = await cancelActiveOrgSeatBillingOperation(env, {
+  const cancel =
+    active.targetIdentityKind === "managed_github"
+      ? cancelActiveManagedOrgSeatBillingOperation
+      : cancelActiveOrgSeatBillingOperation
+  const settled = await cancel(env, {
     installationId: active.installationId,
     operationId: active.operationId,
     revision: active.revision,
@@ -215,8 +306,8 @@ export async function reconcileOrgSeatAssignment(
   env: Env,
   args: ReconcileArgs,
 ): Promise<OrgSeatAssignmentReconcileResult> {
-  const login = args.login.trim().toLowerCase()
-  if (!validInstallationId(args.installationId) || login.length === 0 || args.actorLogin.trim().length === 0) {
+  const target = normalizeTarget(args.target)
+  if (!validInstallationId(args.installationId) || target === null || args.actorLogin.trim().length === 0) {
     return { kind: "invalid", error: "invalid_seat_mutation" }
   }
 
@@ -237,17 +328,13 @@ export async function reconcileOrgSeatAssignment(
     const active = await readActiveOrgSeatBillingOperation(env, args.installationId)
     if (active.kind === "error") return { kind: "unavailable", error: "seat_billing_unavailable" }
     if (active.kind === "ok") {
-      if (args.requestedAssigned || active.operation.login !== login) return { kind: "busy" }
+      if (args.requestedAssigned || !operationMatchesTarget(active.operation, target)) return { kind: "busy" }
       if (!(await settleActiveForUnassign(env, active.operation, args.actorLogin, fence))) {
         return { kind: "unavailable", error: "seat_billing_unavailable" }
       }
     }
 
-    const effective = await readEffectiveOrgSeatAssignment(env, {
-      installationId: args.installationId,
-      login,
-      ...fence,
-    })
+    const effective = await readEffectiveSeat(env, args.installationId, target, fence)
     if (effective.kind !== "ok") return { kind: "unavailable", error: "seat_billing_unavailable" }
     const currentQuantity = effective.assignment.assignedQuantity
     const prospectiveQuantity =
@@ -259,19 +346,16 @@ export async function reconcileOrgSeatAssignment(
     }
 
     if (!args.requestedAssigned) {
-      const written = await writeLocalOrgSeatAssignment(env, {
+      const written = await writeLocalSeat(env, {
         installationId: args.installationId,
-        login,
+        target,
         assigned: args.requestedAssigned,
-        targetIsAdmin: args.targetIsAdmin,
         actorLogin: args.actorLogin,
         nowIso: updatedAt,
         capacity: { kind: "local-only" },
-        ...fence,
+        fence,
       })
-      return written.kind === "written"
-        ? { kind: "applied", assigned: args.requestedAssigned, updatedAt }
-        : { kind: "unavailable", error: "seat_billing_unavailable" }
+      return resultFromLocalWrite(written, args.requestedAssigned, updatedAt)
     }
 
     const billing = await readTenantBillingState(env, args.installationId)
@@ -279,19 +363,16 @@ export async function reconcileOrgSeatAssignment(
       return { kind: "unavailable", error: "seat_billing_unavailable" }
     }
     if (billing.kind === "non-stripe") {
-      const written = await writeLocalOrgSeatAssignment(env, {
+      const written = await writeLocalSeat(env, {
         installationId: args.installationId,
-        login,
+        target,
         assigned: true,
-        targetIsAdmin: args.targetIsAdmin,
         actorLogin: args.actorLogin,
         nowIso: updatedAt,
         capacity: { kind: "local-only" },
-        ...fence,
+        fence,
       })
-      return written.kind === "written"
-        ? { kind: "applied", assigned: true, updatedAt }
-        : { kind: "unavailable", error: "seat_billing_unavailable" }
+      return resultFromLocalWrite(written, true, updatedAt)
     }
 
     const snapshotRead = await readStripeSeatSubscription(env, args.installationId)
@@ -315,11 +396,10 @@ export async function reconcileOrgSeatAssignment(
     })
     if (decision.kind === "invalid_input") return { kind: "unavailable", error: "seat_billing_state_invalid" }
     if (decision.kind === "no_op" || decision.kind === "local_only") {
-      const written = await writeLocalOrgSeatAssignment(env, {
+      const written = await writeLocalSeat(env, {
         installationId: args.installationId,
-        login,
+        target,
         assigned: true,
-        targetIsAdmin: args.targetIsAdmin,
         actorLogin: args.actorLogin,
         nowIso: updatedAt,
         capacity: {
@@ -329,11 +409,9 @@ export async function reconcileOrgSeatAssignment(
           subscriptionItemId: snapshot.stripeSubscriptionItemId,
           minimumQuantity: prospectiveQuantity,
         },
-        ...fence,
+        fence,
       })
-      return written.kind === "written"
-        ? { kind: "applied", assigned: true, updatedAt }
-        : { kind: "unavailable", error: "seat_billing_unavailable" }
+      return resultFromLocalWrite(written, true, updatedAt)
     }
 
     const live = await readLiveTarget(env, snapshot)
@@ -342,11 +420,10 @@ export async function reconcileOrgSeatAssignment(
       return { kind: "invalid", error: "seat_capacity_limit" }
     }
     if (live.target.quantity >= decision.quantity) {
-      const written = await writeLocalOrgSeatAssignment(env, {
+      const written = await writeLocalSeat(env, {
         installationId: args.installationId,
-        login,
+        target,
         assigned: true,
-        targetIsAdmin: args.targetIsAdmin,
         actorLogin: args.actorLogin,
         nowIso: updatedAt,
         capacity: {
@@ -357,21 +434,16 @@ export async function reconcileOrgSeatAssignment(
           minimumQuantity: decision.quantity,
           liveQuantity: live.target.quantity,
         },
-        ...fence,
+        fence,
       })
-      return written.kind === "written"
-        ? { kind: "applied", assigned: true, updatedAt }
-        : { kind: "unavailable", error: "seat_billing_unavailable" }
+      return resultFromLocalWrite(written, true, updatedAt)
     }
 
     const operationId = crypto.randomUUID()
-    const created = await createPendingOrgSeatExpansion(env, {
+    const commonExpansion = {
       installationId: args.installationId,
       operationId,
-      idempotencyKey: `sigilix-seat-${operationId}`,
-      login,
       actorLogin: args.actorLogin,
-      targetIsAdmin: args.targetIsAdmin,
       expectedAssignedQuantity: currentQuantity,
       desiredQuantity: decision.quantity,
       expectedSnapshotRevision: snapshot.revision,
@@ -379,7 +451,21 @@ export async function reconcileOrgSeatAssignment(
       subscriptionItemId: snapshot.stripeSubscriptionItemId,
       nextAttemptAtMs: retryAt(nowMs),
       ...fence,
-    })
+    }
+    const created =
+      target.kind === "managed_github"
+        ? await createPendingManagedOrgSeatExpansion(env, {
+            ...commonExpansion,
+            idempotencyKey: `sigilix-seat-v2-${operationId}`,
+            githubUserId: target.githubUserId,
+            lastKnownLogin: target.lastKnownLogin,
+          })
+        : await createPendingOrgSeatExpansion(env, {
+            ...commonExpansion,
+            idempotencyKey: `sigilix-seat-${operationId}`,
+            login: target.login,
+            targetIsAdmin: target.targetIsAdmin,
+          })
     if (created.kind !== "created" && created.kind !== "existing") {
       return { kind: "unavailable", error: "seat_billing_unavailable" }
     }

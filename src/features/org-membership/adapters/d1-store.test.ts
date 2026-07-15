@@ -18,7 +18,10 @@ async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(migration("0003_create_account_tenant_and_api_key.sql"))
   await db.exec(migration("0007_create_org_seat_assignment.sql"))
+  await db.exec(migration("0020_create_stripe_seat_reconciliation.sql"))
   await db.exec(migration("0022_create_org_workspace_access.sql"))
+  await db.exec(migration("0023_add_org_seat_billing_operation_context.sql"))
+  await db.exec(migration("0028_create_org_workspace_seat_assignment.sql"))
   return db
 }
 
@@ -222,6 +225,21 @@ describe("D1 organization workspace access store", () => {
       nowIso: now(2),
       updatedBy: "owner",
     })
+    await addOrgWorkspaceMember(db, {
+      installationId: 99,
+      githubUserId: "222",
+      nowIso: now(2),
+      updatedBy: "other-owner",
+    })
+    await db
+      .prepare(
+        `INSERT INTO org_workspace_seat_assignment
+          (installation_id, github_user_id, assigned, last_known_login, created_at, updated_at, updated_by)
+         VALUES (42, '222', 1, 'old-name', ?, ?, 'owner'),
+                (99, '222', 1, 'other-name', ?, ?, 'other-owner')`,
+      )
+      .bind(now(2), now(2), now(2), now(2))
+      .run()
     await db
       .prepare(
         "INSERT INTO org_seat_assignment (installation_id, login, assigned, is_admin, updated_at) VALUES (?, ?, 1, 1, ?)",
@@ -256,6 +274,20 @@ describe("D1 organization workspace access store", () => {
         )
         .first<{ assigned: number; is_admin: number }>(),
     ).toEqual({ assigned: 0, is_admin: 0 })
+    await expect(
+      db
+        .prepare(
+          "SELECT assigned FROM org_workspace_seat_assignment WHERE installation_id = 42 AND github_user_id = '222'",
+        )
+        .first<{ assigned: number }>(),
+    ).resolves.toEqual({ assigned: 0 })
+    await expect(
+      db
+        .prepare(
+          "SELECT assigned FROM org_workspace_seat_assignment WHERE installation_id = 99 AND github_user_id = '222'",
+        )
+        .first<{ assigned: number }>(),
+    ).resolves.toEqual({ assigned: 1 })
     expect(
       await db.prepare("SELECT revoked_at FROM api_key WHERE id = 'key-a'").first<{ revoked_at: string | null }>(),
     ).toEqual({ revoked_at: now(3) })

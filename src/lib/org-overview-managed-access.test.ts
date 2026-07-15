@@ -45,8 +45,20 @@ const MIGRATION_SEAT_SQL = readFileSync(
   new URL("../../migrations/0007_create_org_seat_assignment.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_STRIPE_SEATS_SQL = readFileSync(
+  new URL("../../migrations/0020_create_stripe_seat_reconciliation.sql", import.meta.url),
+  "utf8",
+)
 const MIGRATION_ORG_ACCESS_SQL = readFileSync(
   new URL("../../migrations/0022_create_org_workspace_access.sql", import.meta.url),
+  "utf8",
+)
+const MIGRATION_STRIPE_SEAT_CONTEXT_SQL = readFileSync(
+  new URL("../../migrations/0023_add_org_seat_billing_operation_context.sql", import.meta.url),
+  "utf8",
+)
+const MIGRATION_MANAGED_SEAT_SQL = readFileSync(
+  new URL("../../migrations/0028_create_org_workspace_seat_assignment.sql", import.meta.url),
   "utf8",
 )
 
@@ -72,7 +84,10 @@ async function makeDb(): Promise<D1Database> {
   await db.exec(MIGRATION_USAGE_SQL)
   await db.exec(MIGRATION_API_KEY_SQL)
   await db.exec(MIGRATION_SEAT_SQL)
+  await db.exec(MIGRATION_STRIPE_SEATS_SQL)
   await db.exec(MIGRATION_ORG_ACCESS_SQL)
+  await db.exec(MIGRATION_STRIPE_SEAT_CONTEXT_SQL)
+  await db.exec(MIGRATION_MANAGED_SEAT_SQL)
   return db
 }
 
@@ -343,6 +358,128 @@ describe("org overview managed access", () => {
     expect(byId["333"]).toMatchObject({ identityProvenance: "roster", accessState: "available", role: "member" })
     expect(byId["444"]).toMatchObject({ identityProvenance: "roster", accessState: "available", role: "member" })
     expect(byId["555"]).toMatchObject({ identityProvenance: "roster", accessState: "available", role: "member" })
+  })
+
+  it("uses only canonical active-access seats for managed assignment and survives a login rename", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "stored-admin", 111)
+    await seedWorkspaceAccess(db, 1, "111", "admin")
+    await seedWorkspaceAccess(db, 1, "222", "member")
+    await seedWorkspaceAccess(db, 1, "444", "member")
+    expect(
+      (
+        await removeOrgWorkspaceAccess(db, {
+          installationId: 1,
+          githubUserId: "444",
+          nowIso: "2026-07-13T00:00:02.000Z",
+          updatedBy: "test",
+        })
+      ).status,
+    ).toBe("removed")
+    await seedWorkspaceAccess(db, 2, "222", "member")
+    await insertTenant(db, 1, "acme", "Organization")
+    await insertTenant(db, 2, "other", "Organization")
+    await insertUsage(db, {
+      installationId: 1,
+      repoId: 100,
+      prNumber: 1,
+      authorLogin: "old-name",
+      createdAt: "2026-07-01T00:00:00.000Z",
+    })
+    await db
+      .prepare(
+        `INSERT INTO org_workspace_seat_assignment
+          (installation_id, github_user_id, assigned, last_known_login, created_at, updated_at, updated_by)
+         VALUES (1, '111', 1, 'stored-admin', 't', 't', 'test'),
+                (1, '222', 1, 'old-name', 't', 't', 'test'),
+                (1, '444', 1, 'revoked-name', 't', 't', 'test'),
+                (2, '222', 0, 'foreign-name', 't', 't', 'test')`,
+      )
+      .run()
+    await db
+      .prepare(
+        "INSERT INTO org_seat_assignment" +
+          " (installation_id, login, assigned, is_admin, updated_at, updated_by)" +
+          " VALUES (1, 'new-name', 0, 0, 't', 'legacy')",
+      )
+      .run()
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      OPENCLAW_ORG_MEMBERSHIP_MODE: "on",
+      SIGILIX_PLATFORM_DB: db,
+      GITHUB_APP_ID: "1",
+      GITHUB_PRIVATE_KEY: "pem",
+    } as unknown as Env
+    stubGitHub({
+      installations: [{ id: 1, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "member", state: "active", organization: { login: "acme" } }],
+    })
+    rosterMock.mockResolvedValue({
+      members: [
+        { githubUserId: "111", login: "stored-admin", avatarUrl: "" },
+        { githubUserId: "222", login: "new-name", avatarUrl: "" },
+        { githubUserId: "333", login: "available-name", avatarUrl: "" },
+        { githubUserId: "444", login: "revoked-name", avatarUrl: "" },
+      ],
+      complete: true,
+      source: "org",
+    })
+
+    const res = await handleOrgOverviewRoute(requestWithSession("sess-1"), env)
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as OrgOverviewResponse
+    const byId = Object.fromEntries(
+      body.seats.filter((seat) => seat.githubUserId !== undefined).map((seat) => [seat.githubUserId, seat]),
+    )
+    expect(byId["111"]).toMatchObject({ assigned: true, accessState: "active" })
+    expect(byId["222"]).toMatchObject({ login: "new-name", assigned: true, accessState: "active" })
+    expect(byId["333"]).toMatchObject({ assigned: false, accessState: "available" })
+    expect(byId["444"]).toMatchObject({ assigned: false, accessState: "available" })
+    expect(body.seats.find((seat) => seat.login === "old-name")).toMatchObject({ assigned: false })
+    expect(body.assignedSeatCount).toBe(2)
+  })
+
+  it("fails closed when canonical managed seat billing state cannot be read", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "sess-1", "stored-admin", 111)
+    await seedWorkspaceAccess(db, 1, "111", "admin")
+    await insertTenant(db, 1, "stored-admin", "User")
+    const seatBrokenDb = {
+      prepare(sql: string) {
+        if (sql.includes("FROM org_workspace_seat_assignment AS seat")) {
+          throw new Error("simulated managed-seat failure")
+        }
+        return db.prepare(sql)
+      },
+    } as unknown as D1Database
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      OPENCLAW_ORG_MEMBERSHIP_MODE: "on",
+      SIGILIX_PLATFORM_DB: seatBrokenDb,
+      GITHUB_APP_ID: "1",
+      GITHUB_PRIVATE_KEY: "pem",
+    } as unknown as Env
+    stubGitHub({ installations: [{ id: 1, account: { type: "User", login: "stored-admin" } }] })
+    rosterMock.mockResolvedValue({
+      members: [{ githubUserId: "111", login: "stored-admin", avatarUrl: "" }],
+      complete: true,
+      source: "collaborators",
+    })
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    try {
+      const res = await handleOrgOverviewRoute(requestWithSession("sess-1"), env)
+      expect(res.status).toBe(503)
+      expect(await res.json()).toEqual({ error: "seat_billing_unavailable" })
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("org-overview-managed-seat-read-failed"))
+    } finally {
+      warnSpy.mockRestore()
+    }
   })
 
   it("keeps an incomplete roster read-only unless exact stored access is active", async () => {

@@ -37,6 +37,7 @@ async function makeDb(): Promise<D1Database> {
   await db.exec(migration("0020_create_stripe_seat_reconciliation.sql"))
   await db.exec(migration("0022_create_org_workspace_access.sql"))
   await db.exec(migration("0023_add_org_seat_billing_operation_context.sql"))
+  await db.exec(migration("0028_create_org_workspace_seat_assignment.sql"))
   await db
     .prepare(
       "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
@@ -404,6 +405,9 @@ describe("DELETE /v1/org/:installationId/members/:githubUserId", () => {
     const providerFetch = vi.spyOn(globalThis, "fetch")
     await seedAccess(db, ACTOR_ID, "admin")
     await seedAccess(db, TARGET_ID, "member")
+    mocks.fetchInstallationRoster.mockResolvedValue(
+      completeRoster({ githubUserId: TARGET_ID, login: "Roster-Renamed" }),
+    )
     await db
       .prepare(
         "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
@@ -414,15 +418,16 @@ describe("DELETE /v1/org/:installationId/members/:githubUserId", () => {
     await db
       .prepare(
         `INSERT INTO org_seat_billing_operation
-          (operation_id, installation_id, revision, login, actor_login, target_is_admin,
+          (operation_id, installation_id, revision, login, target_identity_kind, target_github_user_id,
+           actor_login, target_is_admin,
            requested_assigned, previous_assigned, desired_quantity, state,
            stripe_subscription_id, stripe_subscription_item_id, stripe_observed_quantity,
            idempotency_key, attempts, next_attempt_at_ms, created_at_ms, updated_at_ms)
-         VALUES ('op-remove-target', ?, 1, 'target', 'owner', 0,
+         VALUES ('op-remove-target', ?, 1, 'target', 'managed_github', ?, 'owner', 0,
                  1, 0, 2, 'pending', 'sub_1', 'si_1', 1,
                  'sigilix-seat-op-remove-target', 0, 1, 1, 1)`,
       )
-      .bind(INSTALLATION_ID)
+      .bind(INSTALLATION_ID, TARGET_ID)
       .run()
     await db
       .prepare(

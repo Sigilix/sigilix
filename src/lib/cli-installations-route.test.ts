@@ -115,6 +115,17 @@ async function applyCliSchema(db: D1Database): Promise<void> {
   }
 }
 
+async function applyManagedOrgSchema(db: D1Database): Promise<void> {
+  for (const file of [
+    "0020_create_stripe_seat_reconciliation.sql",
+    "0022_create_org_workspace_access.sql",
+    "0023_add_org_seat_billing_operation_context.sql",
+    "0028_create_org_workspace_seat_assignment.sql",
+  ]) {
+    await db.exec(readFileSync(new URL(`../../migrations/${file}`, import.meta.url), "utf8"))
+  }
+}
+
 async function seedGithubIdentity(db: D1Database, githubUserId: string): Promise<void> {
   const now = "2026-07-13T00:00:00.000Z"
   await db
@@ -441,9 +452,7 @@ describe("CLI installation picker through worker.fetch", () => {
   it("rechecks managed access and denies when access is removed after discovery", async () => {
     const db = makeD1()
     await applyCliSchema(db)
-    await db.exec(
-      readFileSync(new URL("../../migrations/0022_create_org_workspace_access.sql", import.meta.url), "utf8"),
-    )
+    await applyManagedOrgSchema(db)
     await seedGithubIdentity(db, "111")
     await seedStoredAccess(db, 84, "111")
     const kv = makeKV()

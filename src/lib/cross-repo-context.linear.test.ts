@@ -282,7 +282,23 @@ describe("resolveBindingRepoScope", () => {
     expect(scope!.primaryNamespace).toBe("acme/api")
     expect(scope!.siblingNamespaces).toEqual(["acme/web"])
     expect(scope!.allNamespaces).toEqual(["acme/api", "acme/web"])
+    expect(scope!.effectiveRepositories).toEqual([
+      { repositoryId: 101, fullName: "acme/api" },
+      { repositoryId: 102, fullName: "acme/web" },
+    ])
     expect(scope!.truncated).toBe(0)
+  })
+
+  it("retains every exact installation repository for a use-all binding", async () => {
+    const db = await seed([], true)
+    const binding = await resolveLinearTeamBinding({ SIGILIX_PLATFORM_DB: db }, "org-a", "team-a")
+    const scope = await resolveBindingRepoScope({ SIGILIX_PLATFORM_DB: db }, binding!, 42)
+
+    expect(scope!.effectiveRepositories).toEqual([
+      { repositoryId: 101, fullName: "acme/api" },
+      { repositoryId: 103, fullName: "acme/infra" },
+      { repositoryId: 102, fullName: "acme/web" },
+    ])
   })
 
   it("returns null on an installation mismatch (fail closed)", async () => {

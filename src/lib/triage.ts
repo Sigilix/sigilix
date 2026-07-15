@@ -30,6 +30,7 @@ import {
   type LinearTenantContext,
 } from "@/src/features/linear-integration"
 import { resolveBindingRepoScope, type BindingRepoScope } from "@/src/lib/cross-repo-context"
+import { loadLinearRepositoryContext } from "@/src/lib/linear-repository-context"
 import {
   TRIAGE_SKILL_CATALOG,
   applySkillGuidance,
@@ -180,6 +181,17 @@ export async function triageIssue(issueId: string, env: Env, tenant?: LinearTena
   // mapped repo — the model is instructed in the prompt to abstain
   // from inventing file references when no chunks are present.
   const retrievalText = `${issue.title}\n\n${issue.description ?? ""}`
+  const contextEnabled = !tenantConfig || codebaseContextEnabled(tenantConfig)
+  const repositoryContextPromise =
+    tenant && tenantScope
+      ? loadLinearRepositoryContext({
+          env,
+          surface: "triage",
+          installationId: tenant.installationId,
+          repositories: tenantScope.effectiveRepositories,
+          enabled: contextEnabled,
+        })
+      : Promise.resolve("")
   // Cross-repo fan-out: the primary repo is the weighted-highest namespace; the
   // capped siblings fold in via the SAME multi-namespace retrieval the PR-review
   // path uses (see resolveBindingRepoScope). Truncation is logged, never silent.
@@ -188,18 +200,17 @@ export async function triageIssue(issueId: string, env: Env, tenant?: LinearTena
       JSON.stringify({ event: "linear-triage-cross-repo-siblings-capped", issueId, truncated: tenantScope.truncated }),
     )
   }
-  const chunks =
-    tenantConfig && !codebaseContextEnabled(tenantConfig)
-      ? []
-      : await retrieveChunks({
-          text: retrievalText,
-          teamKey: issue.team?.key ?? null,
-          env,
-          ...(tenantScope ? { namespace: tenantScope.primaryNamespace } : {}),
-          ...(tenantScope && tenantScope.siblingNamespaces.length > 0
-            ? { crossRepoNamespaces: tenantScope.siblingNamespaces }
-            : {}),
-        })
+  const chunks = contextEnabled
+    ? await retrieveChunks({
+        text: retrievalText,
+        teamKey: issue.team?.key ?? null,
+        env,
+        ...(tenantScope ? { namespace: tenantScope.primaryNamespace } : {}),
+        ...(tenantScope && tenantScope.siblingNamespaces.length > 0
+          ? { crossRepoNamespaces: tenantScope.siblingNamespaces }
+          : {}),
+      })
+    : []
   since("retrieval-done")
 
   // Governed org skills ("agent" surface): installation-scoped, reviewed
@@ -233,6 +244,8 @@ export async function triageIssue(issueId: string, env: Env, tenant?: LinearTena
     }
   }
 
+  const repositoryContext = await repositoryContextPromise
+
   const prompt = buildPrompt(
     {
       identifier: issue.identifier,
@@ -241,6 +254,7 @@ export async function triageIssue(issueId: string, env: Env, tenant?: LinearTena
       author: issue.creator?.displayName ?? issue.creator?.name ?? null,
       labels: issue.labels.nodes.map((l) => l.name),
       codebaseChunks: formatChunksForPrompt(chunks),
+      repositoryContext,
     },
     skillContext,
   )
@@ -364,6 +378,7 @@ interface PromptCtx {
   author: string | null
   labels: string[]
   codebaseChunks: string | null
+  repositoryContext: string
 }
 
 function buildPrompt(ctx: PromptCtx, skillContext?: ResolvedSkillContext): string {
@@ -382,6 +397,7 @@ function buildPrompt(ctx: PromptCtx, skillContext?: ResolvedSkillContext): strin
     sections.push(`Existing labels: ${ctx.labels.join(", ")}`)
   }
   sections.push("", "Body:", truncate(ctx.body || "(no description)", LIMITS.issueBody))
+  if (ctx.repositoryContext) sections.push("", ctx.repositoryContext)
   if (ctx.codebaseChunks) {
     sections.push(
       "",

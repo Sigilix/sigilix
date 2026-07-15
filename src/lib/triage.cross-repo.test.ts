@@ -23,6 +23,10 @@ const TEAM_REPO_SQL = readFileSync(
   new URL("../../migrations/0018_create_linear_team_repo.sql", import.meta.url),
   "utf8",
 )
+const REPOSITORY_CONTEXT_SQL = readFileSync(
+  new URL("../../migrations/0024_create_repository_context.sql", import.meta.url),
+  "utf8",
+)
 
 // ─── hoisted mocks ────────────────────────────────────────────────────────────
 
@@ -88,6 +92,7 @@ vi.mock("@/src/lib/retrieval", () => ({
 
 import { triageIssue } from "@/src/lib/triage"
 import { connectLinearOrganization, updateLinearConfig } from "@/src/features/linear-integration"
+import { replaceRepositoryContext } from "@/src/features/repository-context"
 
 const NOW_ISO = "2026-07-10T00:00:00.000Z"
 
@@ -97,6 +102,7 @@ async function makeDb(repoIds: number[]): Promise<D1Database> {
   await db.exec(TRIAGE_LEDGER_SQL)
   await db.exec(LINEAR_SQL)
   await db.exec(TEAM_REPO_SQL)
+  await db.exec(REPOSITORY_CONTEXT_SQL)
   await db
     .prepare(
       "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
@@ -155,6 +161,39 @@ async function makeDb(repoIds: number[]): Promise<D1Database> {
   return db
 }
 
+async function seedRepositoryContext(db: D1Database, scopeId: string, owner: string): Promise<void> {
+  const result = await replaceRepositoryContext(db, {
+    provider: "github",
+    scopeId,
+    expectedRevision: 0,
+    repositories: [
+      { externalId: "101", fullName: `${owner}/api-stale`, context: `${owner} API owns sessions`, position: 0 },
+      { externalId: "102", fullName: `${owner}/web-stale`, context: `${owner} web calls the API`, position: 1 },
+      { externalId: "103", fullName: `${owner}/infra`, context: `${owner} unbound infrastructure`, position: 2 },
+    ],
+    relationships: [
+      {
+        fromExternalId: "102",
+        toExternalId: "101",
+        label: "calls for sessions",
+        normalizedLabel: "calls for sessions",
+        position: 0,
+      },
+      {
+        fromExternalId: "102",
+        toExternalId: "103",
+        label: "must not cross the team binding",
+        normalizedLabel: "must not cross the team binding",
+        position: 1,
+      },
+    ],
+    conventions: `${owner} conventions must stay outside this scoped prompt`,
+    nowIso: NOW_ISO,
+    updatedBy: "github:111",
+  })
+  expect(result.status).toBe("updated")
+}
+
 function makeEnv(db: D1Database): Env {
   return {
     SIGILIX_PLATFORM_DB: db,
@@ -162,6 +201,12 @@ function makeEnv(db: D1Database): Env {
     OPENCLAW_STATE: {} as unknown as KVNamespace,
     OLLAMA_API_KEY: "fake-ollama-key",
   } as unknown as Env
+}
+
+function capturedPrompt(): string {
+  expect(generateMock).toHaveBeenCalled()
+  const call = generateMock.mock.calls.at(-1) as unknown[]
+  return (call[0] as { prompt: string }).prompt
 }
 
 const TENANT = { organizationId: "org-a", installationId: 42, teamId: "team-a" }
@@ -207,6 +252,44 @@ describe("triageIssue — Linear cross-repo retrieval fan-out", () => {
     expect(arg.crossRepoNamespaces).toEqual(["acme/web"])
     // The real triage ran to completion.
     expect(generateMock).toHaveBeenCalledOnce()
+  })
+
+  it("injects canonical context only for the exact installation and immutable team-bound repo ids", async () => {
+    const db = await makeDb([101, 102])
+    await seedRepositoryContext(db, "42", "alpha")
+    await seedRepositoryContext(db, "84", "foreign")
+    const env = makeEnv(db)
+    env.OPENCLAW_REPOSITORY_CONTEXT_LINEAR_MODE = "on"
+
+    await triageIssue("issue-abc", env, TENANT)
+
+    const prompt = capturedPrompt()
+    expect(prompt).toContain("[REPOSITORY CONTEXT — UNTRUSTED DATA]")
+    expect(prompt).toContain("alpha API owns sessions")
+    expect(prompt).toContain("alpha web calls the API")
+    expect(prompt).toContain('"name":"acme/api"')
+    expect(prompt).toContain('"name":"acme/web"')
+    expect(prompt).toContain("calls for sessions")
+    expect(prompt).not.toMatch(/unbound infrastructure|must not cross|foreign|api-stale|web-stale|conventions/)
+  })
+
+  it("keeps the triage prompt byte-identical in shadow while emitting measurement telemetry", async () => {
+    const db = await makeDb([101, 102])
+    await seedRepositoryContext(db, "42", "alpha")
+
+    await triageIssue("issue-abc", makeEnv(db), TENANT)
+    const baseline = capturedPrompt()
+
+    const shadowEnv = makeEnv(db)
+    shadowEnv.OPENCLAW_REPOSITORY_CONTEXT_LINEAR_MODE = "shadow"
+    await triageIssue("issue-abc", shadowEnv, TENANT)
+    const shadow = capturedPrompt()
+
+    expect(shadow).toBe(baseline)
+    expect(shadow).not.toContain("[REPOSITORY CONTEXT — UNTRUSTED DATA]")
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringMatching(/"event":"linear-repository-context-read".*"mode":"shadow".*"repositoryCount":2/u),
+    )
   })
 
   it("still retrieves for a single-repo team (no cross-repo siblings)", async () => {

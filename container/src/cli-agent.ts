@@ -238,12 +238,23 @@ export function buildCliEnv(
 }
 
 /** Compose the run prompt from the ticket (+ optional packet grounding fallback). */
-export function buildPrompt(ticket: CliAgentArgs["ticket"], grounding?: string, mcpAvailable = false): string {
+export function buildPrompt(
+  ticket: CliAgentArgs["ticket"],
+  grounding?: string,
+  mcpAvailable = false,
+  groundingToolAvailable = false,
+): string {
   return [
     `# Ticket: ${ticket.identifier} — ${ticket.title}`,
     "",
     ticket.body,
     ...(grounding != null && grounding !== "" ? ["", "## Context", grounding] : []),
+    ...(groundingToolAvailable
+      ? [
+          "",
+          "You have a `retrieve_codebase` tool that returns the most relevant code, symbols, and team conventions from this repository's Sigilix index for a query. Before you edit, CALL IT to find the exact files, functions, and patterns you need — and call it again whenever you need more context. Prefer it over reading whole files or guessing; it is cheaper and more precise.",
+        ]
+      : []),
     ...(mcpAvailable
       ? [
           "",
@@ -460,7 +471,7 @@ export async function runCliAgent(args: CliAgentArgs): Promise<EditLoopResult> {
     // (/proc/self/environ) is denied by external_directory:"deny".
     env[MODEL_KEY_ENV] = model.key;
 
-    const cliArgs = buildCliArgs(model, dir, buildPrompt(ticket, grounding, mcpBridge !== undefined));
+    const cliArgs = buildCliArgs(model, dir, buildPrompt(ticket, grounding, mcpBridge !== undefined, groundingActive));
 
     // CAPS GAP (Part 2): unlike the minimal loop, this enforces only caps.timeoutMs
     // (via the SIGKILL below). caps.maxModelCalls / maxTokens are NOT yet enforced and

@@ -236,6 +236,14 @@ describe("buildPrompt", () => {
     expect(buildPrompt({ identifier: "S", title: "T", body: "B" })).not.toContain("## Context");
     expect(buildPrompt({ identifier: "S", title: "T", body: "B" }, "")).not.toContain("## Context");
   });
+
+  it("nudges the model to use retrieve_codebase ONLY when the grounding tool is available", () => {
+    const t = { identifier: "S", title: "T", body: "B" };
+    expect(buildPrompt(t, undefined, false, true)).toContain("retrieve_codebase");
+    // default (tool absent) → no nudge, so runs without the plugin are unchanged
+    expect(buildPrompt(t)).not.toContain("retrieve_codebase");
+    expect(buildPrompt(t, "ctx", false, false)).not.toContain("retrieve_codebase");
+  });
 });
 
 // ── buildCliArgs ──────────────────────────────────────────────────────────────

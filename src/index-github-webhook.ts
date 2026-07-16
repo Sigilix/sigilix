@@ -50,8 +50,10 @@ import {
 } from "@/src/index-github-auto-approve"
 import { handleWorkflowRunEvent } from "@/src/index-github-workflow-run"
 import { routeMarketplaceWebhook } from "@/src/index-github-marketplace"
+import { buildGitHubActivitySeatEvidence } from "@/src/index-github-activity-seat-command"
 
 export async function handleGitHubWebhook(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const webhookReceivedAtMs = Date.now()
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY || !env.GITHUB_WEBHOOK_SECRET) {
     return new Response("github app not configured\n", { status: 503 })
   }
@@ -665,6 +667,18 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
         payload.repository.id > 0
           ? payload.repository.id
           : undefined
+      const deliveryId = request.headers.get("x-github-delivery")
+      const activitySeatEvidence = await buildGitHubActivitySeatEvidence({
+        payload,
+        rawBody,
+        deliveryId,
+        installationId,
+        repositoryId: prReviewRepoId,
+        prNumber,
+        headSha,
+        action,
+        receivedAtMs: webhookReceivedAtMs,
+      })
       // SIG-374: webhook-arrival anchor for the queue-wait decomposition.
       // Joins do-review-enqueued (same deliveryId) so the monitor can
       // split webhook→enqueue from enqueue→pickup. Emitted only on the
@@ -676,7 +690,7 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
           repo,
           prNumber,
           headSha: headSha.slice(0, 7),
-          deliveryId: request.headers.get("x-github-delivery"),
+          deliveryId,
           arrivedAtMs: Date.now(),
         }),
       )
@@ -689,7 +703,8 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
           headSha,
           baseSha,
           installationId,
-          deliveryId: request.headers.get("x-github-delivery"),
+          deliveryId,
+          ...(activitySeatEvidence !== undefined ? { activitySeatEvidence } : {}),
           ...(prReviewRepoId !== undefined ? { repoId: prReviewRepoId } : {}),
           ...(payload.installation?.account?.login ? { accountLogin: payload.installation.account.login } : {}),
           ...(payload.installation?.account?.type ? { accountType: payload.installation.account.type } : {}),
@@ -698,7 +713,9 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
         ctx,
       )
       if (!enq.ok) {
-        return new Response("do enqueue failed\n", { status: 503 })
+        return enq.route === "activity-seat"
+          ? new Response("activity seat command failed\n", { status: enq.status })
+          : new Response("do enqueue failed\n", { status: 503 })
       }
       // ARC-184: when the action is `synchronize` or `edited` AND a
       // prior review-manifest exists, enqueue a parallel `pr-stale-mark`

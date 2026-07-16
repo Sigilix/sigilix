@@ -142,7 +142,9 @@ export interface GitHubWebhookPayload {
     // SIG-44: title/body feed the merged-PR multi-corpus refresh.
     title?: string
     body?: string | null
-    user?: { login?: string }
+    user?: { id?: number; login?: string }
+    /** GitHub's signed relationship evidence for the PR author. */
+    author_association?: string
   }
   workflow_run?: {
     id?: number
@@ -175,7 +177,7 @@ export interface GitHubWebhookPayload {
     // slash commands that trigger expensive review re-runs.
     author_association?: string
   }
-  sender?: { login?: string }
+  sender?: { id?: number; login?: string }
   thread?: {
     node_id?: string
     comments?: Array<{ id?: number }>

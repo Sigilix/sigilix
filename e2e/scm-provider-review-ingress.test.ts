@@ -91,6 +91,20 @@ function makeWebhookPayload() {
   }
 }
 
+function makeBillableWebhookPayload() {
+  const payload = makeWebhookPayload()
+  return {
+    ...payload,
+    repository: { ...payload.repository, id: 67890 },
+    pull_request: {
+      ...payload.pull_request,
+      user: { id: 111, login: "author" },
+      author_association: "MEMBER",
+    },
+    sender: { id: 222, login: "sender" },
+  }
+}
+
 function makeEnv(): {
   env: Record<string, unknown>
   sentJobs: Array<{ type: string; [k: string]: unknown }>
@@ -120,6 +134,7 @@ async function postSignedWebhook(
   env: unknown,
   payload: unknown,
   signature?: string,
+  deliveryId = "test-delivery-scm",
 ): Promise<Response> {
   const body = JSON.stringify(payload)
   const sig = signature ?? (await signBody(body))
@@ -128,7 +143,7 @@ async function postSignedWebhook(
     headers: {
       "content-type": "application/json",
       "x-github-event": "pull_request",
-      "x-github-delivery": "test-delivery-scm",
+      "x-github-delivery": deliveryId,
       "x-hub-signature-256": sig,
     },
     body,
@@ -179,6 +194,36 @@ describe("pull_request review ingress through the ScmProvider seam", () => {
     expect(mockPostStub).toHaveBeenCalledOnce()
     // buildReviewClient delegated to the App-token mint (the client build).
     expect(mockGetInstallationToken).toHaveBeenCalledOnce()
+  })
+
+  it("threads exact signed activity-seat evidence into an accepted automatic review", async () => {
+    mockLoadSigilixConfig.mockResolvedValueOnce({ overview: { enabled: false } })
+    const { env } = makeEnv()
+    const worker = (await import("@/src/index")).default
+
+    const res = await postSignedWebhook(worker, env, makeBillableWebhookPayload())
+
+    expect(res.status).toBe(202)
+    expect(mockEnqueuePrReviewJob).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        activitySeatEvidence: {
+          deliveryId: "test-delivery-scm",
+          payloadSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+          installationId: 12345,
+          repositoryId: 67890,
+          prNumber: 73,
+          headSha: "a".repeat(40),
+          action: "opened",
+          targetGithubUserId: "111",
+          targetLogin: "author",
+          actorGithubUserId: "222",
+          actorLogin: "sender",
+          authorAssociation: "MEMBER",
+          receivedAtMs: expect.any(Number),
+        },
+      }),
+    )
   })
 
   it("routes a release-promotion skip through the real handler (overview only, no review job)", async () => {

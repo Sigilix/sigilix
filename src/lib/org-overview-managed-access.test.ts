@@ -42,6 +42,10 @@ const MIGRATION_API_KEY_SQL = readFileSync(
   new URL("../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_IDENTITY_SQL = readFileSync(
+  new URL("../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
 const MIGRATION_SEAT_SQL = readFileSync(
   new URL("../../migrations/0007_create_org_seat_assignment.sql", import.meta.url),
   "utf8",
@@ -84,11 +88,21 @@ async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(MIGRATION_USAGE_SQL)
   await db.exec(MIGRATION_API_KEY_SQL)
+  await db.exec(MIGRATION_IDENTITY_SQL)
   await db.exec(MIGRATION_SEAT_SQL)
   await db.exec(MIGRATION_STRIPE_SEATS_SQL)
   await db.exec(MIGRATION_ORG_ACCESS_SQL)
   await db.exec(MIGRATION_STRIPE_SEAT_CONTEXT_SQL)
   await db.exec(MIGRATION_MANAGED_SEAT_SQL)
+  await db
+    .prepare(
+      `INSERT INTO user_identity
+       (user_id, github_user_id, providers, created_at, last_login_at)
+       VALUES
+         ('managed-overview-user-111', '111', '["github"]', 't', 't'),
+         ('managed-overview-user-no-github', NULL, '[]', 't', 't')`,
+    )
+    .run()
   return db
 }
 
@@ -98,6 +112,7 @@ async function seedSession(kv: KVNamespace, sessionId: string, login: string, gi
     sessionId,
     login,
     ...(githubUserId !== undefined ? { githubUserId } : {}),
+    userId: githubUserId !== undefined ? `managed-overview-user-${githubUserId}` : "managed-overview-user-no-github",
     accessToken: "ghu_test_token",
     encryptionKeyB64url: ENC_KEY,
   })

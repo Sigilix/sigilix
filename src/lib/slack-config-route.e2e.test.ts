@@ -29,6 +29,7 @@ vi.mock("@/src/lib/github-user-repo-scope", async (importOriginal) => ({
 }))
 
 const BASE_SQL = readFileSync(new URL("../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
+const IDENTITY_SQL = readFileSync(new URL("../../migrations/0006_create_user_identity.sql", import.meta.url), "utf8")
 const SLACK_SQL = readFileSync(new URL("../../migrations/0019_create_slack_channel_repo.sql", import.meta.url), "utf8")
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(7))
 const COOKIE = "__Host-sigilix_session"
@@ -57,6 +58,7 @@ function makeKV(): { kv: KVNamespace; values: Map<string, string> } {
 async function setup(options?: { connectWorkspace?: boolean }) {
   const db = makeD1()
   await db.exec(BASE_SQL)
+  await db.exec(IDENTITY_SQL)
   await db.exec(SLACK_SQL)
   await db
     .prepare(
@@ -92,11 +94,20 @@ async function setup(options?: { connectWorkspace?: boolean }) {
     )
   }
   const { kv } = makeKV()
+  const userId = "slack-config-user-111"
+  await db
+    .prepare(
+      "INSERT INTO user_identity" +
+        " (user_id, github_user_id, providers, created_at, last_login_at) VALUES (?, '111', ?, ?, ?)",
+    )
+    .bind(userId, JSON.stringify(["github"]), NOW, NOW)
+    .run()
   await createSession({
     kv,
     sessionId: "session-1",
     login: "octocat",
     githubUserId: 111,
+    userId,
     accessToken: "github-user-token",
     encryptionKeyB64url: ENC_KEY,
   })

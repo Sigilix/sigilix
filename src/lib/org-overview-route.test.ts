@@ -44,6 +44,10 @@ const MIGRATION_API_KEY_SQL = readFileSync(
   new URL("../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_IDENTITY_SQL = readFileSync(
+  new URL("../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
 const MIGRATION_SEAT_SQL = readFileSync(
   new URL("../../migrations/0007_create_org_seat_assignment.sql", import.meta.url),
   "utf8",
@@ -52,7 +56,6 @@ const MIGRATION_ORG_ACCESS_SQL = readFileSync(
   new URL("../../migrations/0022_create_org_workspace_access.sql", import.meta.url),
   "utf8",
 )
-
 function makeKV(): KVNamespace {
   const store = new Map<string, string>()
   return {
@@ -74,8 +77,14 @@ async function makeDb(options: { orgAccess?: boolean } = {}): Promise<D1Database
   const db = makeD1()
   await db.exec(MIGRATION_USAGE_SQL)
   await db.exec(MIGRATION_API_KEY_SQL)
+  await db.exec(MIGRATION_IDENTITY_SQL)
   await db.exec(MIGRATION_SEAT_SQL)
   if (options.orgAccess !== false) await db.exec(MIGRATION_ORG_ACCESS_SQL)
+  await db.exec(
+    `INSERT INTO user_identity (user_id, github_user_id, providers, created_at, last_login_at)
+     VALUES ('org-overview-user-111', '111', '["github"]', 't', 't'),
+            ('org-overview-user-222', '222', '["github"]', 't', 't')`,
+  )
   return db
 }
 
@@ -120,6 +129,7 @@ async function seedSession(kv: KVNamespace, sessionId: string, login: string, gi
     sessionId,
     login,
     githubUserId,
+    userId: `org-overview-user-${githubUserId}`,
     accessToken: "ghu_test_token",
     encryptionKeyB64url: ENC_KEY,
   })
@@ -821,7 +831,14 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
     const kv = makeKV()
     await seedSession(kv, "sess-1", "octocat", 111)
     const brokenDb = {
-      prepare() {
+      prepare(sql: string) {
+        if (sql === "SELECT user_id, github_user_id FROM user_identity WHERE user_id = ?") {
+          return {
+            bind() {
+              return { first: async () => ({ user_id: "org-overview-user-111", github_user_id: "111" }) }
+            },
+          }
+        }
         throw new Error("simulated D1 error")
       },
     } as unknown as D1Database
@@ -965,7 +982,6 @@ describe("handleOrgOverviewRoute (GET /v1/org/overview)", () => {
     const own = body.seats.find((s) => s.login.toLowerCase() === "octocat")!
     expect(own.assigned).toBe(true)
   })
-
   it("CORS preflight: OPTIONS /v1/org/overview from an allowlisted portal origin returns the CORS grant", async () => {
     const kv = makeKV()
     const env = { OPENCLAW_STATE: kv } as unknown as Env

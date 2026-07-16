@@ -24,6 +24,7 @@ const SLACK_SQL = readFileSync(
   new URL("../../../migrations/0019_create_slack_channel_repo.sql", import.meta.url),
   "utf8",
 )
+const IDENTITY_SQL = readFileSync(new URL("../../../migrations/0006_create_user_identity.sql", import.meta.url), "utf8")
 
 // ─── Map-backed fake KVNamespace ────────────────────────────────────────────
 
@@ -403,8 +404,8 @@ describe("org-linked install → slack_workspace linkage", () => {
   const NOW = "2026-07-11T00:00:00.000Z"
   const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(7))
   const COOKIE = "__Host-sigilix_session"
-  // Matches sessionUserKey() for a session with githubUserId 111 and no userId.
-  const USER_KEY = "gh:111"
+  const USER_ID = "slack-install-user-111"
+  const USER_KEY = USER_ID
 
   /** JSON-aware fake KV — requireSession/createSession read records as "json". */
   function makeSessionKV() {
@@ -429,16 +430,26 @@ describe("org-linked install → slack_workspace linkage", () => {
   async function makeDb(): Promise<D1Database> {
     const db = makeD1()
     await db.exec(BASE_SQL)
+    await db.exec(IDENTITY_SQL)
     await db.exec(SLACK_SQL)
     return db
   }
 
   async function makeSessionEnv(kv: ReturnType<typeof makeSessionKV>, extra: Partial<Env> = {}): Promise<Env> {
+    if (extra.SIGILIX_PLATFORM_DB) {
+      await extra.SIGILIX_PLATFORM_DB.prepare(
+        "INSERT OR IGNORE INTO user_identity" +
+          " (user_id, github_user_id, providers, created_at, last_login_at) VALUES (?, '111', ?, ?, ?)",
+      )
+        .bind(USER_ID, JSON.stringify(["github"]), NOW, NOW)
+        .run()
+    }
     await createSession({
       kv,
       sessionId: "session-1",
       login: "octocat",
       githubUserId: 111,
+      userId: USER_ID,
       accessToken: "github-user-token",
       encryptionKeyB64url: ENC_KEY,
     })

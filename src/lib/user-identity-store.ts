@@ -31,9 +31,10 @@
 // unverified emails remain fail-closed (never a linking key).
 //
 // Fail-direction:
-//   - `upsertGithubIdentity` is BEST-EFFORT — a GitHub OAuth login has already
-//     succeeded before we persist, so a D1 fault must NOT block the login; it
-//     logs and returns null (the session is still issued).
+//   - `upsertGithubIdentity` is a BEST-EFFORT storage primitive: it logs and
+//     returns null on a D1 fault. The OAuth caller fails closed before minting a
+//     session when durable identity D1 is bound, while an unbound legacy deploy
+//     skips this primitive entirely.
 //   - `findOrCreateGoogleIdentity`, `createPasswordIdentity`, and the
 //     credential reads are the account-resolution path for their providers, so
 //     they FAIL CLOSED — a D1 fault throws / returns null (deny), never a
@@ -56,6 +57,11 @@ export interface UserIdentity {
   mfaEnabled: boolean
   createdAt: string
   lastLoginAt: string
+}
+
+export interface SessionIdentityProof {
+  userId: string
+  githubUserId: string | null
 }
 
 interface IdentityRow {
@@ -136,6 +142,15 @@ export function findByUserId(db: D1Database, userId: string): Promise<UserIdenti
   return selectOne(db, "user_id = ?", userId)
 }
 
+/** Minimal primary-read proof for the session hot path. */
+export async function findSessionIdentityProof(db: D1Database, userId: string): Promise<SessionIdentityProof | null> {
+  const row = await db
+    .prepare("SELECT user_id, github_user_id FROM user_identity WHERE user_id = ?")
+    .bind(userId)
+    .first<{ user_id: string; github_user_id: string | null }>()
+  return row ? { userId: row.user_id, githubUserId: row.github_user_id } : null
+}
+
 export function findByGithubUserId(db: D1Database, githubUserId: string): Promise<UserIdentity | null> {
   return selectOne(db, "github_user_id = ?", githubUserId)
 }
@@ -180,9 +195,10 @@ interface GithubUpsertArgs {
 }
 
 /**
- * BEST-EFFORT upsert of the GitHub-linked identity on every GitHub login. The
- * GitHub OAuth login has already succeeded, so this must not throw into the
- * login path — a D1 fault logs and returns null (session still issued).
+ * BEST-EFFORT storage primitive for the GitHub-linked identity on every GitHub
+ * login. A D1 fault logs and returns null; the OAuth caller decides whether its
+ * deployment has durable identity authority and therefore must block session
+ * minting.
  *
  * A GitHub-provided email is UNVERIFIED (we never proved the user controls it),
  * so it is NEVER a cross-provider linking key — resolution is by github_user_id

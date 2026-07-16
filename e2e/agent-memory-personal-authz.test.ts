@@ -299,7 +299,8 @@ describe("agent memory personal authorization (real worker.fetch)", () => {
 
   it("rejects a session whose stored user id disagrees with its authenticated GitHub identity", async () => {
     const response = await worker.fetch(sessionRequest("GET", "/v1/memory", "session-forged"), env, ctx())
-    expect(response.status).toBe(403)
-    expect(await response.json()).toEqual({ error: "memory_identity_unavailable" })
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: "unauthorized" })
+    expect(kv.store.has("auth_session:session-forged")).toBe(false)
   })
 })

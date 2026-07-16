@@ -15,10 +15,18 @@ import type { Env } from "@/src/shared/types/env"
 const SESSION_COOKIE = "__Host-sigilix_session"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(7))
 const PORTAL_ORIGIN = "https://app.sigilix.ai"
+const USER_ID = "billing-user-42"
 const CTX = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
 const migration = (name: string) => readFileSync(new URL(`../../migrations/${name}`, import.meta.url), "utf8")
 const NO_SUBSCRIPTION_DB = {
-  prepare: () => ({ bind: () => ({ first: async () => null }) }),
+  prepare: (sql: string) => ({
+    bind: () => ({
+      first: async () =>
+        sql === "SELECT user_id, github_user_id FROM user_identity WHERE user_id = ?"
+          ? { user_id: USER_ID, github_user_id: "42" }
+          : null,
+    }),
+  }),
 } as unknown as Env["SIGILIX_PLATFORM_DB"]
 
 function makeKV(): { kv: KVNamespace; store: Map<string, string> } {
@@ -42,7 +50,15 @@ function makeKV(): { kv: KVNamespace; store: Map<string, string> } {
 }
 
 async function seedSession(kv: KVNamespace, sessionId: string, login: string): Promise<void> {
-  await createSession({ kv, sessionId, login, githubUserId: 42, accessToken: "ghu_x", encryptionKeyB64url: ENC_KEY })
+  await createSession({
+    kv,
+    sessionId,
+    login,
+    githubUserId: 42,
+    userId: USER_ID,
+    accessToken: "ghu_x",
+    encryptionKeyB64url: ENC_KEY,
+  })
 }
 
 // `extra` is loosely typed so a test can UNSET an optional var (pass `undefined`)
@@ -75,6 +91,7 @@ async function checkoutEnv(
   const db = makeD1()
   for (const name of [
     "0001_create_tenant_repo_usage.sql",
+    "0006_create_user_identity.sql",
     "0011_add_tenant_subscription_status.sql",
     "0012_add_tenant_billing_source.sql",
     "0020_create_stripe_seat_reconciliation.sql",
@@ -82,6 +99,14 @@ async function checkoutEnv(
   ]) {
     await db.exec(migration(name))
   }
+  await db
+    .prepare(
+      `INSERT INTO user_identity
+        (user_id, github_user_id, providers, created_at, last_login_at)
+       VALUES (?, '42', '["github"]', '2026-07-13T00:00:00.000Z', '2026-07-13T00:00:00.000Z')`,
+    )
+    .bind(USER_ID)
+    .run()
   await db
     .prepare(
       `INSERT INTO tenant
@@ -181,12 +206,21 @@ describe("POST /v1/billing/checkout", () => {
     const db = makeD1()
     for (const name of [
       "0001_create_tenant_repo_usage.sql",
+      "0006_create_user_identity.sql",
       "0011_add_tenant_subscription_status.sql",
       "0012_add_tenant_billing_source.sql",
       "0020_create_stripe_seat_reconciliation.sql",
     ]) {
       await db.exec(migration(name))
     }
+    await db
+      .prepare(
+        `INSERT INTO user_identity
+          (user_id, github_user_id, providers, created_at, last_login_at)
+         VALUES (?, '42', '["github"]', '2026-07-13T00:00:00Z', '2026-07-13T00:00:00Z')`,
+      )
+      .bind(USER_ID)
+      .run()
     await db
       .prepare("INSERT INTO tenant (installation_id, tier, created_at, updated_at) VALUES (555, 'free', 't', 't')")
       .run()
@@ -252,9 +286,12 @@ describe("POST /v1/billing/checkout", () => {
       const captured: { checkoutBody?: string } = {}
       stubFetch({ installations: ADMIN_INSTALLS, captured })
       const db = {
-        prepare: () => ({
+        prepare: (sql: string) => ({
           bind: () => ({
-            first: async () => ({ subscription_status: subscriptionStatus, billing_source: billingSource }),
+            first: async () =>
+              sql === "SELECT user_id, github_user_id FROM user_identity WHERE user_id = ?"
+                ? { user_id: USER_ID, github_user_id: "42" }
+                : { subscription_status: subscriptionStatus, billing_source: billingSource },
           }),
         }),
       } as unknown as Env["SIGILIX_PLATFORM_DB"]
@@ -288,9 +325,12 @@ describe("POST /v1/billing/checkout", () => {
     // D1 outage: the status read throws. We must NOT proceed to Stripe on an unknown
     // status (an org WITH a live sub would get a duplicate) — return 503 instead.
     const db = {
-      prepare: () => ({
+      prepare: (sql: string) => ({
         bind: () => ({
           first: async () => {
+            if (sql === "SELECT user_id, github_user_id FROM user_identity WHERE user_id = ?") {
+              return { user_id: USER_ID, github_user_id: "42" }
+            }
             throw new Error("simulated D1 outage")
           },
         }),
@@ -597,11 +637,20 @@ async function makeManagedEnv(options: {
 }): Promise<{ env: Env; db: D1Database; kv: KVNamespace; store: Map<string, string> }> {
   const db = makeD1()
   await db.exec(migration("0001_create_tenant_repo_usage.sql"))
+  await db.exec(migration("0006_create_user_identity.sql"))
   await db.exec(migration("0011_add_tenant_subscription_status.sql"))
   await db.exec(migration("0012_add_tenant_billing_source.sql"))
   await db.exec(migration("0020_create_stripe_seat_reconciliation.sql"))
   await db.exec(migration("0027_create_billing_checkout_attempt.sql"))
   await db.exec(migration("0022_create_org_workspace_access.sql"))
+  await db
+    .prepare(
+      `INSERT INTO user_identity
+        (user_id, github_user_id, providers, created_at, last_login_at)
+       VALUES (?, '42', '["github"]', '2026-07-13T00:00:00.000Z', '2026-07-13T00:00:00.000Z')`,
+    )
+    .bind(USER_ID)
+    .run()
   await db
     .prepare(
       "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +

@@ -18,6 +18,7 @@ const M3 = readFileSync(
   "utf8",
 )
 const M4 = readFileSync(new URL("../../../migrations/0004_create_usage_events.sql", import.meta.url), "utf8")
+const M6 = readFileSync(new URL("../../../migrations/0006_create_user_identity.sql", import.meta.url), "utf8")
 
 function makeKV(): KVNamespace {
   const store = new Map<string, string>()
@@ -70,11 +71,20 @@ describe("handleResearchCreate — chatbot SEAT metering", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(M4)
+    await db.exec(M6)
     await applyCostMigrations(db)
+    await db
+      .prepare(
+        `INSERT INTO user_identity
+         (user_id, github_user_id, providers, created_at, last_login_at)
+         VALUES ('user-42', '42', '["github"]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+      )
+      .run()
     kv = makeKV()
     await createSession({
       kv,
       sessionId: "s1",
+      userId: "user-42",
       login: "dev",
       githubUserId: 42,
       accessToken: "t",

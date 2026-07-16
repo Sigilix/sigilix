@@ -38,11 +38,21 @@ async function makeEnv(): Promise<{ env: Env; db: D1Database }> {
   const db = makeD1()
   await db.exec(migration("0001_create_tenant_repo_usage.sql"))
   await db.exec(migration("0003_create_account_tenant_and_api_key.sql"))
+  await db.exec(migration("0006_create_user_identity.sql"))
   await db.exec(migration("0007_create_org_seat_assignment.sql"))
   await db.exec(migration("0020_create_stripe_seat_reconciliation.sql"))
   await db.exec(migration("0022_create_org_workspace_access.sql"))
   await db.exec(migration("0023_add_org_seat_billing_operation_context.sql"))
   await db.exec(migration("0028_create_org_workspace_seat_assignment.sql"))
+  await db
+    .prepare(
+      `INSERT INTO user_identity
+       (user_id, github_user_id, providers, created_at, last_login_at)
+       VALUES
+         ('org-member-user-111', '111', '["github"]', 't', 't'),
+         ('org-member-user-222', '222', '["github"]', 't', 't')`,
+    )
+    .run()
   await db
     .prepare(
       "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
@@ -57,6 +67,7 @@ async function makeEnv(): Promise<{ env: Env; db: D1Database }> {
     sessionId: SESSION_ID,
     login: "owner",
     githubUserId: ACTOR_ID,
+    userId: `org-member-user-${ACTOR_ID}`,
     accessToken: "ghu_actor",
     encryptionKeyB64url: ENC_KEY,
   })
@@ -485,6 +496,7 @@ describe("organization member mutation end to end", () => {
       sessionId: secondSessionId,
       login: "target",
       githubUserId: Number(TARGET_ID),
+      userId: `org-member-user-${TARGET_ID}`,
       accessToken: "ghu_second_admin",
       encryptionKeyB64url: ENC_KEY,
     })

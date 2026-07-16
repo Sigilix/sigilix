@@ -14,6 +14,7 @@ const SESSION_COOKIE = "__Host-sigilix_session"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(9))
 
 const TENANT_SQL = readFileSync(new URL("../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
+const IDENTITY_SQL = readFileSync(new URL("../../migrations/0006_create_user_identity.sql", import.meta.url), "utf8")
 const CONSENT_SQL = readFileSync(
   new URL("../../migrations/0008_create_data_learning_consent.sql", import.meta.url),
   "utf8",
@@ -35,7 +36,15 @@ function makeKV(): KVNamespace {
 async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(TENANT_SQL)
+  await db.exec(IDENTITY_SQL)
   await db.exec(CONSENT_SQL)
+  await db
+    .prepare(
+      `INSERT INTO user_identity
+        (user_id, github_user_id, providers, created_at, last_login_at)
+       VALUES ('consent-user-111', '111', '["github"]', 't', 't')`,
+    )
+    .run()
   return db
 }
 
@@ -47,7 +56,15 @@ async function seedTenant(db: D1Database, installationId: number, tier: string):
 }
 
 async function seedSession(kv: KVNamespace, sessionId: string, login: string): Promise<void> {
-  await createSession({ kv, sessionId, login, githubUserId: 111, accessToken: "ghu_t", encryptionKeyB64url: ENC_KEY })
+  await createSession({
+    kv,
+    sessionId,
+    login,
+    githubUserId: 111,
+    userId: "consent-user-111",
+    accessToken: "ghu_t",
+    encryptionKeyB64url: ENC_KEY,
+  })
 }
 
 function stubGitHub(installations: Array<{ id: number; account: { type: string; login: string } }>): void {

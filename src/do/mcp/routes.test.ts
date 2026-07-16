@@ -24,6 +24,10 @@ const MIGRATION_API_KEY_SQL = readFileSync(
   new URL("../../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_IDENTITY_SQL = readFileSync(
+  new URL("../../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
 
 function makeKV(): KVNamespace {
   const store = new Map<string, string>()
@@ -66,6 +70,15 @@ function stubGitHubAdmin(installationId: number): void {
 async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(MIGRATION_API_KEY_SQL)
+  await db.exec(MIGRATION_IDENTITY_SQL)
+  const insertIdentity = db.prepare(
+    `INSERT INTO user_identity
+     (user_id, github_user_id, providers, created_at, last_login_at)
+     VALUES (?, ?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+  )
+  await insertIdentity.bind("user-111", "111", '["github"]').run()
+  await insertIdentity.bind("user-222", "222", '["github"]').run()
+  await insertIdentity.bind("user-uuid-1", null, "[]").run()
   return db
 }
 
@@ -73,6 +86,7 @@ async function seedSession(kv: KVNamespace, sessionId: string, login: string, gi
   await createSession({
     kv,
     sessionId,
+    userId: `user-${githubUserId}`,
     login,
     githubUserId,
     accessToken: "ghu_test_token",
@@ -247,7 +261,8 @@ describe("POST /v1/mcp/servers", () => {
       MCP_CONNECTIONS: namespace,
     })
     expect(res.status).toBe(401)
-    expect(await res.json()).toEqual({ error: "stable_identity_required" })
+    expect(await res.json()).toEqual({ error: "unauthorized" })
+    expect(await kv.get("auth_session:sess-unstable")).toBeNull()
     expect(idFromNameCalls).toEqual([])
   })
 
@@ -686,7 +701,7 @@ describe("GET /mcp/oauth/callback", () => {
       tenantScope: "tenant:42",
       grantId: "grant-retry",
       serverId: "server-retry",
-      stableSubject: "111",
+      stableSubject: "user-111",
       status: "processing",
       claimId: "claim-existing",
       claimExpiresAt: Date.now() + 60_000,

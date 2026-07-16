@@ -27,11 +27,19 @@ import {
   AccountDeleteConflictError,
   AccountSubjectIntegrityError,
   gatherAccountExport,
+  listAccountAdminInstallationIds,
   purgeUserAccount,
   revokeUserSessions,
   subjectFromSession,
+  type AccountDeleteAdminRosterProof,
+  type AccountSubject,
 } from "@/src/lib/account-store"
+import { createCompleteInstallationRosterSnapshot, fetchInstallationRoster } from "@/src/lib/org-members-roster"
 import type { Env } from "@/src/shared/types/env"
+import { getAppInstallation } from "@/src/shared/adapters/github/github-app"
+import { mapWithConcurrency } from "@/src/shared/util/bounded-concurrency"
+
+const ACCOUNT_DELETE_ROSTER_CONCURRENCY = 4
 
 function json(body: unknown, status: number, extraHeaders?: Record<string, string>): Response {
   return new Response(JSON.stringify(body), {
@@ -47,6 +55,57 @@ function confirmationMatches(confirm: string, session: AuthedSession): boolean {
   if (needle === session.record.login.toLowerCase()) return true
   const email = session.record.email
   return email != null && needle === email.trim().toLowerCase()
+}
+
+async function loadAccountDeleteAdminRosterProofs(
+  env: Env,
+  db: D1Database,
+  subject: AccountSubject,
+): Promise<AccountDeleteAdminRosterProof[] | null> {
+  const installationIds = await listAccountAdminInstallationIds(db, subject)
+  if (installationIds.length === 0) return []
+  const appId = env.GITHUB_APP_ID
+  const privateKey = env.GITHUB_PRIVATE_KEY
+  if (!appId || !privateKey || !env.OPENCLAW_STATE) return null
+
+  const settled = await mapWithConcurrency(
+    installationIds,
+    ACCOUNT_DELETE_ROSTER_CONCURRENCY,
+    async (installationId): Promise<AccountDeleteAdminRosterProof> => {
+      const installation = await getAppInstallation(appId, privateKey, installationId)
+      if (installation === null) throw new Error("exact App installation unavailable")
+      const roster = await fetchInstallationRoster(
+        env,
+        installationId,
+        installation.accountLogin,
+        installation.accountType,
+      )
+      const rosterSnapshot = createCompleteInstallationRosterSnapshot(roster)
+      if (rosterSnapshot === null) throw new Error("complete exact-installation roster unavailable")
+      return { installationId, rosterSnapshot }
+    },
+  )
+  const unavailableIndex = settled.findIndex((result) => result.status === "rejected")
+  if (unavailableIndex >= 0) {
+    const result = settled[unavailableIndex]
+    console.error(
+      JSON.stringify({
+        event: "account-delete-roster-proof-unavailable",
+        installationId: installationIds[unavailableIndex],
+        err:
+          result?.status === "rejected"
+            ? result.reason instanceof Error
+              ? result.reason.message
+              : String(result.reason)
+            : "unknown",
+      }),
+    )
+    return null
+  }
+  return settled.map((result) => {
+    if (result.status !== "fulfilled") throw new Error("unreachable account-delete roster result")
+    return result.value
+  })
 }
 
 async function rejectLegacyAccountSession(env: Env, session: AuthedSession): Promise<Response> {
@@ -95,7 +154,11 @@ async function handleDeleteAccount(request: Request, env: Env, ctx: ExecutionCon
   const subject = subjectFromSession(session.record)
   let purged: Awaited<ReturnType<typeof purgeUserAccount>>
   try {
-    purged = await purgeUserAccount(env.SIGILIX_PLATFORM_DB, subject)
+    const adminRosterProofs = await loadAccountDeleteAdminRosterProofs(env, env.SIGILIX_PLATFORM_DB, subject)
+    if (adminRosterProofs === null) {
+      return json({ error: "account_delete_roster_unavailable" }, 503)
+    }
+    purged = await purgeUserAccount(env.SIGILIX_PLATFORM_DB, subject, { adminRosterProofs })
   } catch (error) {
     if (error instanceof AccountSubjectIntegrityError) {
       return json({ error: "unauthenticated" }, 401, { "set-cookie": clearSessionCookie() })
@@ -125,6 +188,10 @@ async function handleExportAccount(request: Request, env: Env, ctx: ExecutionCon
   // Skip the sliding-TTL touch: a legacy session rejected below is actively
   // revoked and must not be recreated by a queued touch after deletion.
   void ctx
+  const exportUrl = new URL(request.url)
+  if (exportUrl.searchParams.size > 0) {
+    return json({ error: "unexpected_query_parameter" }, 400)
+  }
   const session = await requireSession(request, env)
   if (!session) return json({ error: "unauthenticated" }, 401)
   if (session.record.userId == null) {

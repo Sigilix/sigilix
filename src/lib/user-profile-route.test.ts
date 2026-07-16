@@ -27,6 +27,10 @@ const MIGRATION_PROFILE_SQL = readFileSync(
   new URL("../../migrations/0005_create_user_profile.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_IDENTITY_SQL = readFileSync(
+  new URL("../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
 
 // The GET route resolves the caller's REAL plan from their first installation's
 // tenant.tier — so it decrypts the session token and calls GET /user/installations.
@@ -88,6 +92,15 @@ async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(MIGRATION_TENANT_SQL)
   await db.exec(MIGRATION_PROFILE_SQL)
+  await db.exec(MIGRATION_IDENTITY_SQL)
+  const insertIdentity = db.prepare(
+    `INSERT INTO user_identity
+     (user_id, github_user_id, providers, created_at, last_login_at)
+     VALUES (?, ?, '["github"]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+  )
+  for (const githubUserId of [1, 7, 42, 100, 200]) {
+    await insertIdentity.bind(`user-${githubUserId}`, String(githubUserId)).run()
+  }
   return db
 }
 
@@ -99,6 +112,7 @@ async function seedSession(
   await createSession({
     kv,
     sessionId,
+    userId: `user-${args.githubUserId}`,
     login: args.login,
     githubUserId: args.githubUserId,
     ...(args.name !== undefined ? { name: args.name } : {}),

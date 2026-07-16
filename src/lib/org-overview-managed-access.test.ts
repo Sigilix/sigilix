@@ -12,7 +12,8 @@ const rosterMock = vi.fn<(...args: unknown[]) => Promise<RosterResult>>(async ()
   complete: true,
   source: "none",
 }))
-vi.mock("@/src/lib/org-members-roster", () => ({
+vi.mock("@/src/lib/org-members-roster", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/src/lib/org-members-roster")>()),
   fetchInstallationRoster: (...args: unknown[]) => rosterMock(...args),
 }))
 
@@ -39,6 +40,10 @@ const MIGRATION_USAGE_SQL = readFileSync(
 )
 const MIGRATION_API_KEY_SQL = readFileSync(
   new URL("../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
+  "utf8",
+)
+const MIGRATION_IDENTITY_SQL = readFileSync(
+  new URL("../../migrations/0006_create_user_identity.sql", import.meta.url),
   "utf8",
 )
 const MIGRATION_SEAT_SQL = readFileSync(
@@ -83,11 +88,21 @@ async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(MIGRATION_USAGE_SQL)
   await db.exec(MIGRATION_API_KEY_SQL)
+  await db.exec(MIGRATION_IDENTITY_SQL)
   await db.exec(MIGRATION_SEAT_SQL)
   await db.exec(MIGRATION_STRIPE_SEATS_SQL)
   await db.exec(MIGRATION_ORG_ACCESS_SQL)
   await db.exec(MIGRATION_STRIPE_SEAT_CONTEXT_SQL)
   await db.exec(MIGRATION_MANAGED_SEAT_SQL)
+  await db
+    .prepare(
+      `INSERT INTO user_identity
+       (user_id, github_user_id, providers, created_at, last_login_at)
+       VALUES
+         ('managed-overview-user-111', '111', '["github"]', 't', 't'),
+         ('managed-overview-user-no-github', NULL, '[]', 't', 't')`,
+    )
+    .run()
   return db
 }
 
@@ -97,6 +112,7 @@ async function seedSession(kv: KVNamespace, sessionId: string, login: string, gi
     sessionId,
     login,
     ...(githubUserId !== undefined ? { githubUserId } : {}),
+    userId: githubUserId !== undefined ? `managed-overview-user-${githubUserId}` : "managed-overview-user-no-github",
     accessToken: "ghu_test_token",
     encryptionKeyB64url: ENC_KEY,
   })
@@ -109,12 +125,17 @@ async function seedWorkspaceAccess(
   role: "admin" | "member" = "member",
 ): Promise<void> {
   const nowIso = "2026-07-13T00:00:00.000Z"
+  const memberIds = [...new Set(["111", "222", "333", "444", "555", githubUserId])].sort(
+    (left, right) => left.length - right.length || left.localeCompare(right),
+  )
+  const rosterSnapshot = { memberIds, sqlTokenSet: `|${memberIds.join("|")}|` }
   if (role === "admin") {
     const result = await bootstrapFirstOrgAdmin(db, {
       installationId,
       githubUserId,
       nowIso,
       updatedBy: "test",
+      rosterSnapshot,
     })
     if (result === "bootstrapped") return
   }
@@ -126,6 +147,7 @@ async function seedWorkspaceAccess(
       role,
       nowIso: "2026-07-13T00:00:01.000Z",
       updatedBy: "test",
+      rosterSnapshot,
     })
     if (result.status !== "updated") throw new Error(`failed to seed admin: ${result.status}`)
   }
@@ -269,7 +291,7 @@ describe("org overview managed access", () => {
     ).resolves.toEqual({ role: "admin", revoked_at: null })
   })
 
-  it("uses the stored viewer role, so a live GitHub admin stored as member never sees the roster", async () => {
+  it("uses the stored viewer role, so a live GitHub admin stored as member never receives the roster", async () => {
     const db = await makeDb()
     const kv = makeKV()
     await seedSession(kv, "sess-1", "Octocat", 111)
@@ -304,7 +326,9 @@ describe("org overview managed access", () => {
     const body = (await res.json()) as OrgOverviewResponse
     expect(body.role).toBe("member")
     expect(body.seats.map((seat) => seat.login.toLowerCase())).toEqual(["octocat"])
-    expect(rosterMock).not.toHaveBeenCalled()
+    // One internal roster proof checks whether first-admin recovery is safe;
+    // the member response still discloses only the caller's own seat.
+    expect(rosterMock).toHaveBeenCalledOnce()
   })
 
   it("joins exact stored roles and active/available states by immutable roster id", async () => {
@@ -319,6 +343,7 @@ describe("org overview managed access", () => {
       githubUserId: "444",
       nowIso: "2026-07-13T00:00:02.000Z",
       updatedBy: "test",
+      rosterSnapshot: { memberIds: ["111", "222", "333", "444", "555"], sqlTokenSet: "|111|222|333|444|555|" },
     })
     expect(removed.status).toBe("removed")
     await seedWorkspaceAccess(db, 2, "555", "admin")
@@ -374,6 +399,7 @@ describe("org overview managed access", () => {
           githubUserId: "444",
           nowIso: "2026-07-13T00:00:02.000Z",
           updatedBy: "test",
+          rosterSnapshot: { memberIds: ["111", "222", "333", "444", "555"], sqlTokenSet: "|111|222|333|444|555|" },
         })
       ).status,
     ).toBe("removed")

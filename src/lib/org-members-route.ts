@@ -21,7 +21,11 @@ import {
   releaseOrgSeatBillingLease,
 } from "@/src/features/billing"
 import { requireOrgAccess } from "@/src/lib/org-access"
-import { fetchInstallationRoster } from "@/src/lib/org-members-roster"
+import {
+  createCompleteInstallationRosterSnapshot,
+  fetchInstallationRoster,
+  type CompleteInstallationRosterSnapshot,
+} from "@/src/lib/org-members-roster"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import type { Env } from "@/src/shared/types/env"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
@@ -41,8 +45,13 @@ interface RosterTarget {
   login: string
 }
 
+interface RosterSnapshotContext {
+  snapshot: CompleteInstallationRosterSnapshot
+  target: RosterTarget | null
+}
+
 type ContextResult = { ok: true; value: MutationContext } | { ok: false; response: Response }
-type TargetResult = { ok: true; value: RosterTarget } | { ok: false; response: Response }
+type RosterSnapshotResult = { ok: true; value: RosterSnapshotContext } | { ok: false; response: Response }
 
 /** POST /v1/org/:installationId/members — add or regrant one roster-proven member. */
 export async function handleAddOrgMember(
@@ -61,8 +70,9 @@ export async function handleAddOrgMember(
   const githubUserId = parseGithubUserId(body.value.githubUserId)
   if (githubUserId === null) return json({ error: "invalid_github_user_id" }, 400)
 
-  const target = await resolveRosterTarget(env, context.value.db, installationId, githubUserId)
-  if (!target.ok) return target.response
+  const roster = await resolveRosterSnapshot(env, installationId, context.value.access.account, githubUserId)
+  if (!roster.ok) return roster.response
+  if (roster.value.target === null) return json({ error: "member_not_found" }, 404)
 
   const nowIso = new Date().toISOString()
   try {
@@ -75,7 +85,7 @@ export async function handleAddOrgMember(
     return json({
       installationId,
       githubUserId,
-      login: target.value.login,
+      login: roster.value.target.login,
       role: access.role,
       updatedAt: access.updatedAt,
     })
@@ -105,8 +115,9 @@ export async function handleUpdateOrgMemberRole(
   const role = parseRole(body.value.role)
   if (role === null) return json({ error: "invalid_role" }, 400)
 
-  const target = await resolveRosterTarget(env, context.value.db, installationId, githubUserId)
-  if (!target.ok) return target.response
+  const roster = await resolveRosterSnapshot(env, installationId, context.value.access.account, githubUserId)
+  if (!roster.ok) return roster.response
+  if (roster.value.target === null) return json({ error: "member_not_found" }, 404)
 
   const nowIso = new Date().toISOString()
   try {
@@ -116,6 +127,7 @@ export async function handleUpdateOrgMemberRole(
       role,
       nowIso,
       updatedBy: `github:${context.value.access.githubUserId}`,
+      rosterSnapshot: roster.value.snapshot,
     })
     if (result.status === "last_admin") {
       return json({ error: "last_admin" }, 409)
@@ -126,7 +138,7 @@ export async function handleUpdateOrgMemberRole(
     return json({
       installationId,
       githubUserId,
-      login: target.value.login,
+      login: roster.value.target.login,
       role: result.access.role,
       updatedAt: result.access.updatedAt,
     })
@@ -151,11 +163,10 @@ export async function handleDeleteOrgMember(
   const context = await requireMutationContext(request, env, ctx, installationId)
   if (!context.ok) return context.response
 
-  // A departed GitHub member must remain revocable by immutable stored ID.
-  // Roster resolution is best-effort here and is used only to clear the legacy
-  // login-keyed seat row; add/regrant and role changes still require a complete
-  // exact-installation roster proof.
-  const target = await resolveRosterTarget(env, context.value.db, installationId, githubUserId)
+  // A departed GitHub member remains revocable by immutable stored ID, but the
+  // last-admin guard still requires one complete exact-installation snapshot.
+  const roster = await resolveRosterSnapshot(env, installationId, context.value.access.account, githubUserId)
+  if (!roster.ok) return roster.response
 
   const nowMs = Date.now()
   const nowIso = new Date(nowMs).toISOString()
@@ -178,7 +189,7 @@ export async function handleDeleteOrgMember(
       const sameTarget =
         active.operation.targetIdentityKind === "managed_github"
           ? active.operation.targetGithubUserId === githubUserId
-          : target.ok && active.operation.login === target.value.login.trim().toLowerCase()
+          : roster.value.target !== null && active.operation.login === roster.value.target.login.trim().toLowerCase()
       if (!sameTarget) {
         // An installation has at most one expansion in flight. Settling another
         // member's operation here would unassign that member; wait for recovery
@@ -211,9 +222,10 @@ export async function handleDeleteOrgMember(
       {
         installationId,
         githubUserId,
-        ...(target.ok ? { login: target.value.login } : {}),
+        ...(roster.value.target !== null ? { login: roster.value.target.login } : {}),
         nowIso,
         updatedBy: `github:${context.value.access.githubUserId}`,
+        rosterSnapshot: roster.value.snapshot,
       },
       {
         leaseToken,
@@ -239,7 +251,7 @@ export async function handleDeleteOrgMember(
     return json({
       installationId,
       githubUserId,
-      login: target.ok ? target.value.login : null,
+      login: roster.value.target?.login ?? null,
       removed: true,
       updatedAt: nowIso,
     })
@@ -290,42 +302,31 @@ async function requireMutationContext(
  * roster. A positive hit from a partial roster is not enough for writes: the
  * route requires one authoritative snapshot before using its display login.
  */
-async function resolveRosterTarget(
+async function resolveRosterSnapshot(
   env: Env,
-  db: D1Database,
   installationId: number,
+  account: AdminAccess["account"],
   githubUserId: string,
-): Promise<TargetResult> {
-  let account: { login: string; type: "Organization" | "User" }
-  try {
-    const row = await db
-      .prepare("SELECT account_login, account_type FROM tenant WHERE installation_id = ?")
-      .bind(installationId)
-      .first<{ account_login: unknown; account_type: unknown }>()
-    if (
-      row === null ||
-      typeof row.account_login !== "string" ||
-      row.account_login === "" ||
-      (row.account_type !== "Organization" && row.account_type !== "User")
-    ) {
-      return { ok: false, response: json({ error: "org_roster_unavailable" }, 503) }
-    }
-    account = { login: row.account_login, type: row.account_type }
-  } catch (error) {
-    emitFailure("org-member-tenant-read-failed", error, installationId, githubUserId)
+): Promise<RosterSnapshotResult> {
+  if (account.login === "" || (account.type !== "Organization" && account.type !== "User")) {
     return { ok: false, response: json({ error: "org_roster_unavailable" }, 503) }
   }
 
   try {
     const roster = await fetchInstallationRoster(env, installationId, account.login, account.type)
     const expectedSource = account.type === "Organization" ? "org" : "collaborators"
-    if (!roster.complete || roster.source !== expectedSource) {
+    const snapshot = createCompleteInstallationRosterSnapshot(roster)
+    if (snapshot === null || roster.source !== expectedSource) {
       return { ok: false, response: json({ error: "org_roster_unavailable" }, 503) }
     }
     const member = roster.members.find((candidate) => candidate.githubUserId === githubUserId)
-    return member
-      ? { ok: true, value: { githubUserId: member.githubUserId, login: member.login } }
-      : { ok: false, response: json({ error: "member_not_found" }, 404) }
+    return {
+      ok: true,
+      value: {
+        snapshot,
+        target: member ? { githubUserId: member.githubUserId, login: member.login } : null,
+      },
+    }
   } catch (error) {
     emitFailure("org-member-roster-read-failed", error, installationId, githubUserId)
     return { ok: false, response: json({ error: "org_roster_unavailable" }, 503) }

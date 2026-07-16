@@ -21,6 +21,10 @@
 //   • revokeUserSessions best-effort-deletes matches and returns the count.
 
 import { listSessionsPage, type SessionRecord } from "@/src/lib/auth-session"
+import {
+  isCompleteInstallationRosterSnapshot,
+  type CompleteInstallationRosterSnapshot,
+} from "@/src/features/org-membership"
 import { findByGithubUserId, findByUserId, type UserIdentity } from "@/src/lib/user-identity-store"
 
 /** The caller's identity keys — the ONLY scope any of these operations touch. */
@@ -43,7 +47,17 @@ export class AccountSubjectIntegrityError extends Error {
   }
 }
 
-export type AccountDeleteConflictReason = "last_admin" | "billing_operation_active"
+export type AccountDeleteConflictReason = "last_admin" | "billing_operation_active" | "org_access_changed"
+
+/** Complete exact-installation roster authority for deleting one active admin grant. */
+export interface AccountDeleteAdminRosterProof {
+  installationId: number
+  rosterSnapshot: CompleteInstallationRosterSnapshot
+}
+
+export interface PurgeUserAccountOptions {
+  adminRosterProofs?: readonly AccountDeleteAdminRosterProof[]
+}
 
 /** A managed-org invariant that must be resolved before account deletion can proceed. */
 export class AccountDeleteConflictError extends Error {
@@ -180,28 +194,104 @@ const EMPTY_PURGE: PurgeCounts = {
   appMemory: 0,
 }
 
-interface AccountDeleteConflictRow {
-  last_admin: number
+interface AccountDeleteBillingConflictRow {
   billing_operation_active: number
+}
+
+interface AccountAdminInstallationRow {
+  installation_id: unknown
+}
+
+interface ValidatedAdminRosterProof {
+  installationId: number
+  sqlTokenSet: string
+}
+
+function validInstallationId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+}
+
+function validateAdminRosterProofs(options: PurgeUserAccountOptions | undefined): ValidatedAdminRosterProof[] {
+  if (options === undefined) return []
+  if (typeof options !== "object" || options === null) {
+    throw new Error("invalid account-delete admin roster proofs")
+  }
+  const adminRosterProofs = options.adminRosterProofs ?? []
+  if (!Array.isArray(adminRosterProofs)) throw new Error("invalid account-delete admin roster proofs")
+  const seen = new Set<number>()
+  return adminRosterProofs.map((proof) => {
+    if (
+      typeof proof !== "object" ||
+      proof === null ||
+      !validInstallationId(proof.installationId) ||
+      seen.has(proof.installationId) ||
+      !isCompleteInstallationRosterSnapshot(proof.rosterSnapshot)
+    ) {
+      throw new Error("invalid account-delete admin roster proof")
+    }
+    seen.add(proof.installationId)
+    // Copy the canonical token at the validation boundary so later caller
+    // mutation cannot widen the authority used by persistence statements.
+    return { installationId: proof.installationId, sqlTokenSet: proof.rosterSnapshot.sqlTokenSet }
+  })
+}
+
+async function listActiveAdminInstallationIds(db: D1Database, githubUserId: string): Promise<number[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT installation_id FROM org_workspace_access
+        WHERE github_user_id = ? AND role = 'admin' AND revoked_at IS NULL
+        ORDER BY installation_id`,
+    )
+    .bind(githubUserId)
+    .all<AccountAdminInstallationRow>()
+  const installationIds: number[] = []
+  const seen = new Set<number>()
+  for (const row of results ?? []) {
+    if (!validInstallationId(row.installation_id) || seen.has(row.installation_id)) {
+      throw new Error("invalid active organization admin installation")
+    }
+    seen.add(row.installation_id)
+    installationIds.push(row.installation_id)
+  }
+  return installationIds.sort((left, right) => left - right)
+}
+
+/** List exact installations where the durable account is currently an active stored admin. */
+export async function listAccountAdminInstallationIds(db: D1Database, subject: AccountSubject): Promise<number[]> {
+  const resolved = await resolveDurableSubject(db, subject)
+  if (resolved.githubUserId === null) return []
+  const installationIds = await listActiveAdminInstallationIds(db, resolved.githubUserId)
+  // Detect a durable-identity rebind that raced the authorization read.
+  await resolveDurableSubject(db, resolved)
+  return installationIds
 }
 
 async function readAccountDeleteConflict(
   db: D1Database,
   githubUserId: string,
+  proofsByInstallation: ReadonlyMap<number, ValidatedAdminRosterProof>,
 ): Promise<AccountDeleteConflictReason | null> {
+  const activeAdminInstallationIds = await listActiveAdminInstallationIds(db, githubUserId)
+  for (const installationId of activeAdminInstallationIds) {
+    const proof = proofsByInstallation.get(installationId)
+    if (proof === undefined) return "org_access_changed"
+    const successor = await db
+      .prepare(
+        `SELECT 1 AS present FROM org_workspace_access
+          WHERE installation_id = ? AND github_user_id <> ?
+            AND role = 'admin' AND revoked_at IS NULL
+            AND instr(?, '|' || github_user_id || '|') > 0
+          LIMIT 1`,
+      )
+      .bind(installationId, githubUserId, proof.sqlTokenSet)
+      .first<{ present: number }>()
+    if (successor === null) return "last_admin"
+  }
+
   const row = await db
     .prepare(
       `SELECT
-         EXISTS (
-           SELECT 1 FROM org_workspace_access AS target
-            WHERE target.github_user_id = ? AND target.revoked_at IS NULL AND target.role = 'admin'
-              AND NOT EXISTS (
-                SELECT 1 FROM org_workspace_access AS other
-                 WHERE other.installation_id = target.installation_id
-                   AND other.github_user_id <> target.github_user_id
-                   AND other.role = 'admin' AND other.revoked_at IS NULL
-              )
-         ) AS last_admin,
          EXISTS (
            SELECT 1 FROM org_seat_billing_operation AS operation
             WHERE operation.state IN ('pending', 'stripe_applied')
@@ -220,9 +310,8 @@ async function readAccountDeleteConflict(
               )
          ) AS billing_operation_active`,
     )
-    .bind(githubUserId, githubUserId, githubUserId, githubUserId)
-    .first<AccountDeleteConflictRow>()
-  if (row?.last_admin === 1) return "last_admin"
+    .bind(githubUserId, githubUserId, githubUserId)
+    .first<AccountDeleteBillingConflictRow>()
   if (row?.billing_operation_active === 1) return "billing_operation_active"
   return null
 }
@@ -237,7 +326,13 @@ async function readAccountDeleteConflict(
  * with no githubUserId) are simply skipped. THROWS on a D1 fault (the route
  * returns 500); idempotent — a re-run deletes 0 rows.
  */
-export async function purgeUserAccount(db: D1Database, subject: AccountSubject): Promise<PurgeCounts> {
+export async function purgeUserAccount(
+  db: D1Database,
+  subject: AccountSubject,
+  options?: PurgeUserAccountOptions,
+): Promise<PurgeCounts> {
+  const adminRosterProofs = validateAdminRosterProofs(options)
+  const proofsByInstallation = new Map(adminRosterProofs.map((proof) => [proof.installationId, proof]))
   subject = await resolveDurableSubject(db, subject)
   const statements: D1PreparedStatement[] = []
   const hasIdentityGuard = subject.userId != null && subject.githubUserId != null
@@ -267,7 +362,7 @@ export async function purgeUserAccount(db: D1Database, subject: AccountSubject):
     )
   }
   if (subject.githubUserId != null) {
-    const conflict = await readAccountDeleteConflict(db, subject.githubUserId)
+    const conflict = await readAccountDeleteConflict(db, subject.githubUserId, proofsByInstallation)
     if (conflict !== null) throw new AccountDeleteConflictError(conflict)
 
     const nowIso = new Date().toISOString()
@@ -279,15 +374,7 @@ export async function purgeUserAccount(db: D1Database, subject: AccountSubject):
           `UPDATE org_workspace_access AS target
               SET revoked_at = ?, updated_at = ?, updated_by = ?,
                   last_audit_id = ?, last_action = 'access_removed'
-            WHERE target.github_user_id = ? AND target.revoked_at IS NULL
-              AND (
-                target.role <> 'admin' OR EXISTS (
-                  SELECT 1 FROM org_workspace_access AS other
-                   WHERE other.installation_id = target.installation_id
-                     AND other.github_user_id <> target.github_user_id
-                     AND other.role = 'admin' AND other.revoked_at IS NULL
-                )
-              )
+            WHERE target.github_user_id = ? AND target.revoked_at IS NULL AND target.role = 'member'
               AND NOT EXISTS (
                 SELECT 1 FROM org_seat_billing_operation AS operation
                  WHERE operation.installation_id = target.installation_id
@@ -296,6 +383,31 @@ export async function purgeUserAccount(db: D1Database, subject: AccountSubject):
         )
         .bind(nowIso, nowIso, updatedBy, auditId, subject.githubUserId),
     )
+    for (const proof of adminRosterProofs) {
+      statements.push(
+        db
+          .prepare(
+            `UPDATE org_workspace_access AS target
+                SET revoked_at = ?, updated_at = ?, updated_by = ?,
+                    last_audit_id = ?, last_action = 'access_removed'
+              WHERE target.installation_id = ? AND target.github_user_id = ?
+                AND target.revoked_at IS NULL AND target.role = 'admin'
+                AND EXISTS (
+                  SELECT 1 FROM org_workspace_access AS other
+                   WHERE other.installation_id = target.installation_id
+                     AND other.github_user_id <> target.github_user_id
+                     AND other.role = 'admin' AND other.revoked_at IS NULL
+                     AND instr(?, '|' || other.github_user_id || '|') > 0
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM org_seat_billing_operation AS operation
+                   WHERE operation.installation_id = target.installation_id
+                     AND operation.state IN ('pending', 'stripe_applied')
+                )`,
+          )
+          .bind(nowIso, nowIso, updatedBy, auditId, proof.installationId, subject.githubUserId, proof.sqlTokenSet),
+      )
+    }
     statements.push(
       db
         .prepare(
@@ -367,7 +479,9 @@ export async function purgeUserAccount(db: D1Database, subject: AccountSubject):
     // reported as authentication failure rather than a generic delete fault.
     await resolveDurableSubject(db, subject)
     if (subject.githubUserId != null) {
-      const racedConflict = await readAccountDeleteConflict(db, subject.githubUserId).catch(() => null)
+      const racedConflict = await readAccountDeleteConflict(db, subject.githubUserId, proofsByInstallation).catch(
+        () => null,
+      )
       if (racedConflict !== null) throw new AccountDeleteConflictError(racedConflict)
     }
     throw error
@@ -378,6 +492,9 @@ export async function purgeUserAccount(db: D1Database, subject: AccountSubject):
   if (hasIdentityGuard) i++
   if (subject.githubUserId != null) {
     counts.orgWorkspaceAccess = changes(results[i++])
+    for (let proofIndex = 0; proofIndex < adminRosterProofs.length; proofIndex++) {
+      counts.orgWorkspaceAccess += changes(results[i++])
+    }
     counts.orgWorkspaceSeat = changes(results[i++])
   }
   if (subject.userId != null) {

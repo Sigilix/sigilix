@@ -31,6 +31,7 @@ import {
   buildCliEnv,
   buildPrompt,
   buildCliArgs,
+  isGroundingActive,
   parseCliEvents,
   parseEditFilePath,
   runCliAgent,
@@ -86,6 +87,27 @@ function fakeChildChunks(chunks: string[], code: number) {
   return child;
 }
 
+// ── isGroundingActive (no-rebuild kill switch) ────────────────────────────────
+
+describe("isGroundingActive", () => {
+  const full = { endpoint: "https://api.sigilix.ai", apiKey: "k", repoSlug: "o/r" };
+  it("active only when the plugin is provisioned AND complete grounding config is present", () => {
+    expect(isGroundingActive("/app/dist/grounding-plugin.js", full)).toBe(true);
+  });
+  it("dark when the image did not provision the plugin (empty path)", () => {
+    expect(isGroundingActive("", full)).toBe(false);
+  });
+  it("dark when the Worker passed no grounding config (kill switch: flag off → no sigilix)", () => {
+    expect(isGroundingActive("/p", undefined)).toBe(false);
+  });
+  it("fail-closed on PARTIAL grounding config (missing any of endpoint/apiKey/repoSlug)", () => {
+    expect(isGroundingActive("/p", { endpoint: "https://x", apiKey: "k" })).toBe(false);
+    expect(isGroundingActive("/p", { endpoint: "https://x", repoSlug: "o/r" })).toBe(false);
+    expect(isGroundingActive("/p", { apiKey: "k", repoSlug: "o/r" })).toBe(false);
+    expect(isGroundingActive("/p", { endpoint: "", apiKey: "k", repoSlug: "o/r" })).toBe(false);
+  });
+});
+
 // ── buildOpencodeConfig ───────────────────────────────────────────────────────
 
 describe("buildOpencodeConfig", () => {
@@ -100,6 +122,10 @@ describe("buildOpencodeConfig", () => {
     }
     // Out-of-repo mutation is explicitly denied even though edit/write are allowed.
     expect(perm.external_directory).toBe("deny");
+    // The grounding tool is allowed here because this call wires the plugin — without
+    // the allow, deny-by-default filters it out of the model's toolset (the plugin
+    // loads but the model never sees `retrieve_codebase`, so it can't ground).
+    expect(perm.retrieve_codebase).toBe("allow");
     // Nothing else is allowed. A dangerous tool must be strictly absent — not
     // even "ask" (which would hang a headless run, the very failure the catch-all
     // exists to prevent). toBeUndefined() catches an accidental allow OR ask.
@@ -108,8 +134,28 @@ describe("buildOpencodeConfig", () => {
     }
     // Lock the allow-list to EXACTLY these keys — adding a new allow must fail here.
     expect(new Set(Object.keys(perm))).toEqual(
-      new Set(["*", "read", "edit", "write", "grep", "glob", "list", "todowrite", "external_directory"]),
+      new Set([
+        "*",
+        "read",
+        "edit",
+        "write",
+        "grep",
+        "glob",
+        "list",
+        "todowrite",
+        "retrieve_codebase",
+        "external_directory",
+      ]),
     );
+  });
+
+  it("allows retrieve_codebase ONLY when the grounding plugin is wired (same gate as the plugin entry)", () => {
+    // Plugin wired → tool exists → must be allowed, or it is filtered from the toolset.
+    const grounded = buildOpencodeConfig(MODEL, "/opt/sigilix/grounding/index.js");
+    expect((grounded.permission as Record<string, string>).retrieve_codebase).toBe("allow");
+    // No plugin → tool doesn't exist → no allow (and no stray key in the map).
+    const bare = buildOpencodeConfig(MODEL, "");
+    expect((bare.permission as Record<string, string>).retrieve_codebase).toBeUndefined();
   });
 
   it("wires the packet model as an OpenAI-compatible provider", () => {
@@ -214,6 +260,14 @@ describe("buildPrompt", () => {
     expect(buildPrompt({ identifier: "S", title: "T", body: "B" })).not.toContain("## Context");
     expect(buildPrompt({ identifier: "S", title: "T", body: "B" }, "")).not.toContain("## Context");
   });
+
+  it("nudges the model to use retrieve_codebase ONLY when the grounding tool is available", () => {
+    const t = { identifier: "S", title: "T", body: "B" };
+    expect(buildPrompt(t, undefined, false, true)).toContain("retrieve_codebase");
+    // default (tool absent) → no nudge, so runs without the plugin are unchanged
+    expect(buildPrompt(t)).not.toContain("retrieve_codebase");
+    expect(buildPrompt(t, "ctx", false, false)).not.toContain("retrieve_codebase");
+  });
 });
 
 // ── buildCliArgs ──────────────────────────────────────────────────────────────
@@ -249,8 +303,24 @@ describe("parseCliEvents", () => {
   });
 
   it("handles empty / whitespace output", () => {
-    expect(parseCliEvents("")).toEqual({ modelCalls: 0, errored: false });
-    expect(parseCliEvents("\n  \n")).toEqual({ modelCalls: 0, errored: false });
+    expect(parseCliEvents("")).toEqual({ modelCalls: 0, errored: false, retrieveCodebaseCalls: 0 });
+    expect(parseCliEvents("\n  \n")).toEqual({ modelCalls: 0, errored: false, retrieveCodebaseCalls: 0 });
+  });
+
+  it("counts DISTINCT retrieve_codebase tool calls, deduped by part id", () => {
+    // Two calls (parts p1, p2), each with multiple NDJSON lines sharing the part id.
+    const ndjson = [
+      JSON.stringify({ type: "part", part: { tool: "retrieve_codebase", id: "p1", state: "running" } }),
+      JSON.stringify({ type: "part", part: { tool: "retrieve_codebase", id: "p1", state: "completed" } }),
+      JSON.stringify({ type: "step_finish" }),
+      JSON.stringify({ type: "part", part: { tool: "edit", id: "p9" } }),
+      JSON.stringify({ type: "part", part: { tool: "retrieve_codebase", id: "p2", state: "completed" } }),
+    ].join("\n");
+    expect(parseCliEvents(ndjson).retrieveCodebaseCalls).toBe(2);
+    // A run that never calls the tool → 0 (the "why isn't it firing" signal).
+    expect(parseCliEvents(JSON.stringify({ type: "part", part: { tool: "edit", id: "x" } })).retrieveCodebaseCalls).toBe(
+      0,
+    );
   });
 });
 
@@ -299,7 +369,8 @@ describe("runCliAgent", () => {
     mocks.execFile.mockImplementation((_cmd, _args, _opts, cb) => cb(null, " M file.ts\n", ""));
 
     const result = await runCliAgent(makeArgs());
-    expect(result).toEqual({ changed: true, modelCalls: 1, tokens: 0, stoppedReason: "done" });
+    expect(result).toMatchObject({ changed: true, modelCalls: 1, tokens: 0, stoppedReason: "done" });
+    expect(result.diag).toEqual({ retrieveCodebaseCalls: 0, stderrTail: expect.any(String) });
     // config written to a 0600 file OUTSIDE the repo dir (cfgDir under tmp)
     expect(mocks.writeFile).toHaveBeenCalledWith("/tmp/sigilix-cfg-x/opencode-config.json", expect.any(String), {
       mode: 0o600,

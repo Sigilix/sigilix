@@ -37,6 +37,10 @@ const MIGRATION_0001_SQL = readFileSync(
   new URL("../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_0006_SQL = readFileSync(
+  new URL("../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
 
 function makeKV(): { kv: KVNamespace; store: Map<string, string> } {
   const store = new Map<string, string>()
@@ -60,6 +64,7 @@ async function seedSession(kv: KVNamespace, sessionId: string, login: string): P
   await createSession({
     kv,
     sessionId,
+    userId: "user-111",
     login,
     githubUserId: 111,
     accessToken: "ghu_test_token",
@@ -178,6 +183,14 @@ async function readStored(store: Map<string, string>, repoId: number): Promise<L
 beforeEach(async () => {
   db = makeD1()
   await db.exec(MIGRATION_0001_SQL)
+  await db.exec(MIGRATION_0006_SQL)
+  await db
+    .prepare(
+      `INSERT INTO user_identity
+       (user_id, github_user_id, providers, created_at, last_login_at)
+       VALUES ('user-111', '111', '["github"]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+    )
+    .run()
   // Repo 555 belongs to install 42; the foreign repo 999 belongs to install 77.
   await registerRepo(INSTALL_ID, REPO_ID, REPO_FULL_NAME)
   await registerRepo(FOREIGN_INSTALL_ID, FOREIGN_REPO_ID, FOREIGN_FULL_NAME)

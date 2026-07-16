@@ -27,6 +27,19 @@ async function makeDb(): Promise<D1Database> {
 
 const now = (n: number) => `2026-07-13T03:${String(n).padStart(2, "0")}:00.000Z`
 
+function withRosterSnapshot<T extends object>(args: T, memberIds: readonly string[]) {
+  const canonicalMemberIds = [...new Set(memberIds)].sort()
+  return {
+    ...args,
+    rosterSnapshot: {
+      memberIds: canonicalMemberIds,
+      sqlTokenSet: canonicalMemberIds.length === 0 ? "" : `|${canonicalMemberIds.join("|")}|`,
+    },
+  }
+}
+
+const TEST_ROSTER = withRosterSnapshot({}, ["11", "111", "222", "333", "999"]).rosterSnapshot
+
 describe("D1 organization workspace access store", () => {
   let db: D1Database
 
@@ -49,7 +62,7 @@ describe("D1 organization workspace access store", () => {
     await pre.exec(migration("0022_create_org_workspace_access.sql"))
 
     await expect(readOrgWorkspaceAccess(pre, 42, "111")).resolves.toBeNull()
-    await expect(hasActiveOrgAdmin(pre, 42)).resolves.toBe(false)
+    await expect(hasActiveOrgAdmin(pre, 42, TEST_ROSTER)).resolves.toBe(false)
     await expect(pre.prepare("SELECT COUNT(*) AS n FROM org_workspace_access").first<{ n: number }>()).resolves.toEqual(
       { n: 0 },
     )
@@ -106,6 +119,7 @@ describe("D1 organization workspace access store", () => {
           githubUserId,
           nowIso: now(index + 2),
           updatedBy: `admin-${githubUserId}`,
+          rosterSnapshot: TEST_ROSTER,
         }),
       ),
     )
@@ -116,6 +130,140 @@ describe("D1 organization workspace access store", () => {
       (row) => row.role === "admin" && row.revokedAt === null,
     )
     expect(active).toHaveLength(1)
+  })
+
+  it("allows divergent complete rosters to seed multiple roster-proven reachable admins", async () => {
+    const results = await Promise.all(
+      ["111", "222"].map((githubUserId, index) =>
+        bootstrapFirstOrgAdmin(
+          db,
+          withRosterSnapshot(
+            {
+              installationId: 42,
+              githubUserId,
+              nowIso: now(index + 2),
+              updatedBy: `admin-${githubUserId}`,
+            },
+            [githubUserId],
+          ),
+        ),
+      ),
+    )
+
+    expect(results).toEqual(["bootstrapped", "bootstrapped"])
+    expect(
+      (await listOrgWorkspaceAccess(db, 42)).filter((row) => row.role === "admin" && row.revokedAt === null),
+    ).toHaveLength(2)
+  })
+
+  it("ignores stale stored admins outside the roster snapshot when bootstrapping a current member", async () => {
+    await expect(
+      bootstrapFirstOrgAdmin(
+        db,
+        withRosterSnapshot(
+          {
+            installationId: 42,
+            githubUserId: "222",
+            nowIso: now(2),
+            updatedBy: "stale-admin",
+          },
+          ["222"],
+        ),
+      ),
+    ).resolves.toBe("bootstrapped")
+
+    await expect(
+      bootstrapFirstOrgAdmin(
+        db,
+        withRosterSnapshot(
+          {
+            installationId: 42,
+            githubUserId: "111",
+            nowIso: now(3),
+            updatedBy: "current-admin",
+          },
+          ["111"],
+        ),
+      ),
+    ).resolves.toBe("bootstrapped")
+    await expect(readOrgWorkspaceAccess(db, 42, "111")).resolves.toMatchObject({
+      role: "admin",
+      revokedAt: null,
+    })
+  })
+
+  it("does not bootstrap from an empty roster snapshot", async () => {
+    await expect(
+      bootstrapFirstOrgAdmin(
+        db,
+        withRosterSnapshot(
+          {
+            installationId: 42,
+            githubUserId: "111",
+            nowIso: now(2),
+            updatedBy: "unreachable-admin",
+          },
+          [],
+        ),
+      ),
+    ).resolves.toBe("not_bootstrapped")
+    await expect(readOrgWorkspaceAccess(db, 42, "111")).resolves.toBeNull()
+  })
+
+  it("promotes an existing active member through the bootstrap conflict path", async () => {
+    await addOrgWorkspaceMember(db, {
+      installationId: 42,
+      githubUserId: "111",
+      nowIso: now(2),
+      updatedBy: "onboarding",
+    })
+
+    await expect(
+      bootstrapFirstOrgAdmin(
+        db,
+        withRosterSnapshot(
+          {
+            installationId: 42,
+            githubUserId: "111",
+            nowIso: now(3),
+            updatedBy: "github:111",
+          },
+          ["111"],
+        ),
+      ),
+    ).resolves.toBe("bootstrapped")
+    await expect(readOrgWorkspaceAccess(db, 42, "111")).resolves.toMatchObject({ role: "admin", revokedAt: null })
+  })
+
+  it("matches roster IDs exactly rather than treating 11 as part of 111", async () => {
+    await bootstrapFirstOrgAdmin(
+      db,
+      withRosterSnapshot(
+        {
+          installationId: 42,
+          githubUserId: "111",
+          nowIso: now(2),
+          updatedBy: "old-admin",
+        },
+        ["111"],
+      ),
+    )
+
+    await expect(
+      bootstrapFirstOrgAdmin(
+        db,
+        withRosterSnapshot(
+          {
+            installationId: 42,
+            githubUserId: "11",
+            nowIso: now(3),
+            updatedBy: "current-admin",
+          },
+          ["11"],
+        ),
+      ),
+    ).resolves.toBe("bootstrapped")
+    await expect(readOrgWorkspaceAccess(db, 42, "11")).resolves.toMatchObject({ role: "admin" })
   })
 
   it("never lets bootstrap resurrect a revoked tombstone", async () => {
@@ -132,6 +280,7 @@ describe("D1 organization workspace access store", () => {
         login: "octocat",
         nowIso: now(3),
         updatedBy: "owner",
+        rosterSnapshot: TEST_ROSTER,
       }),
     ).toEqual({ status: "removed" })
 
@@ -141,6 +290,7 @@ describe("D1 organization workspace access store", () => {
         githubUserId: "111",
         nowIso: now(4),
         updatedBy: "octocat",
+        rosterSnapshot: TEST_ROSTER,
       }),
     ).resolves.toBe("not_bootstrapped")
     await expect(readOrgWorkspaceAccess(db, 42, "111")).resolves.toMatchObject({
@@ -156,6 +306,7 @@ describe("D1 organization workspace access store", () => {
         githubUserId: "111",
         nowIso: now(2),
         updatedBy: "octocat",
+        rosterSnapshot: TEST_ROSTER,
       }),
     ).toBe("bootstrapped")
 
@@ -166,6 +317,7 @@ describe("D1 organization workspace access store", () => {
         role: "member",
         nowIso: now(3),
         updatedBy: "octocat",
+        rosterSnapshot: TEST_ROSTER,
       }),
     ).resolves.toEqual({ status: "last_admin" })
     await expect(
@@ -175,40 +327,221 @@ describe("D1 organization workspace access store", () => {
         login: "octocat",
         nowIso: now(4),
         updatedBy: "octocat",
+        rosterSnapshot: TEST_ROSTER,
       }),
     ).resolves.toEqual({ status: "last_admin" })
   })
 
-  it("serializes concurrent two-admin demotions and retains one active admin", async () => {
-    await bootstrapFirstOrgAdmin(db, {
-      installationId: 42,
-      githubUserId: "111",
-      nowIso: now(2),
-      updatedBy: "admin-111",
-    })
+  async function seedCurrentAndStaleStoredAdmins(): Promise<void> {
+    await bootstrapFirstOrgAdmin(
+      db,
+      withRosterSnapshot(
+        {
+          installationId: 42,
+          githubUserId: "111",
+          nowIso: now(2),
+          updatedBy: "admin-111",
+        },
+        ["111", "222"],
+      ),
+    )
     await addOrgWorkspaceMember(db, {
       installationId: 42,
       githubUserId: "222",
       nowIso: now(3),
       updatedBy: "admin-111",
     })
-    await setOrgWorkspaceRole(db, {
+    await setOrgWorkspaceRole(
+      db,
+      withRosterSnapshot(
+        {
+          installationId: 42,
+          githubUserId: "222",
+          role: "admin" as const,
+          nowIso: now(4),
+          updatedBy: "admin-111",
+        },
+        ["111", "222"],
+      ),
+    )
+  }
+
+  it("blocks demoting the only roster-current admin when another stored admin is stale", async () => {
+    await seedCurrentAndStaleStoredAdmins()
+
+    await expect(
+      setOrgWorkspaceRole(
+        db,
+        withRosterSnapshot(
+          {
+            installationId: 42,
+            githubUserId: "111",
+            role: "member" as const,
+            nowIso: now(5),
+            updatedBy: "admin-111",
+          },
+          ["111"],
+        ),
+      ),
+    ).resolves.toEqual({ status: "last_admin" })
+    await expect(readOrgWorkspaceAccess(db, 42, "111")).resolves.toMatchObject({ role: "admin" })
+  })
+
+  it("blocks removing the only roster-current admin when another stored admin is stale", async () => {
+    await seedCurrentAndStaleStoredAdmins()
+
+    await expect(
+      removeOrgWorkspaceAccess(
+        db,
+        withRosterSnapshot(
+          {
+            installationId: 42,
+            githubUserId: "111",
+            login: "current-admin",
+            nowIso: now(5),
+            updatedBy: "admin-111",
+          },
+          ["111"],
+        ),
+      ),
+    ).resolves.toEqual({ status: "last_admin" })
+    await expect(readOrgWorkspaceAccess(db, 42, "111")).resolves.toMatchObject({ revokedAt: null })
+  })
+
+  it("allows removing a departed stale admin after a current roster admin is stored", async () => {
+    await bootstrapFirstOrgAdmin(
+      db,
+      withRosterSnapshot(
+        {
+          installationId: 42,
+          githubUserId: "222",
+          nowIso: now(2),
+          updatedBy: "old-admin",
+        },
+        ["222"],
+      ),
+    )
+
+    await expect(
+      bootstrapFirstOrgAdmin(
+        db,
+        withRosterSnapshot(
+          {
+            installationId: 42,
+            githubUserId: "111",
+            nowIso: now(3),
+            updatedBy: "current-admin",
+          },
+          ["111"],
+        ),
+      ),
+    ).resolves.toBe("bootstrapped")
+
+    await expect(
+      removeOrgWorkspaceAccess(
+        db,
+        withRosterSnapshot(
+          {
+            installationId: 42,
+            githubUserId: "222",
+            login: "departed-admin",
+            nowIso: now(4),
+            updatedBy: "current-operator",
+          },
+          ["111"],
+        ),
+      ),
+    ).resolves.toEqual({ status: "removed" })
+    await expect(readOrgWorkspaceAccess(db, 42, "222")).resolves.toMatchObject({ revokedAt: now(4) })
+  })
+
+  it("blocks a departed-admin removal when a newer snapshot has no stored reachable admin", async () => {
+    await seedCurrentAndStaleStoredAdmins()
+
+    await expect(
+      setOrgWorkspaceRole(
+        db,
+        withRosterSnapshot(
+          {
+            installationId: 42,
+            githubUserId: "111",
+            role: "member" as const,
+            nowIso: now(5),
+            updatedBy: "admin-111",
+          },
+          ["111", "222"],
+        ),
+      ),
+    ).resolves.toEqual({ status: "updated", access: expect.objectContaining({ role: "member" }) })
+
+    await expect(
+      removeOrgWorkspaceAccess(
+        db,
+        withRosterSnapshot(
+          {
+            installationId: 42,
+            githubUserId: "222",
+            login: "departed-admin",
+            nowIso: now(6),
+            updatedBy: "admin-111",
+          },
+          ["111"],
+        ),
+      ),
+    ).resolves.toEqual({ status: "last_admin" })
+    expect(
+      (await listOrgWorkspaceAccess(db, 42)).filter((row) => row.role === "admin" && row.revokedAt === null),
+    ).toHaveLength(1)
+  })
+
+  it("serializes concurrent two-admin demotions against one roster snapshot and retains one active admin", async () => {
+    await bootstrapFirstOrgAdmin(
+      db,
+      withRosterSnapshot(
+        {
+          installationId: 42,
+          githubUserId: "111",
+          nowIso: now(2),
+          updatedBy: "admin-111",
+        },
+        ["111", "222"],
+      ),
+    )
+    await addOrgWorkspaceMember(db, {
       installationId: 42,
       githubUserId: "222",
-      role: "admin",
-      nowIso: now(4),
+      nowIso: now(3),
       updatedBy: "admin-111",
     })
+    await setOrgWorkspaceRole(
+      db,
+      withRosterSnapshot(
+        {
+          installationId: 42,
+          githubUserId: "222",
+          role: "admin" as const,
+          nowIso: now(4),
+          updatedBy: "admin-111",
+        },
+        ["111", "222"],
+      ),
+    )
 
     const results = await Promise.all(
       ["111", "222"].map((githubUserId, index) =>
-        setOrgWorkspaceRole(db, {
-          installationId: 42,
-          githubUserId,
-          role: "member",
-          nowIso: now(5 + index),
-          updatedBy: "race",
-        }),
+        setOrgWorkspaceRole(
+          db,
+          withRosterSnapshot(
+            {
+              installationId: 42,
+              githubUserId,
+              role: "member" as const,
+              nowIso: now(5 + index),
+              updatedBy: "race",
+            },
+            ["111", "222"],
+          ),
+        ),
       ),
     )
     expect(results.filter((result) => result.status === "updated")).toHaveLength(1)
@@ -263,6 +596,7 @@ describe("D1 organization workspace access store", () => {
         login: "Renamed-User",
         nowIso: now(3),
         updatedBy: "owner",
+        rosterSnapshot: TEST_ROSTER,
       }),
     ).resolves.toEqual({ status: "removed" })
 
@@ -314,6 +648,7 @@ describe("D1 organization workspace access store", () => {
       login: "member",
       nowIso: now(3),
       updatedBy: "owner",
+      rosterSnapshot: TEST_ROSTER,
     } as const
 
     await expect(removeOrgWorkspaceAccess(db, removal)).resolves.toEqual({ status: "removed" })
@@ -349,6 +684,7 @@ describe("D1 organization workspace access store", () => {
       login: "member",
       nowIso: now(4),
       updatedBy: "owner",
+      rosterSnapshot: TEST_ROSTER,
     })
 
     await expect(readOrgWorkspaceAccess(db, 42, "222")).resolves.toMatchObject({ revokedAt: now(4) })
@@ -368,6 +704,7 @@ describe("D1 organization workspace access store", () => {
       login: "octocat",
       nowIso: now(3),
       updatedBy: "owner",
+      rosterSnapshot: TEST_ROSTER,
     })
 
     const recovered = await recoverOrgWorkspaceAdmin(db, {

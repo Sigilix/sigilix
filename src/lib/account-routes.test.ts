@@ -5,18 +5,18 @@
 // (returns ONLY the caller's data), POST /v1/account/logout-all (revokes every
 // session the caller holds, and nobody else's).
 
-import { describe, it, expect, beforeEach } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import worker from "@/src/index"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { tryHandleAccountRoute } from "@/src/lib/account-routes"
 import { purgeUserAccount, subjectFromSession } from "@/src/lib/account-store"
-import { insertApiKey, linkAccountTenant } from "@/src/lib/api-key-store"
-import { sha256Hex } from "@/src/lib/auth-bearer"
+import { seedAccount, seedLiveIdentity } from "./account-routes.test-helpers"
 import type { SessionRecord } from "@/src/lib/auth-session"
 import type { Env } from "@/src/shared/types/env"
 
 const SESSION_COOKIE = "__Host-sigilix_session"
+const TEST_PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----\nMA==\n-----END PRIVATE KEY-----"
 
 function migration(name: string): string {
   return readFileSync(new URL(`../../migrations/${name}`, import.meta.url), "utf8")
@@ -226,48 +226,12 @@ async function seedOrganizationAppMemory(db: D1Database): Promise<void> {
     .run()
 }
 
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
+
 /** Seed a full account footprint for a GitHub user (identity, profile, tenant, key, usage). */
-async function seedAccount(
-  db: D1Database,
-  args: { userId: string; githubUserId: string; login: string; email?: string },
-): Promise<void> {
-  const now = "2026-01-01T00:00:00Z"
-  await db
-    .prepare(
-      "INSERT INTO user_identity (user_id, github_user_id, email, email_verified, name, providers, created_at, last_login_at) VALUES (?, ?, ?, 0, ?, ?, ?, ?)",
-    )
-    .bind(args.userId, args.githubUserId, args.email ?? null, args.login, JSON.stringify(["github"]), now, now)
-    .run()
-  await db
-    .prepare("INSERT INTO user_credential (user_id, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)")
-    .bind(args.userId, "pbkdf2-sha256$1$x$y", now, now)
-    .run()
-  await db
-    .prepare(
-      "INSERT INTO user_profile (github_user_id, display_name, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(Number(args.githubUserId), args.login, '{"theme":"dark"}', now, now)
-    .run()
-  await linkAccountTenant(db, { githubUserId: args.githubUserId, installationId: 42, role: "owner", nowIso: now })
-  await insertApiKey(db, {
-    id: `key-${args.userId}`,
-    keyHash: await sha256Hex(`plain-${args.userId}`),
-    installationId: 42,
-    createdBy: args.githubUserId,
-    nowIso: now,
-    name: "laptop",
-  })
-  await db
-    .prepare("INSERT INTO usage_events (meter, installation_id, user_key, surface, created_at) VALUES (?, ?, ?, ?, ?)")
-    .bind("coding_agent", 42, `gh:${args.githubUserId}`, "cli", now)
-    .run()
-  await db
-    .prepare(
-      "INSERT INTO email_verification_token (token_hash, user_id, email, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(`tok-${args.userId}`, args.userId, args.email ?? "x@y.com", now, "2099-01-01T00:00:00Z")
-    .run()
-}
 
 describe("DELETE /v1/account", () => {
   let env: Env
@@ -339,12 +303,14 @@ describe("DELETE /v1/account", () => {
     )
 
     expect(res?.status).toBe(401)
-    expect(res?.headers.get("set-cookie")).toContain("__Host-sigilix_session=")
+    expect(res?.headers.get("set-cookie")).toBeNull()
+    expect(await res?.json()).toEqual({ error: "unauthenticated" })
+    expect(kv._store.has("auth_session:mismatch")).toBe(false)
     expect(await db.prepare("SELECT user_id FROM user_identity WHERE user_id = 'user-a'").first()).not.toBeNull()
     expect(await db.prepare("SELECT user_id FROM user_identity WHERE user_id = 'user-b'").first()).not.toBeNull()
   })
 
-  it("requires reauthentication before a legacy session can delete an account", async () => {
+  it("rejects and revokes a legacy session before account deletion", async () => {
     await kv.put("auth_session:legacy-delete", JSON.stringify(legacySessionRecord()))
 
     const res = await worker.fetch(
@@ -358,8 +324,8 @@ describe("DELETE /v1/account", () => {
     )
 
     expect(res.status).toBe(401)
-    expect(res.headers.get("set-cookie")).toContain("__Host-sigilix_session=")
-    await expect(res.json()).resolves.toEqual({ error: "reauthentication_required" })
+    expect(res.headers.get("set-cookie")).toBeNull()
+    await expect(res.json()).resolves.toEqual({ error: "unauthenticated" })
     expect(kv._store.has("auth_session:legacy-delete")).toBe(false)
     await expect(
       db.prepare("SELECT user_id FROM user_identity WHERE user_id = 'user-a'").first(),
@@ -428,7 +394,7 @@ describe("DELETE /v1/account", () => {
     await seedManagedAccess(db, {
       installationId: 84,
       githubUserId: "111",
-      role: "admin",
+      role: "member",
       assigned: true,
       login: "octocat-renamed",
     })
@@ -506,6 +472,30 @@ describe("DELETE /v1/account", () => {
       login: "octocat",
     })
     await seedSession(kv, "last-admin")
+    env.GITHUB_APP_ID = "123"
+    env.GITHUB_PRIVATE_KEY = TEST_PRIVATE_KEY
+    await kv.put(
+      "gh-installation-token:42",
+      JSON.stringify({ token: "ghs_42", expiresAt: Date.now() + 60 * 60 * 1000 }),
+    )
+    vi.spyOn(crypto.subtle, "importKey").mockResolvedValue({} as CryptoKey)
+    vi.spyOn(crypto.subtle, "sign").mockResolvedValue(new Uint8Array([1]).buffer)
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === "https://api.github.com/app/installations/42") {
+          return new Response(
+            JSON.stringify({ id: 42, account: { id: 9001, login: "live-org", type: "Organization" } }),
+            { status: 200 },
+          )
+        }
+        if (url.startsWith("https://api.github.com/orgs/live-org/members?")) {
+          return new Response(JSON.stringify([{ id: 111, login: "octocat" }]), { status: 200 })
+        }
+        throw new Error(`unexpected GitHub request: ${url}`)
+      }),
+    )
 
     const res = await worker.fetch(
       req("https://x/v1/account", "last-admin", {
@@ -843,6 +833,21 @@ describe("GET /v1/account/export", () => {
     expect(res?.status).toBe(401)
   })
 
+  it("400 on any unexpected query parameter", async () => {
+    const { env, db, kv } = await makeEnv()
+    await seedAccount(db, { userId: "user-a", githubUserId: "111", login: "octocat" })
+    await seedSession(kv, "s1", { userId: "user-a", githubUserId: 111, login: "octocat" })
+
+    const res = await tryHandleAccountRoute(
+      req("https://x/v1/account/export?foo=bar", "s1"),
+      env,
+      ctx,
+      new URL("https://x/v1/account/export?foo=bar"),
+    )
+    expect(res?.status).toBe(400)
+    await expect(res?.json()).resolves.toEqual({ error: "unexpected_query_parameter" })
+  })
+
   it("401 without exporting either identity when durable identity disagrees with the session", async () => {
     const { env, db, kv } = await makeEnv()
     await seedAccount(db, { userId: "user-a", githubUserId: "111", login: "octocat" })
@@ -857,11 +862,12 @@ describe("GET /v1/account/export", () => {
     )
 
     expect(res?.status).toBe(401)
-    expect(res?.headers.get("set-cookie")).toContain("__Host-sigilix_session=")
+    expect(res?.headers.get("set-cookie")).toBeNull()
     expect(await res?.json()).toEqual({ error: "unauthenticated" })
+    expect(kv._store.has("auth_session:mismatch")).toBe(false)
   })
 
-  it("requires reauthentication before a legacy GitHub session can export an account", async () => {
+  it("rejects and revokes a legacy GitHub session before account export", async () => {
     const { env, db, kv } = await makeEnv()
     await seedAccount(db, { userId: "user-a", githubUserId: "111", login: "octocat" })
     await seedPersonalAppMemory(db, { id: "appmem_legacy", userId: "user-a", content: "Legacy session memory." })
@@ -874,15 +880,17 @@ describe("GET /v1/account/export", () => {
       new URL("https://x/v1/account/export"),
     )
     expect(res?.status).toBe(401)
-    expect(res?.headers.get("set-cookie")).toContain("__Host-sigilix_session=")
-    await expect(res?.json()).resolves.toEqual({ error: "reauthentication_required" })
+    expect(res?.headers.get("set-cookie")).toBeNull()
+    await expect(res?.json()).resolves.toEqual({ error: "unauthenticated" })
     expect(kv._store.has("auth_session:legacy")).toBe(false)
   })
 })
 
 describe("POST /v1/account/logout-all", () => {
   it("revokes every session the caller holds — and nobody else's", async () => {
-    const { env, kv } = await makeEnv()
+    const { env, db, kv } = await makeEnv()
+    await seedLiveIdentity(db, "user-a", "111")
+    await seedLiveIdentity(db, "user-b", "222")
     // three sessions for user-a (across devices), one for a different user.
     await seedSession(kv, "a1", { userId: "user-a", githubUserId: 111 })
     await seedSession(kv, "a2", { userId: "user-a", githubUserId: 111 })
@@ -923,7 +931,8 @@ describe("POST /v1/account/logout-all", () => {
   })
 
   it("415 without application/json (CSRF guard)", async () => {
-    const { env, kv } = await makeEnv()
+    const { env, db, kv } = await makeEnv()
+    await seedLiveIdentity(db, "user-a", "111")
     await seedSession(kv, "a1")
     const res = await tryHandleAccountRoute(
       req("https://x/v1/account/logout-all", "a1", {

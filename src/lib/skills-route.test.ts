@@ -13,6 +13,10 @@ const MIGRATION_SQL = readFileSync(
   new URL("../../migrations/0017_create_org_skill_policy.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_IDENTITY_SQL = readFileSync(
+  new URL("../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
 
 function kv(): KVNamespace {
   const values = new Map<string, string>()
@@ -39,6 +43,7 @@ async function session(state: KVNamespace): Promise<void> {
   await createSession({
     kv: state,
     sessionId: "sess-1",
+    userId: "user-111",
     login: "octocat",
     githubUserId: 111,
     accessToken: "ghu_111",
@@ -95,7 +100,15 @@ describe("skills route", () => {
   beforeEach(async () => {
     state = kv()
     db = makeD1()
+    await db.exec(MIGRATION_IDENTITY_SQL)
     await db.exec(MIGRATION_SQL)
+    await db
+      .prepare(
+        `INSERT INTO user_identity
+         (user_id, github_user_id, providers, created_at, last_login_at)
+         VALUES ('user-111', '111', '["github"]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+      )
+      .run()
     env = environment(state, db)
     await session(state)
     adminFor(42)

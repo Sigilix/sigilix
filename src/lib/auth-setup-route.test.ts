@@ -37,12 +37,24 @@ function makeKV(): KVNamespace {
 }
 
 /** Seed a real encrypted session record (so /setup can decrypt the access token). */
-async function seedSession(kv: KVNamespace, sessionId: string, githubUserId: number): Promise<void> {
+async function seedSession(kv: KVNamespace, sessionId: string, githubUserId: number, db?: D1Database): Promise<void> {
+  const userId = `test-user-${githubUserId}`
+  if (db) {
+    const now = "2026-07-15T00:00:00.000Z"
+    await db
+      .prepare(
+        "INSERT OR IGNORE INTO user_identity" +
+          " (user_id, github_user_id, providers, created_at, last_login_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .bind(userId, String(githubUserId), JSON.stringify(["github"]), now, now)
+      .run()
+  }
   await createSession({
     kv,
     sessionId,
     login: "octocat",
     githubUserId,
+    userId,
     accessToken: "ghu_test_token",
     encryptionKeyB64url: ENC_KEY,
   })
@@ -83,6 +95,12 @@ function stubUserInstallations(ids: number[], options: { liveRole?: "admin" | "m
           headers: { "content-type": "application/json" },
         })
       }
+      if (url.startsWith("https://api.github.com/orgs/org-42/members?")) {
+        return new Response(JSON.stringify([{ id: 111, login: "octocat" }]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
       throw new Error(`unexpected fetch: ${url}`)
     }),
   )
@@ -102,6 +120,10 @@ function extractState(location: string): string {
 
 const MIGRATION_SQL = readFileSync(
   new URL("../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
+  "utf8",
+)
+const IDENTITY_MIGRATION_SQL = readFileSync(
+  new URL("../../migrations/0006_create_user_identity.sql", import.meta.url),
   "utf8",
 )
 const ACCESS_MIGRATION_SQL = readFileSync(
@@ -146,12 +168,13 @@ describe("handleSetupRoute (GET /setup)", () => {
   beforeEach(async () => {
     db = makeD1()
     await db.exec(MIGRATION_SQL)
+    await db.exec(IDENTITY_MIGRATION_SQL)
     kv = makeKV()
     env = { OPENCLAW_STATE: kv, SIGILIX_PLATFORM_DB: db, OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY } as unknown as Env
   })
 
   async function mintState(githubUserId: number): Promise<string> {
-    await seedSession(kv, "sess-1", githubUserId)
+    await seedSession(kv, "sess-1", githubUserId, db)
     const res = await handleInstallRedirect(reqWithSession("https://x/auth/install-redirect", "sess-1"), env)
     return extractState(res.headers.get("location")!)
   }
@@ -159,6 +182,12 @@ describe("handleSetupRoute (GET /setup)", () => {
   async function enableManagedMembership(): Promise<void> {
     await db.exec(ACCESS_MIGRATION_SQL)
     env.OPENCLAW_ORG_MEMBERSHIP_MODE = "on"
+    env.GITHUB_APP_ID = "123"
+    env.GITHUB_PRIVATE_KEY = "cached-token"
+    await kv.put(
+      "gh-installation-token:42",
+      JSON.stringify({ token: "ghs_roster", expiresAt: Date.now() + 60 * 60 * 1000 }),
+    )
   }
 
   async function seedStoredAccess(options: {
@@ -207,7 +236,7 @@ describe("handleSetupRoute (GET /setup)", () => {
   it("400 when state is missing", async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal("fetch", fetchMock)
-    await seedSession(kv, "sess-1", 111)
+    await seedSession(kv, "sess-1", 111, db)
     const res = await handleSetupRoute(reqWithSession("https://x/setup?installation_id=42", "sess-1"), env)
     expect(res.status).toBe(400)
     expect(fetchMock).not.toHaveBeenCalled()
@@ -225,7 +254,7 @@ describe("handleSetupRoute (GET /setup)", () => {
   })
 
   it("400 on an unknown/expired state (and does not 500 on a second submission)", async () => {
-    await seedSession(kv, "sess-1", 111)
+    await seedSession(kv, "sess-1", 111, db)
     const res = await handleSetupRoute(
       reqWithSession("https://x/setup?installation_id=42&state=does-not-exist", "sess-1"),
       env,
@@ -251,7 +280,7 @@ describe("handleSetupRoute (GET /setup)", () => {
 
   it("400 when the nonce belongs to a different session's githubUserId", async () => {
     const state = await mintState(111)
-    await seedSession(kv, "sess-2", 222) // a different user reusing/guessing the nonce
+    await seedSession(kv, "sess-2", 222, db) // a different user reusing/guessing the nonce
     const res = await handleSetupRoute(
       reqWithSession(`https://x/setup?installation_id=42&state=${state}&setup_action=install`, "sess-2"),
       env,
@@ -409,7 +438,7 @@ describe("handleSetupRoute (GET /setup)", () => {
       })
     })
 
-    it("denies a later live GitHub admin who is absent from the managed roster", async () => {
+    it("bootstraps a later live GitHub admin when the stored admin has left the exact roster", async () => {
       await enableManagedMembership()
       await seedStoredAccess({ githubUserId: "222", role: "admin" })
       stubUserInstallations([42], { liveRole: "admin" })
@@ -417,11 +446,11 @@ describe("handleSetupRoute (GET /setup)", () => {
 
       const res = await dispatchSetup(state)
 
-      expect(res.status).toBe(403)
-      await expect(db.prepare("SELECT COUNT(*) AS n FROM api_key").first()).resolves.toEqual({ n: 0 })
+      expect(res.status).toBe(200)
+      await expect(db.prepare("SELECT COUNT(*) AS n FROM api_key").first()).resolves.toEqual({ n: 1 })
       await expect(
-        db.prepare("SELECT COUNT(*) AS n FROM org_workspace_access WHERE github_user_id = '111'").first(),
-      ).resolves.toEqual({ n: 0 })
+        db.prepare("SELECT role, revoked_at FROM org_workspace_access WHERE github_user_id = '111'").first(),
+      ).resolves.toEqual({ role: "admin", revoked_at: null })
     })
   })
 

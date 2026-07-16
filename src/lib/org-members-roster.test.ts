@@ -5,7 +5,11 @@
 // how the result is shaped/reasoned.
 
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { fetchInstallationRoster } from "@/src/lib/org-members-roster"
+import {
+  createCompleteInstallationRosterSnapshot,
+  fetchInstallationRoster,
+  type RosterResult,
+} from "@/src/lib/org-members-roster"
 import type { Env } from "@/src/shared/types/env"
 
 const listOrgMembers = vi.fn()
@@ -21,6 +25,46 @@ const appEnv = { OPENCLAW_STATE: KV, GITHUB_APP_ID: "123", GITHUB_PRIVATE_KEY: "
 
 afterEach(() => {
   vi.clearAllMocks()
+})
+
+function roster(source: RosterResult["source"], githubUserIds: string[], complete = true): RosterResult {
+  return {
+    members: githubUserIds.map((githubUserId) => ({ githubUserId, login: `user-${githubUserId}`, avatarUrl: "" })),
+    complete,
+    source,
+  }
+}
+
+describe("createCompleteInstallationRosterSnapshot", () => {
+  it.each(["org", "collaborators"] as const)("canonicalizes a complete %s roster", (source) => {
+    expect(createCompleteInstallationRosterSnapshot(roster(source, ["111", "11", "111"]))).toEqual({
+      memberIds: ["11", "111"],
+      sqlTokenSet: "|11|111|",
+    })
+  })
+
+  it("represents an empty complete roster without a delimiter token", () => {
+    expect(createCompleteInstallationRosterSnapshot(roster("org", []))).toEqual({
+      memberIds: [],
+      sqlTokenSet: "",
+    })
+  })
+
+  it.each([roster("org", ["11"], false), roster("none", ["11"])])(
+    "rejects an incomplete or unavailable roster",
+    (result) => {
+      expect(createCompleteInstallationRosterSnapshot(result)).toBeNull()
+    },
+  )
+
+  it.each(["0", "01", String(Number.MAX_SAFE_INTEGER + 1)])("rejects invalid or unsafe member id %s", (id) => {
+    expect(createCompleteInstallationRosterSnapshot(roster("org", [id]))).toBeNull()
+  })
+
+  it("rejects more than 5000 unique member ids", () => {
+    const ids = Array.from({ length: 5001 }, (_, index) => String(index + 1))
+    expect(createCompleteInstallationRosterSnapshot(roster("org", ids))).toBeNull()
+  })
 })
 
 describe("fetchInstallationRoster", () => {

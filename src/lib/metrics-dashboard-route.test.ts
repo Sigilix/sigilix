@@ -34,6 +34,10 @@ const MIGRATION_USAGE_EVENTS_SQL = readFileSync(
   new URL("../../migrations/0004_create_usage_events.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_IDENTITY_SQL = readFileSync(
+  new URL("../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
 
 /** KV stub: string store + `get(key,"json")` parse + a single-page `list`. */
 function makeKV(): KVNamespace {
@@ -66,6 +70,14 @@ async function makeDb(): Promise<D1Database> {
   await db.exec(MIGRATION_USAGE_SQL)
   await db.exec(MIGRATION_API_KEY_SQL)
   await db.exec(MIGRATION_USAGE_EVENTS_SQL)
+  await db.exec(MIGRATION_IDENTITY_SQL)
+  await db
+    .prepare(
+      `INSERT INTO user_identity
+       (user_id, github_user_id, providers, created_at, last_login_at)
+       VALUES ('metrics-user-111', '111', '["github"]', 't', 't')`,
+    )
+    .run()
   return db
 }
 
@@ -89,6 +101,7 @@ async function seedSession(kv: KVNamespace, sessionId: string, login: string, gi
     sessionId,
     login,
     githubUserId,
+    userId: `metrics-user-${githubUserId}`,
     accessToken: "ghu_test_token",
     encryptionKeyB64url: ENC_KEY,
   })
@@ -427,7 +440,14 @@ describe("handleMetricsDashboardRoute (GET /v1/metrics/dashboard)", () => {
     const kv = makeKV()
     await seedSession(kv, "sess-1", "octocat", 111)
     const brokenDb = {
-      prepare() {
+      prepare(sql: string) {
+        if (sql === "SELECT user_id, github_user_id FROM user_identity WHERE user_id = ?") {
+          return {
+            bind() {
+              return { first: async () => ({ user_id: "metrics-user-111", github_user_id: "111" }) }
+            },
+          }
+        }
         throw new Error("simulated D1 error")
       },
     } as unknown as D1Database

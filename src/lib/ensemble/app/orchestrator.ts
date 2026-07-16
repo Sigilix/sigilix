@@ -1,7 +1,6 @@
 // SIG-318 (PR 12h): thin PR-review ensemble coordinator. Phase implementations,
 // public contracts, and helpers live in sibling modules to keep this file under
 // the 1k-line cap. Dependency rule: app -> domain/leaf/adapter, never the shim.
-
 import type { CheckRunAnnotation } from "@/src/shared/types/github"
 import { type SkipNoticeReason } from "@/src/lib/review-comment-fallback"
 import { type SpecialistRole } from "@/src/lib/ensemble-router"
@@ -22,6 +21,7 @@ import {
   maybeEmptyDeltaSkip,
   dryRunResult,
   applyCooldownFromPhase,
+  capturePrAuthorTelemetry,
 } from "./orchestrator-helpers"
 import { adjudicateFindings } from "./adjudicate"
 import { settleShadowBakeoff, type ShadowBakeoffState, type ProdSpecialistSnapshot } from "./shadow-settle"
@@ -175,7 +175,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
 
     // ─── Stale-head guard #1 ───────────────────────────────────
     const meta = await client.getPullRequest(owner, repo, prNumber)
-    if (meta.user?.login) telemetry.authorLogin = meta.user.login // SIG-343 Task 8: per-developer attribution
+    capturePrAuthorTelemetry(telemetry, args.scmProvider, meta.user)
     if (meta.head?.sha && meta.head.sha !== headSha && !args.dryRun) {
       // CodeRabbit catch (phase-end): do NOT set `fellBackToPhase3` — the dispatcher
       // short-circuits Phase 3 on `stale_head`; leaving it true overcounts saves.

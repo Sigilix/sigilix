@@ -24,6 +24,10 @@ import {
   listOrgMembers,
   type GitHubMember,
 } from "@/src/shared/adapters/github/github-app"
+import {
+  canonicalizeInstallationRosterMemberIds,
+  type CompleteInstallationRosterSnapshot,
+} from "@/src/features/org-membership"
 import type { Env } from "@/src/shared/types/env"
 
 export interface RosterResult {
@@ -36,6 +40,19 @@ export interface RosterResult {
   /** A short machine reason when the roster is empty/partial (for the caller to log). */
   reason?: string
 }
+
+/**
+ * Convert a whole successful listing into the only roster shape accepted by
+ * managed-access writes. Partial/failed listings never produce a snapshot.
+ */
+export function createCompleteInstallationRosterSnapshot(
+  result: RosterResult,
+): CompleteInstallationRosterSnapshot | null {
+  if (!result.complete || result.source === "none") return null
+  return canonicalizeInstallationRosterMemberIds(result.members.map((member) => member.githubUserId))
+}
+
+export type { CompleteInstallationRosterSnapshot } from "@/src/features/org-membership"
 
 /**
  * Fetch the installation's GitHub member roster. See the file header for the

@@ -46,12 +46,26 @@ export type StoppedReason =
   | "timeout"
   | "error";
 
+/**
+ * SIG-545 B2 diagnostics — surfaced up to the admin run record so the grounding
+ * plugin is observable (was it loaded? did the model call retrieve_codebase?)
+ * without container-log access. Bounded + Bearer-redacted; admin-gated.
+ */
+export interface RunDiagnostics {
+  /** How many times the model invoked the grounding `retrieve_codebase` tool. */
+  retrieveCodebaseCalls: number;
+  /** Bounded tail of the CLI's stderr (Bearer tokens redacted). Empty when clean. */
+  stderrTail: string;
+}
+
 export interface EditLoopResult {
   /** true iff at least one write_file call succeeded. */
   changed: boolean;
   modelCalls: number;
   tokens: number;
   stoppedReason: StoppedReason;
+  /** Optional run diagnostics (full CLI engine only). */
+  diag?: RunDiagnostics;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────

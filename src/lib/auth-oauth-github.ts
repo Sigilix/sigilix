@@ -381,12 +381,11 @@ export async function handleGitHubAuthCallback(request: Request, env: AuthOauthE
     })
   }
 
-  // 5. Persist the real user record (sig-user-identity). BEST-EFFORT: the login
-  //    has already succeeded, so a D1 fault or an unmigrated/absent binding must
-  //    NOT block sign-in — upsertGithubIdentity swallows + logs its own errors
-  //    and returns null. When it succeeds we thread the surrogate user_id +
-  //    resolved email onto the session so the portal can read a stable account
-  //    key and know whether to prompt for a missing email (email-capture).
+  // 5. Persist the real user record (sig-user-identity). An absent binding keeps
+  //    the legacy unprovisioned-deployment behavior. Once D1 is bound, however,
+  //    durable identity is the session authority: a failed upsert must stop
+  //    before session minting or the next authenticated request would receive a
+  //    session that can never prove its account exists.
   const displayName = typeof user.name === "string" && user.name.trim() ? user.name.trim() : undefined
   const avatarUrl = typeof user.avatar_url === "string" && user.avatar_url ? user.avatar_url : undefined
   let identityUserId: string | undefined
@@ -413,6 +412,17 @@ export async function handleGitHubAuthCallback(request: Request, env: AuthOauthE
     if (identity) {
       identityUserId = identity.userId
       identityEmail = identity.email ?? undefined
+    } else {
+      await writeAuthEvent(env.OPENCLAW_STATE, {
+        kind: "callback_failed",
+        provider: "github",
+        reason: "identity_unavailable",
+        ts: Date.now(),
+      })
+      return new Response("identity_unavailable\n", {
+        status: 503,
+        headers: { "set-cookie": clearStateCookie() },
+      })
     }
 
     // 5b. Always link the user to every org tenant they belong to
@@ -541,7 +551,7 @@ export type AuthEvent =
   | {
       kind: "callback_failed"
       provider: "github"
-      reason: "state_mismatch" | "state_invalid" | "code_exchange_failed" | "user_fetch_failed"
+      reason: "state_mismatch" | "state_invalid" | "code_exchange_failed" | "user_fetch_failed" | "identity_unavailable"
       ts: number
     }
   | { kind: "logout"; sessionId: string; ts: number }

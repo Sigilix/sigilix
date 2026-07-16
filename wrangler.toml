@@ -131,29 +131,22 @@ index_name = "boreas-agent-memory"
 # Vectorize upsert; PR-review retrieval queries it in parallel with the
 # vector index and fuses via RRF — all gated behind OPENCLAW_RETRIEVAL_HYBRID.
 #
-# COMMENTED OUT until the D1 database is provisioned: the CF Workers Builds CI
-# runs `wrangler deploy` on every push, and a binding with an empty
-# `database_id` can fail that deploy. The code treats OPENCLAW_LEXICAL_INDEX as
-# OPTIONAL — when the binding is absent, the indexer dual-write and the hybrid
-# read both no-op, so hybrid retrieval simply stays dark with zero deploy risk.
-#
-# To enable: run `wrangler d1 create sigilix-lexical-index`, uncomment the
-# block below, paste the returned database_id, deploy (the indexer starts
-# populating the FTS5 mirror — schema is created lazily, no migration step),
-# then flip OPENCLAW_RETRIEVAL_HYBRID=on once there's a corpus to query.
-#
-# [[d1_databases]]
-# binding = "OPENCLAW_LEXICAL_INDEX"
-# database_name = "sigilix-lexical-index"
-# database_id = ""  # set after `wrangler d1 create sigilix-lexical-index`
-#
-# sig-worker-debrand-openclaw: when this is enabled, ALSO add a SIGILIX_ alias
-# binding (SIGILIX_LEXICAL_INDEX) pointing at the same database_id, matching the
-# dual-binding pattern used for the KV/Vectorize/Queue bindings above.
-# [[d1_databases]]
-# binding = "SIGILIX_LEXICAL_INDEX"
-# database_name = "sigilix-lexical-index"
-# database_id = ""
+# SIG-133: ENABLED. D1 provisioned via `wrangler d1 create sigilix-lexical-index`.
+# Schema is created lazily in code (ensureLexicalSchema) — no migration step, so
+# Workers Builds `wrangler deploy` applies the binding with zero infra-job dep.
+# The indexer dual-writes the FTS5 mirror on (re)index; the hybrid read fuses it
+# with the vector leg via RRF once OPENCLAW_RETRIEVAL_HYBRID=on (see [vars]).
+# Dual binding (OPENCLAW_ + SIGILIX_ alias) points at the SAME database_id,
+# matching the KV/Vectorize/Queue pattern above.
+[[d1_databases]]
+binding = "OPENCLAW_LEXICAL_INDEX"
+database_name = "sigilix-lexical-index"
+database_id = "f5290fcd-02a6-4ed3-8efc-58e51b5c9fe4"
+
+[[d1_databases]]
+binding = "SIGILIX_LEXICAL_INDEX"
+database_name = "sigilix-lexical-index"
+database_id = "f5290fcd-02a6-4ed3-8efc-58e51b5c9fe4"
 
 # SIG-343 PR C: platform store (tenant registry + repo registry + usage ledger).
 # Applied via `wrangler d1 migrations apply sigilix-platform` (NOT auto on deploy).
@@ -494,6 +487,14 @@ new_sqlite_classes = ["AgentMcpCapabilityDO"]
 # decision after watching the digest. Adding this here does NOT wipe the
 # dashboard-set memory flags (Workers Builds preserves them — proven by #935/#938).
 OPENCLAW_MEMORY_CONSOLIDATE = "shadow"
+
+# SIG-133: hybrid retrieval (vector + BM25/FTS5, fused via RRF). "on" activates
+# the lexical leg for repos whose OPENCLAW_LEXICAL_INDEX corpus is populated (via
+# (re)index); repos not yet re-indexed have an empty lexical table and stay
+# vector-only (soft-empty → identical to today), so this is a safe gradual
+# rollout. Read raw as env.OPENCLAW_RETRIEVAL_HYBRID by hybridRetrievalEnabled;
+# also requires the OPENCLAW_LEXICAL_INDEX D1 binding (provisioned above).
+OPENCLAW_RETRIEVAL_HYBRID = "on"
 
 # SIG-234 (2026-05-26): bake-off DISABLED because production now runs
 # the lineup that the bake-off was validating. The bake-off candidate
@@ -1525,6 +1526,13 @@ SIGILIX_AGENT_EVENTS_ENDPOINT = "https://api.sigilix.ai"
 # short-lived opaque capability for this machine MCP endpoint; provider OAuth
 # credentials remain in the Worker-owned vault.
 SIGILIX_AGENT_MCP_ENDPOINT = "https://api.sigilix.ai"
+
+# SIG-545 B2: the Worker's OWN public base for the container's sigilix-grounding
+# plugin (calls {this}/v1/context + /v1/memory). Bearer = OPENCLAW_SIGILIX_API_KEY
+# (already a set secret). Unset → the full agent runs BLIND (never grounds); set →
+# the runner's full CLI agent grounds on the hybrid retrieval path (SIG-133) and
+# multi-hops via retrieve_codebase/read_file_lines. Revertible: remove this line.
+OPENCLAW_AGENT_GROUNDING_ENDPOINT = "https://api.sigilix.ai"
 
 # Public origin used to build the Linear OAuth redirect_uri. MUST be the same
 # site as the portal (app.sigilix.ai) so the callback carries the portal session

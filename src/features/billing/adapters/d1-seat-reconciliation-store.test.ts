@@ -81,6 +81,7 @@ describe("D1 seat reconciliation store", () => {
     await db.exec(migration("0020_create_stripe_seat_reconciliation.sql"))
     await db.exec(migration("0023_add_org_seat_billing_operation_context.sql"))
     await db.exec(migration("0028_create_org_workspace_seat_assignment.sql"))
+    await db.exec(migration("0032_extend_org_seat_billing_operation_activity_identity.sql"))
     await db
       .prepare("INSERT INTO tenant (installation_id, tier, created_at, updated_at) VALUES (?, 'teams', 't', 't')")
       .bind(42)

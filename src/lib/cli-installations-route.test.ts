@@ -54,13 +54,14 @@ function requestWithSession(path: string, sessionId: string | null, init?: Reque
 async function seedSession(
   kv: KVNamespace,
   sessionId: string,
-  options: { githubUserId?: number; encryptionKey?: string; login?: string } = {},
+  options: { githubUserId?: number; userId?: string; encryptionKey?: string; login?: string } = {},
 ): Promise<void> {
   await createSession({
     kv,
     sessionId,
     login: options.login ?? "octocat",
     ...(options.githubUserId !== undefined ? { githubUserId: options.githubUserId } : {}),
+    ...(options.userId !== undefined ? { userId: options.userId } : {}),
     accessToken: "ghu_test_token",
     encryptionKeyB64url: options.encryptionKey ?? ENC_KEY,
   })
@@ -126,15 +127,17 @@ async function applyManagedOrgSchema(db: D1Database): Promise<void> {
   }
 }
 
-async function seedGithubIdentity(db: D1Database, githubUserId: string): Promise<void> {
+async function seedGithubIdentity(db: D1Database, githubUserId: string): Promise<string> {
+  const userId = crypto.randomUUID()
   const now = "2026-07-13T00:00:00.000Z"
   await db
     .prepare(
       "INSERT INTO user_identity" +
         " (user_id, github_user_id, providers, created_at, last_login_at) VALUES (?, ?, ?, ?, ?)",
     )
-    .bind(crypto.randomUUID(), githubUserId, JSON.stringify(["github"]), now, now)
+    .bind(userId, githubUserId, JSON.stringify(["github"]), now, now)
     .run()
+  return userId
 }
 
 async function seedStoredAccess(db: D1Database, installationId: number, githubUserId: string): Promise<void> {
@@ -391,9 +394,9 @@ describe("CLI installation picker through worker.fetch", () => {
   it("routes CORS/preflight and authorizes the explicitly selected second organization end to end", async () => {
     const db = makeD1()
     await applyCliSchema(db)
-    await seedGithubIdentity(db, "111")
+    const userId = await seedGithubIdentity(db, "111")
     const kv = makeKV()
-    await seedSession(kv, "sess-e2e", { githubUserId: 111 })
+    await seedSession(kv, "sess-e2e", { githubUserId: 111, userId })
     const installations: Installation[] = [
       { id: 42, account: { login: "first-org", type: "Organization" } },
       { id: 84, account: { login: "second-org", type: "Organization" } },
@@ -453,10 +456,10 @@ describe("CLI installation picker through worker.fetch", () => {
     const db = makeD1()
     await applyCliSchema(db)
     await applyManagedOrgSchema(db)
-    await seedGithubIdentity(db, "111")
+    const userId = await seedGithubIdentity(db, "111")
     await seedStoredAccess(db, 84, "111")
     const kv = makeKV()
-    await seedSession(kv, "sess-race", { githubUserId: 111 })
+    await seedSession(kv, "sess-race", { githubUserId: 111, userId })
     stubGitHubPages([[{ id: 84, account: { login: "second-org", type: "Organization" } }]])
     const env = {
       OPENCLAW_STATE: kv,
@@ -476,6 +479,7 @@ describe("CLI installation picker through worker.fetch", () => {
         githubUserId: "111",
         nowIso: "2026-07-13T01:00:00.000Z",
         updatedBy: "test:admin",
+        rosterSnapshot: { memberIds: ["111"], sqlTokenSet: "|111|" },
       }),
     ).resolves.toEqual({ status: "removed" })
 

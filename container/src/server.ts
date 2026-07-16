@@ -17,7 +17,7 @@ import * as path from "node:path";
 
 import { cloneRepo, createBranch, commitAll, pushBranch } from "./git.js";
 import { runEditLoop } from "./agent-loop.js";
-import type { StoppedReason } from "./agent-loop.js";
+import type { RunDiagnostics, StoppedReason } from "./agent-loop.js";
 import { runCliAgent } from "./cli-agent.js";
 import { openPullRequest } from "./github-pr.js";
 import type { AgentMcpConfig } from "./mcp-client.js";
@@ -92,6 +92,8 @@ export interface RunResult {
   modelCalls: number;
   tokens: number;
   stoppedReason: StoppedReason;
+  /** SIG-545 B2 diagnostics (full engine): grounding-tool usage + stderr tail. */
+  diag?: RunDiagnostics;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -183,6 +185,7 @@ export async function runTask(packet: TaskPacket): Promise<RunResult> {
         modelCalls,
         tokens,
         stoppedReason: loopResult.stoppedReason,
+        ...(loopResult.diag ? { diag: loopResult.diag } : {}),
       };
     }
 
@@ -194,6 +197,7 @@ export async function runTask(packet: TaskPacket): Promise<RunResult> {
         modelCalls,
         tokens,
         stoppedReason: loopResult.stoppedReason,
+        ...(loopResult.diag ? { diag: loopResult.diag } : {}),
       };
     }
 
@@ -210,6 +214,7 @@ export async function runTask(packet: TaskPacket): Promise<RunResult> {
         modelCalls,
         tokens,
         stoppedReason: loopResult.stoppedReason,
+        ...(loopResult.diag ? { diag: loopResult.diag } : {}),
       };
     }
 
@@ -247,6 +252,7 @@ export async function runTask(packet: TaskPacket): Promise<RunResult> {
       modelCalls,
       tokens,
       stoppedReason: loopResult.stoppedReason,
+      ...(loopResult.diag ? { diag: loopResult.diag } : {}),
     };
   } catch (err) {
     const rawMsg = err instanceof Error ? err.message : String(err);

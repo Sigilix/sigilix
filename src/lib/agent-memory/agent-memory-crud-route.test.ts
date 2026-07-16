@@ -406,14 +406,16 @@ describe("GET /v1/memory — tenant isolation", () => {
     expect(((await res.json()) as ListResponse).memories).toEqual([])
   })
 
-  it("legacy GitHub session without a stored user id resolves it from user_identity", async () => {
+  it("rejects and revokes a legacy GitHub session without a stored user id", async () => {
     seedSession("legacy-session", 12345)
     stubInstallations([42])
     const res = await handleMemoryListRoute(
       listReq("", null, "__Host-sigilix_session=legacy-session"),
       makeEnv({ OPENCLAW_SESSION_ENCRYPTION_KEY: SESSION_KEY }),
     )
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ error: "unauthorized" })
+    expect(fk.store.has("auth_session:legacy-session")).toBe(false)
   })
 
   it("session whose stored user id disagrees with its GitHub identity fails closed", async () => {
@@ -423,8 +425,9 @@ describe("GET /v1/memory — tenant isolation", () => {
       listReq("", null, "__Host-sigilix_session=mismatched-session"),
       makeEnv({ OPENCLAW_SESSION_ENCRYPTION_KEY: SESSION_KEY }),
     )
-    expect(res.status).toBe(403)
-    expect(await res.json()).toEqual({ error: "memory_identity_unavailable" })
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ error: "unauthorized" })
+    expect(fk.store.has("auth_session:mismatched-session")).toBe(false)
   })
 
   it("uses the trusted server-side session user id when D1 is not bound", async () => {
@@ -729,12 +732,13 @@ describe("POST /v1/memory — auth", () => {
     expect(res.status).toBe(401)
   })
 
-  it("403 when the session's stored user id disagrees with its GitHub identity", async () => {
+  it("401 when the session's stored user id disagrees with its GitHub identity", async () => {
     seedSession("sess-a", 12345, "octocat", "user-2") // 12345 → user-1 in D1
     stubInstallations([42])
     const res = await handleMemoryCreateRoute(createReq({ content: "x" }, COOKIE), SESSION_ENV())
-    expect(res.status).toBe(403)
-    expect(await res.json()).toEqual({ error: "memory_identity_unavailable" })
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ error: "unauthorized" })
+    expect(fk.store.has("auth_session:sess-a")).toBe(false)
   })
 
   it("409 when the session owns no installation (nowhere personal to store it)", async () => {

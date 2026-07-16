@@ -1,7 +1,7 @@
 // auth-oauth-github (identity persistence slice — sig-user-identity): with the
-// identity DB bound, a GitHub login UPSERTS a real user_identity row and threads
-// the surrogate user_id + email onto the session. Complements the existing
-// auth-oauth-github.test.ts (which runs without the DB — best-effort skip).
+// identity DB bound, a GitHub login UPSERTS a real user_identity row before it
+// can mint a session, then threads the surrogate user_id + email onto that
+// session. Complements auth-oauth-github.test.ts and pins the legacy no-D1 path.
 
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
@@ -186,5 +186,45 @@ describe("GitHub callback persists identity on login", () => {
     const sessionKey = [...store.keys()].find((k) => k.startsWith("auth_session:"))!
     const session = JSON.parse(store.get(sessionKey)!)
     expect("email" in session).toBe(false)
+  })
+
+  it("returns 503 and mints no auth session when the bound D1 identity upsert fails", async () => {
+    const brokenDb = {
+      prepare: vi.fn(() => {
+        throw new Error("D1 unavailable")
+      }),
+    } as unknown as ReturnType<typeof makeD1>
+    const { kv, store } = makeKV({ "auth_state:n5": JSON.stringify({ createdAt: Date.now() }) })
+    mockGitHubFetch({ login: "erin", id: 1001, email: "erin@example.com" })
+
+    const res = await handleGitHubAuthCallback(callbackReqFor("n5"), identityEnv(kv, brokenDb))
+
+    expect(res.status).toBe(503)
+    expect(res.headers.getSetCookie().some((cookie) => cookie.startsWith("__Host-sigilix_session="))).toBe(false)
+    expect([...store.keys()].filter((key) => key.startsWith("auth_session:"))).toEqual([])
+  })
+
+  it("keeps the no-D1 callback compatible and still mints its legacy GitHub session", async () => {
+    const { kv, store } = makeKV({ "auth_state:n6": JSON.stringify({ createdAt: Date.now() }) })
+    mockGitHubFetch({ login: "frank", id: 1002, email: "frank@example.com" })
+    const env = {
+      OPENCLAW_STATE: kv,
+      GITHUB_OAUTH_CLIENT_ID: "Iv1.x",
+      GITHUB_OAUTH_CLIENT_SECRET: "s",
+      OPENCLAW_SESSION_ENCRYPTION_KEY: KEY,
+      OPENCLAW_BASE_URL: "https://api.sigilix.ai",
+    } as unknown as Parameters<typeof handleGitHubAuthCallback>[1]
+
+    const res = await handleGitHubAuthCallback(callbackReqFor("n6"), env)
+
+    expect(res.status).toBe(302)
+    expect(res.headers.getSetCookie().some((cookie) => cookie.startsWith("__Host-sigilix_session="))).toBe(true)
+    const sessionKey = [...store.keys()].find((key) => key.startsWith("auth_session:"))
+    expect(sessionKey).toBeTruthy()
+    expect(JSON.parse(store.get(sessionKey!)!)).toMatchObject({
+      login: "frank",
+      githubUserId: 1002,
+      provider: "github",
+    })
   })
 })

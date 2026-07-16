@@ -72,21 +72,26 @@ async function parseAssigned(request: Request): Promise<boolean | null> {
 
 /**
  * Membership proof for a seat target. A successful activity query is enough;
- * otherwise a COMPLETE installed-App roster is authoritative. Any D1/provider
- * uncertainty remains distinct from a complete miss so callers return 503,
- * never a misleading 404.
+ * otherwise a COMPLETE exact-account installed-App roster is authoritative.
+ * Any D1/provider uncertainty remains distinct from a complete miss so callers
+ * return 503, never a misleading 404.
  */
 type InstallationMemberResolution = "member" | "not_member" | "unavailable"
+type InstallationAccount = { login: string; type: string }
+
+function isRosterAccount(account: InstallationAccount): account is { login: string; type: "Organization" | "User" } {
+  return account.login.trim() !== "" && (account.type === "Organization" || account.type === "User")
+}
 
 async function resolveInstallationMember(
   env: Env,
   installationId: number,
+  account: InstallationAccount,
   loginKey: string,
 ): Promise<InstallationMemberResolution> {
   const db = env.SIGILIX_PLATFORM_DB
-  if (!db || installationId <= 0) return "unavailable"
+  if (!db || installationId <= 0 || !isRosterAccount(account)) return "unavailable"
 
-  let account: { login: string; type: "Organization" | "User" }
   try {
     const activity = await db
       .prepare(
@@ -96,20 +101,6 @@ async function resolveInstallationMember(
       .bind(installationId, loginKey)
       .first<{ present: unknown }>()
     if (activity != null) return "member"
-
-    const tenant = await db
-      .prepare("SELECT account_login, account_type FROM tenant WHERE installation_id = ?")
-      .bind(installationId)
-      .first<{ account_login: unknown; account_type: unknown }>()
-    if (
-      tenant == null ||
-      typeof tenant.account_login !== "string" ||
-      tenant.account_login === "" ||
-      (tenant.account_type !== "Organization" && tenant.account_type !== "User")
-    ) {
-      return "unavailable"
-    }
-    account = { login: tenant.account_login, type: tenant.account_type }
   } catch (error) {
     console.warn(
       JSON.stringify({
@@ -123,11 +114,10 @@ async function resolveInstallationMember(
 
   try {
     const roster = await fetchInstallationRoster(env, installationId, account.login, account.type)
-    // A returned member is positive proof even if a later page failed. A miss
-    // is trustworthy only when every page completed; an incomplete miss stays
-    // unavailable rather than becoming a false 404.
+    const expectedSource = account.type === "Organization" ? "org" : "collaborators"
+    if (!roster.complete || roster.source !== expectedSource) return "unavailable"
     if (roster.members.some((member) => member.login.toLowerCase() === loginKey)) return "member"
-    return roster.complete ? "not_member" : "unavailable"
+    return "not_member"
   } catch (error) {
     console.warn(
       JSON.stringify({
@@ -155,39 +145,16 @@ type ManagedInstallationMemberResolution =
 async function resolveManagedInstallationMember(
   env: Env,
   installationId: number,
+  account: InstallationAccount,
   memberKey: string,
 ): Promise<ManagedInstallationMemberResolution> {
   const db = env.SIGILIX_PLATFORM_DB
-  if (!db || installationId <= 0) return { kind: "unavailable" }
-
-  let account: { login: string; type: "Organization" | "User" }
-  try {
-    const tenant = await db
-      .prepare("SELECT account_login, account_type FROM tenant WHERE installation_id = ?")
-      .bind(installationId)
-      .first<{ account_login: unknown; account_type: unknown }>()
-    if (
-      tenant == null ||
-      typeof tenant.account_login !== "string" ||
-      tenant.account_login === "" ||
-      (tenant.account_type !== "Organization" && tenant.account_type !== "User")
-    ) {
-      return { kind: "unavailable" }
-    }
-    account = { login: tenant.account_login, type: tenant.account_type }
-  } catch (error) {
-    console.warn(
-      JSON.stringify({
-        event: "org-seat-managed-tenant-read-failed",
-        installationId,
-        err: error instanceof Error ? error.message : String(error),
-      }),
-    )
-    return { kind: "unavailable" }
-  }
+  if (!db || installationId <= 0 || !isRosterAccount(account)) return { kind: "unavailable" }
 
   try {
     const roster = await fetchInstallationRoster(env, installationId, account.login, account.type)
+    const expectedSource = account.type === "Organization" ? "org" : "collaborators"
+    if (!roster.complete || roster.source !== expectedSource) return { kind: "unavailable" }
     const numericMemberKey = Number(memberKey)
     const byId =
       /^[1-9]\d*$/.test(memberKey) &&
@@ -197,7 +164,7 @@ async function resolveManagedInstallationMember(
     const member = roster.members.find((candidate) =>
       byId ? candidate.githubUserId === memberKey : candidate.login.toLowerCase() === memberKey.toLowerCase(),
     )
-    if (!member) return roster.complete ? { kind: "not_member" } : { kind: "unavailable" }
+    if (!member) return { kind: "not_member" }
     const access = await readOrgWorkspaceAccess(db, installationId, member.githubUserId)
     if (access === null || access.revokedAt !== null) return { kind: "not_member" }
     return { kind: "member", githubUserId: member.githubUserId, login: member.login }
@@ -321,7 +288,7 @@ export async function handleOrgSeatRoute(
   const callerKey = callerLogin.toLowerCase()
 
   if (env.OPENCLAW_ORG_MEMBERSHIP_MODE === "on") {
-    const member = await resolveManagedInstallationMember(env, installationId, targetMemberKey)
+    const member = await resolveManagedInstallationMember(env, installationId, access.account, targetMemberKey)
     if (member.kind === "unavailable") return json({ error: "seat_unavailable" }, 503)
     if (member.kind === "not_member") return json({ error: "not a member of this installation" }, 404)
 
@@ -375,9 +342,9 @@ export async function handleOrgSeatRoute(
     )
   }
 
-  // The target must be proven by activity or the installed-App roster. Roster
-  // presence is positive proof; only a roster miss needs complete pagination.
-  const member = await resolveInstallationMember(env, installationId, targetKey)
+  // The target must be proven by activity or one complete exact-account
+  // installed-App roster. Partial pagination never authorizes a billing write.
+  const member = await resolveInstallationMember(env, installationId, access.account, targetKey)
   if (member === "unavailable") {
     return json({ error: "seat_unavailable" }, 503)
   }

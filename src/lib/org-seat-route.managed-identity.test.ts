@@ -7,6 +7,7 @@ import type { Env } from "@/src/shared/types/env"
 
 const INSTALLATION_ID = 1
 const ACTOR_ID = "111"
+const ACTOR_USER_ID = "managed-seat-actor"
 const TARGET_ID = "222"
 const SESSION_ID = "managed-seat-session"
 const SESSION_COOKIE = "__Host-sigilix_session"
@@ -32,6 +33,7 @@ async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   for (const name of [
     "0001_create_tenant_repo_usage.sql",
+    "0006_create_user_identity.sql",
     "0007_create_org_seat_assignment.sql",
     "0011_add_tenant_subscription_status.sql",
     "0012_add_tenant_billing_source.sql",
@@ -42,6 +44,14 @@ async function makeDb(): Promise<D1Database> {
   ]) {
     await db.exec(migration(name))
   }
+  await db
+    .prepare(
+      `INSERT INTO user_identity
+        (user_id, github_user_id, providers, created_at, last_login_at)
+       VALUES (?, ?, '["github"]', ?, ?)`,
+    )
+    .bind(ACTOR_USER_ID, ACTOR_ID, NOW, NOW)
+    .run()
   await db
     .prepare(
       "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
@@ -80,6 +90,7 @@ async function setup(targetAccess = true): Promise<{ db: D1Database; env: Env }>
     sessionId: SESSION_ID,
     login: "owner",
     githubUserId: Number(ACTOR_ID),
+    userId: ACTOR_USER_ID,
     accessToken: "ghu_actor",
     encryptionKeyB64url: ENC_KEY,
   })
@@ -104,7 +115,10 @@ async function setup(targetAccess = true): Promise<{ db: D1Database; env: Env }>
 
 type RosterPage = Array<{ id: number; login: string }> | { status: number }
 
-function stubGitHub(pages: Record<number, RosterPage>): void {
+function stubGitHub(
+  pages: Record<number, RosterPage>,
+  account: { type: string; login: string } = { type: "Organization", login: "acme" },
+): void {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -113,7 +127,7 @@ function stubGitHub(pages: Record<number, RosterPage>): void {
         return new Response(
           JSON.stringify({
             total_count: 1,
-            installations: [{ id: INSTALLATION_ID, account: { type: "Organization", login: "acme" } }],
+            installations: [{ id: INSTALLATION_ID, account }],
           }),
           { status: 200 },
         )
@@ -190,7 +204,7 @@ describe("managed organization seat identity through worker.fetch", () => {
     await expect(readManagedSeat(db)).resolves.toBeNull()
   })
 
-  it("accepts a positive immutable-id match from a partial roster", async () => {
+  it("rejects a positive immutable-id match from a partial roster before any seat write", async () => {
     const { db, env } = await setup()
     const firstPage = [
       { id: Number(TARGET_ID), login: "partial-match" },
@@ -200,8 +214,38 @@ describe("managed organization seat identity through worker.fetch", () => {
 
     const response = await worker.fetch(request(TARGET_ID, true), env, ctx)
 
+    expect(response.status).toBe(503)
+    await expect(readManagedSeat(db)).resolves.toBeNull()
+  })
+
+  it("uses the exact live account instead of stale tenant metadata", async () => {
+    const { db, env } = await setup()
+    await db
+      .prepare("UPDATE tenant SET account_login = 'stale-org', account_type = 'Organization' WHERE installation_id = ?")
+      .bind(INSTALLATION_ID)
+      .run()
+    stubGitHub({ 1: [{ id: Number(TARGET_ID), login: "current-name" }] })
+
+    const response = await worker.fetch(request(TARGET_ID, true), env, ctx)
+
     expect(response.status).toBe(200)
-    await expect(readManagedSeat(db)).resolves.toEqual({ assigned: 1, last_known_login: "partial-match" })
+    await expect(readManagedSeat(db)).resolves.toEqual({ assigned: 1, last_known_login: "current-name" })
+  })
+
+  it("rejects an invalid live account before any seat or billing mutation", async () => {
+    const { db, env } = await setup()
+    stubGitHub({ 1: [{ id: Number(TARGET_ID), login: "current-name" }] }, { type: "Enterprise", login: "acme" })
+
+    const response = await worker.fetch(request(TARGET_ID, true), env, ctx)
+
+    expect(response.status).toBe(503)
+    await expect(readManagedSeat(db)).resolves.toBeNull()
+    await expect(
+      db
+        .prepare("SELECT COUNT(*) AS n FROM org_seat_billing_operation WHERE installation_id = ?")
+        .bind(INSTALLATION_ID)
+        .first(),
+    ).resolves.toEqual({ n: 0 })
   })
 
   it("does not let activity-only login evidence mutate a managed seat", async () => {

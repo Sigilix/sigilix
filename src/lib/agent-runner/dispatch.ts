@@ -86,6 +86,7 @@ export interface AgentRunOutcome {
   status: AgentRunRecord["status"]
   prUrl?: string
   error?: string
+  diag?: NonNullable<AgentRunRecord["diag"]>
 }
 
 // ── Internal: task-packet shape sent over the wire ────────────────────────────
@@ -170,7 +171,53 @@ function resolveGroundingConfig(
   const endpoint = env.OPENCLAW_AGENT_GROUNDING_ENDPOINT
   const apiKey = env.OPENCLAW_SIGILIX_API_KEY
   if (!endpoint || !apiKey) return undefined
-  return { endpoint, apiKey, repoSlug: `${owner}/${repo}` }
+  // Trailing-slash normalize (matches resolveEventsConfig) so `${endpoint}/v1/...`
+  // never doubles a slash if the env value is configured with a trailing "/".
+  return { endpoint: endpoint.replace(/\/+$/, ""), apiKey, repoSlug: `${owner}/${repo}` }
+}
+
+/** Bound the pre-grounding call so a slow /v1/context can never stall dispatch. */
+const GROUNDING_PREFETCH_TIMEOUT_MS = 10_000
+
+/**
+ * SIG-545 B2: pre-assemble the grounded slice for the run's ticket by calling the
+ * Worker's own /v1/context (the hybrid retrieval + memory path). The container
+ * agent already injects `packet.grounding` into its prompt (cli-agent.ts /
+ * agent-loop.ts `## Context`); the in-container grounding *plugin* that would do
+ * this live is unprovisioned, so without this the agent ran BLIND. Single-hop by
+ * design; the live multi-hop plugin remains a follow-up. Fail-soft: any error →
+ * `undefined` → the agent runs blind exactly as before (never blocks dispatch).
+ */
+async function prefetchGrounding(
+  config: NonNullable<TaskPacket["sigilix"]>,
+  owner: string,
+  repo: string,
+  ticket: { title: string; body: string },
+): Promise<string | undefined> {
+  try {
+    const query = `${ticket.title}\n\n${ticket.body}`.trim().slice(0, 4_000)
+    if (query.length === 0) return undefined
+    const res = await fetch(`${config.endpoint}/v1/context`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ owner, repo, query }),
+      signal: AbortSignal.timeout(GROUNDING_PREFETCH_TIMEOUT_MS),
+    })
+    if (!res.ok) return undefined
+    const json = (await res.json()) as { context?: string | null }
+    return typeof json.context === "string" && json.context.length > 0 ? json.context : undefined
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "agent-run-grounding-prefetch-failed",
+        owner,
+        repo,
+        err: err instanceof Error ? err.message : String(err),
+        // config.apiKey intentionally excluded
+      }),
+    )
+    return undefined
+  }
 }
 
 /**
@@ -235,6 +282,16 @@ export async function dispatchAgentRun(
     // Grounding config for the full CLI agent (omitted unless env-configured).
     const groundingConfig = resolveGroundingConfig(env, input.owner, input.repo)
 
+    // SIG-545 B2 fix: the container agent injects `packet.grounding` into its prompt
+    // but nothing populated it (the in-container grounding plugin is unprovisioned),
+    // so runs went out BLIND. Pre-assemble the grounded slice from /v1/context here
+    // when grounding is configured and the caller didn't already supply one. Fail-soft.
+    const grounding =
+      input.grounding ??
+      (groundingConfig !== undefined
+        ? await prefetchGrounding(groundingConfig, input.owner, input.repo, input.ticket)
+        : undefined)
+
     // Live-events wiring (omitted unless SIGILIX_AGENT_EVENTS_ENDPOINT is set).
     // Store the per-run secret in the DO BEFORE dispatch so the ingest route can
     // validate the container's event POSTs; a store failure just drops streaming
@@ -275,7 +332,7 @@ export async function dispatchAgentRun(
         baseBranch: input.baseBranch,
       },
       ticket: input.ticket,
-      grounding: input.grounding,
+      grounding,
       model: input.model, // model.key is never logged
       engine: input.engine ?? "minimal",
       ...(groundingConfig !== undefined ? { sigilix: groundingConfig } : {}),
@@ -313,11 +370,22 @@ export async function dispatchAgentRun(
         status?: string
         prUrl?: string
         error?: string
+        diag?: { retrieveCodebaseCalls?: unknown; stderrTail?: unknown }
       }
+      // SIG-545 B2: carry the full-engine grounding diagnostics through to the DO
+      // record (→ GET /admin/agent-run-status). Defensive-parse the shape.
+      const diag =
+        result.diag && typeof result.diag.retrieveCodebaseCalls === "number"
+          ? {
+              retrieveCodebaseCalls: result.diag.retrieveCodebaseCalls,
+              stderrTail: typeof result.diag.stderrTail === "string" ? result.diag.stderrTail : "",
+            }
+          : undefined
       outcome = {
         status: (result.status as AgentRunRecord["status"]) ?? "error",
         ...(result.prUrl !== undefined ? { prUrl: result.prUrl } : {}),
         ...(result.error !== undefined ? { error: result.error } : {}),
+        ...(diag !== undefined ? { diag } : {}),
       }
       await agentRunnerStub(env, runId).setRunRecord({ runId, ...outcome })
     } catch (persistErr) {

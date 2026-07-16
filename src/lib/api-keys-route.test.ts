@@ -40,6 +40,7 @@ async function seedSession(kv: KVNamespace, sessionId: string, githubUserId: num
     sessionId,
     login: githubUserId === 111 ? "octocat" : `user-${githubUserId}`,
     githubUserId,
+    userId: `user-${githubUserId}`,
     accessToken: `ghu-${githubUserId}`,
     encryptionKeyB64url: ENC_KEY,
   })
@@ -55,6 +56,10 @@ const MIGRATION_SQL = readFileSync(
   new URL("../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
   "utf8",
 )
+const IDENTITY_MIGRATION_SQL = readFileSync(
+  new URL("../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
 // 0009 adds the api_key.name label column that insertApiKey now writes.
 const NAME_MIGRATION_SQL = readFileSync(new URL("../../migrations/0009_add_api_key_name.sql", import.meta.url), "utf8")
 const ORG_ACCESS_MIGRATION_SQL = readFileSync(
@@ -65,7 +70,22 @@ const ORG_ACCESS_MIGRATION_SQL = readFileSync(
 /** Apply the api_key schema (0003) + the name column (0009) to a fresh D1 shim. */
 async function applyKeySchema(db: D1Database): Promise<void> {
   await db.exec(MIGRATION_SQL)
+  await db.exec(IDENTITY_MIGRATION_SQL)
   await db.exec(NAME_MIGRATION_SQL)
+  for (const [userId, githubUserId] of [
+    ["user-111", "111"],
+    ["user-999", "999"],
+    ["u-g", null],
+  ] as const) {
+    await db
+      .prepare(
+        `INSERT INTO user_identity
+          (user_id, github_user_id, providers, created_at, last_login_at)
+         VALUES (?, ?, '[]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+      )
+      .bind(userId, githubUserId)
+      .run()
+  }
 }
 
 async function applyOrgAccessSchema(db: D1Database): Promise<void> {

@@ -23,10 +23,6 @@ const MIGRATION_SEAT_SQL = readFileSync(
   new URL("../../migrations/0007_create_org_seat_assignment.sql", import.meta.url),
   "utf8",
 )
-const MIGRATION_ORG_ACCESS_SQL = readFileSync(
-  new URL("../../migrations/0022_create_org_workspace_access.sql", import.meta.url),
-  "utf8",
-)
 const MIGRATION_SUBSCRIPTION_STATUS_SQL = readFileSync(
   new URL("../../migrations/0011_add_tenant_subscription_status.sql", import.meta.url),
   "utf8",
@@ -43,7 +39,7 @@ const MIGRATION_STRIPE_SEAT_CONTEXT_SQL = readFileSync(
   new URL("../../migrations/0023_add_org_seat_billing_operation_context.sql", import.meta.url),
   "utf8",
 )
-
+const migration = (name: string) => readFileSync(new URL(`../../migrations/${name}`, import.meta.url), "utf8")
 function makeKV(): KVNamespace {
   const store = new Map<string, string>()
   return {
@@ -64,14 +60,18 @@ function makeKV(): KVNamespace {
 async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(MIGRATION_USAGE_SQL)
+  await db.exec(migration("0006_create_user_identity.sql"))
   await db.exec(MIGRATION_SUBSCRIPTION_STATUS_SQL)
   await db.exec(MIGRATION_BILLING_SOURCE_SQL)
   await db.exec(MIGRATION_SEAT_SQL)
   await db.exec(MIGRATION_STRIPE_SEATS_SQL)
   await db.exec(MIGRATION_STRIPE_SEAT_CONTEXT_SQL)
-  await db.exec(MIGRATION_ORG_ACCESS_SQL)
+  await db.exec(migration("0022_create_org_workspace_access.sql"))
+  await db.exec(migration("0028_create_org_workspace_seat_assignment.sql"))
   await db.exec(
-    readFileSync(new URL("../../migrations/0028_create_org_workspace_seat_assignment.sql", import.meta.url), "utf8"),
+    `INSERT INTO user_identity (user_id, github_user_id, providers, created_at, last_login_at) VALUES
+            ('seat-user-111', '111', '["github"]', 't', 't'),
+            ('seat-user-222', '222', '["github"]', 't', 't')`,
   )
   return db
 }
@@ -119,6 +119,7 @@ async function seedSession(
     sessionId,
     login,
     githubUserId,
+    userId: `seat-user-${githubUserId}`,
     accessToken: tokens.accessToken ?? "ghu_test_token",
     ...(tokens.refreshToken !== undefined ? { refreshToken: tokens.refreshToken } : {}),
     ...(tokens.accessTokenExpiresAt !== undefined ? { accessTokenExpiresAt: tokens.accessTokenExpiresAt } : {}),
@@ -566,7 +567,12 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
     const kv = makeKV()
     await seedSession(kv, "sess-1", "octocat", 111)
     const brokenDb = {
-      prepare() {
+      prepare(sql: string) {
+        if (sql === "SELECT user_id, github_user_id FROM user_identity WHERE user_id = ?") {
+          return {
+            bind: () => ({ first: async () => ({ user_id: "seat-user-111", github_user_id: "111" }) }),
+          }
+        }
         throw new Error("D1 unavailable")
       },
     } as unknown as D1Database
@@ -978,7 +984,6 @@ describe("handleOrgSeatRoute (POST /v1/org/:installationId/members/:login/seat)"
       db.prepare("SELECT state, desired_quantity FROM org_seat_billing_operation WHERE installation_id = 1").first(),
     ).resolves.toMatchObject({ state: "committed", desired_quantity: 3 })
   })
-
   it("CORS preflight: OPTIONS on the seat path from an allowlisted portal origin returns the CORS grant", async () => {
     const env = { OPENCLAW_STATE: makeKV() } as unknown as Env
     const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext

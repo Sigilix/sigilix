@@ -15,6 +15,7 @@ const API_KEY_SQL = readFileSync(
   new URL("../../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
   "utf8",
 )
+const IDENTITY_SQL = readFileSync(new URL("../../../migrations/0006_create_user_identity.sql", import.meta.url), "utf8")
 
 function makeKV(): KVNamespace {
   const store = new Map<string, string>()
@@ -32,6 +33,7 @@ function makeKV(): KVNamespace {
 async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(API_KEY_SQL)
+  await db.exec(IDENTITY_SQL)
   return db
 }
 
@@ -39,11 +41,23 @@ async function seedSession(kv: KVNamespace, sessionId: string, githubUserId: num
   await createSession({
     kv,
     sessionId,
+    userId: `user-${githubUserId}`,
     login,
     githubUserId,
     accessToken: `ghu_${githubUserId}`,
     encryptionKeyB64url: ENC_KEY,
   })
+}
+
+async function seedIdentity(db: D1Database, userId: string, githubUserId: number): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO user_identity
+       (user_id, github_user_id, providers, created_at, last_login_at)
+       VALUES (?, ?, '["github"]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+    )
+    .bind(userId, String(githubUserId))
+    .run()
 }
 
 async function seedApiKey(db: D1Database, installationId: number): Promise<string> {
@@ -223,7 +237,7 @@ describe("installation-scoped MCP management", () => {
     expect(grantBody).toMatchObject({
       ownerScope: "session:111",
       serverId,
-      creatorSubject: "github:111",
+      creatorSubject: "user:user-111",
     })
     expect(connectBody).toMatchObject({
       serverId,
@@ -233,7 +247,7 @@ describe("installation-scoped MCP management", () => {
         grantId: body.id,
         ownerScope: "session:111",
         tenantScope: "tenant:42",
-        stableSubject: "111",
+        stableSubject: "user-111",
       },
     })
     expect(JSON.stringify(body)).not.toContain("session:111")
@@ -716,6 +730,7 @@ describe("tenant-key MCP runtime", () => {
     const kv = makeKV()
     await seedSession(kv, "sess-1", 111)
     const db = await makeDb()
+    await seedIdentity(db, "user-111", 111)
     const { namespace, idFromNameCalls } = makeNamespace(() => new Response("not reached", { status: 500 }))
     const environment = env(kv, namespace, db)
 

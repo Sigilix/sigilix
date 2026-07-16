@@ -321,9 +321,10 @@ describe("handleCliAuthorizeRoute (POST /v1/cli/authorize)", () => {
       jsonPost("https://x/v1/cli/authorize", "legacy-session", { state, challenge }),
       env,
     )
-    expect(res.status).toBe(403)
-    await expect(res.json()).resolves.toEqual({ error: "account_identity_required" })
+    expect(res.status).toBe(401)
+    await expect(res.json()).resolves.toEqual({ error: "unauthenticated" })
     expectPrivateNoStore(res)
+    expect(kv.__raw("auth_session:legacy-session")).toBeNull()
     await expect(db.prepare("SELECT COUNT(*) AS n FROM api_key").first<{ n: number }>()).resolves.toEqual({ n: 0 })
   })
 

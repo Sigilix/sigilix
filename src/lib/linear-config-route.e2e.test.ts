@@ -7,6 +7,7 @@ import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import type { Env } from "@/src/shared/types/env"
 
 const BASE_SQL = readFileSync(new URL("../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
+const IDENTITY_SQL = readFileSync(new URL("../../migrations/0006_create_user_identity.sql", import.meta.url), "utf8")
 const LINEAR_SQL = readFileSync(new URL("../../migrations/0016_create_linear_integration.sql", import.meta.url), "utf8")
 const TEAM_REPO_SQL = readFileSync(
   new URL("../../migrations/0018_create_linear_team_repo.sql", import.meta.url),
@@ -38,6 +39,7 @@ function makeKV(): { kv: KVNamespace; values: Map<string, string> } {
 async function setup() {
   const db = makeD1()
   await db.exec(BASE_SQL)
+  await db.exec(IDENTITY_SQL)
   await db.exec(LINEAR_SQL)
   await db.exec(TEAM_REPO_SQL)
   const now = "2026-07-10T00:00:00.000Z"
@@ -76,11 +78,20 @@ async function setup() {
     },
   )
   const { kv } = makeKV()
+  const userId = "linear-config-user-111"
+  await db
+    .prepare(
+      "INSERT INTO user_identity" +
+        " (user_id, github_user_id, providers, created_at, last_login_at) VALUES (?, '111', ?, ?, ?)",
+    )
+    .bind(userId, JSON.stringify(["github"]), now, now)
+    .run()
   await createSession({
     kv,
     sessionId: "session-1",
     login: "octocat",
     githubUserId: 111,
+    userId,
     accessToken: "github-user-token",
     encryptionKeyB64url: ENC_KEY,
   })

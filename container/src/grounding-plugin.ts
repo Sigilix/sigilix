@@ -20,19 +20,25 @@ import { type Plugin, tool } from "@opencode-ai/plugin";
 import { groundingConfigFromEnv, retrieveCodebase } from "./grounding.js";
 
 export const SigilixGrounding: Plugin = async () => {
+  // SIG-545 B2 diagnostics: markers go to stderr → captured into the admin run
+  // record's diag.stderrTail (via cli-agent spawnCli). "loaded" proves the plugin
+  // function ran; "invoked" proves the tool actually executed. No secrets.
+  console.error("[sigilix-grounding] plugin loaded");
   return {
     tool: {
       retrieve_codebase: tool({
         description:
-          "Retrieve the most relevant code, symbols, and team conventions from THIS repository's " +
-          "Sigilix index for a natural-language query. Prefer this over reading whole files: it is " +
-          "cheaper and more precise. Call it before editing, and again whenever you need more context.",
+          "Retrieve the most relevant code, symbols, and — crucially — THIS team's conventions and " +
+          "past decisions (which are NOT visible in the files) from the Sigilix codebase index. Use it " +
+          "to ground edits in how this specific team works. Cheaper and more precise than reading whole " +
+          "files. Call it before editing and again whenever you need more context.",
         args: {
           query: tool.schema
             .string()
             .describe("What to find, in natural language (e.g. 'where the export endpoint validates its input')."),
         },
         async execute(args: { query: string }) {
+          console.error("[sigilix-grounding] retrieve_codebase invoked");
           return retrieveCodebase(groundingConfigFromEnv(), args.query);
         },
       }),

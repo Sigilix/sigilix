@@ -188,6 +188,10 @@ async function handleExportAccount(request: Request, env: Env, ctx: ExecutionCon
   // Skip the sliding-TTL touch: a legacy session rejected below is actively
   // revoked and must not be recreated by a queued touch after deletion.
   void ctx
+  const exportUrl = new URL(request.url)
+  if (exportUrl.searchParams.size > 0) {
+    return json({ error: "unexpected_query_parameter" }, 400)
+  }
   const session = await requireSession(request, env)
   if (!session) return json({ error: "unauthenticated" }, 401)
   if (session.record.userId == null) {

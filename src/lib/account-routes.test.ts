@@ -886,6 +886,21 @@ describe("GET /v1/account/export", () => {
     expect(res?.status).toBe(401)
   })
 
+  it("400 on any unexpected query parameter", async () => {
+    const { env, db, kv } = await makeEnv()
+    await seedAccount(db, { userId: "user-a", githubUserId: "111", login: "octocat" })
+    await seedSession(kv, "s1", { userId: "user-a", githubUserId: 111, login: "octocat" })
+
+    const res = await tryHandleAccountRoute(
+      req("https://x/v1/account/export?foo=bar", "s1"),
+      env,
+      ctx,
+      new URL("https://x/v1/account/export?foo=bar"),
+    )
+    expect(res?.status).toBe(400)
+    await expect(res?.json()).resolves.toEqual({ error: "unexpected_query_parameter" })
+  })
+
   it("401 without exporting either identity when durable identity disagrees with the session", async () => {
     const { env, db, kv } = await makeEnv()
     await seedAccount(db, { userId: "user-a", githubUserId: "111", login: "octocat" })

@@ -803,12 +803,16 @@ function localSeatWriteCondition(value: WriteLocalOrgSeatAssignmentArgs): {
   sql: string
   bindings: readonly unknown[]
 } {
-  const noActiveOperation = `NOT EXISTS (
+  // Migration 0033's triggers are authoritative. This matching predicate gives
+  // legacy callers a typed conflict before the database rejects the write.
+  const legacyWriteAllowed = `NOT EXISTS (
     SELECT 1 FROM org_seat_billing_operation
      WHERE installation_id = ? AND state IN ('pending', 'stripe_applied')
+  ) AND NOT EXISTS (
+    SELECT 1 FROM org_activity_seat_readiness WHERE installation_id = ?
   )`
   if (value.capacity.kind === "local-only") {
-    return { sql: noActiveOperation, bindings: [value.installationId] }
+    return { sql: legacyWriteAllowed, bindings: [value.installationId, value.installationId] }
   }
   const snapshotState = value.capacity.kind === "live" ? "('ready', 'review_required')" : "('ready')"
   const livePredicate =
@@ -820,7 +824,7 @@ function localSeatWriteCondition(value: WriteLocalOrgSeatAssignmentArgs): {
       ? [value.capacity.liveQuantity, value.capacity.liveQuantity, value.capacity.minimumQuantity]
       : [value.capacity.minimumQuantity]
   return {
-    sql: `${noActiveOperation} AND EXISTS (
+    sql: `${legacyWriteAllowed} AND EXISTS (
       SELECT 1 FROM stripe_seat_subscription
        WHERE installation_id = ? AND revision = ?
          AND stripe_subscription_id = ? AND stripe_subscription_item_id = ?
@@ -829,6 +833,7 @@ function localSeatWriteCondition(value: WriteLocalOrgSeatAssignmentArgs): {
          ${livePredicate}
     )`,
     bindings: [
+      value.installationId,
       value.installationId,
       value.installationId,
       value.capacity.expectedRevision,
@@ -1045,6 +1050,9 @@ export async function createPendingOrgSeatExpansion(
             AND seat_state.duplicate_count = 0 AND seat_state.invalid_count = 0
             AND ? > snapshot.observed_quantity AND ? >= seat_state.assigned_quantity + 1
             AND NOT EXISTS (
+              SELECT 1 FROM org_activity_seat_readiness WHERE installation_id = ?
+            )
+            AND NOT EXISTS (
               SELECT 1 FROM org_seat_billing_operation
                WHERE installation_id = ? AND state IN ('pending', 'stripe_applied')
             )
@@ -1077,6 +1085,7 @@ export async function createPendingOrgSeatExpansion(
         args.expectedAssignedQuantity,
         args.desiredQuantity,
         args.desiredQuantity,
+        args.installationId,
         args.installationId,
         args.installationId,
         args.leaseToken,

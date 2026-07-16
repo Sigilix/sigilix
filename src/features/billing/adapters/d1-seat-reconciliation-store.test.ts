@@ -69,6 +69,22 @@ async function acquireLease(db: D1Database, token = "lease-a", nowMs = 10) {
   return { leaseToken: token, leaseAcquiredAtMs: nowMs, nowMs }
 }
 
+async function activateActivitySeatReadiness(
+  db: D1Database,
+  fence: { leaseAcquiredAtMs: number; nowMs: number },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO org_activity_seat_readiness
+        (installation_id, activation_id, activation_source, schema_version, cutover_at_ms,
+         cutover_at, activated_by_actor_github_user_id, stripe_snapshot_revision,
+         billing_lease_acquired_at_ms)
+       VALUES (42, 'cutover-42', 'legacy_backfill_v1', 1, ?, ?, '9001', 1, ?)`,
+    )
+    .bind(fence.nowMs, new Date(fence.nowMs).toISOString(), fence.leaseAcquiredAtMs)
+    .run()
+}
+
 describe("D1 seat reconciliation store", () => {
   let db: D1Database
 
@@ -82,6 +98,7 @@ describe("D1 seat reconciliation store", () => {
     await db.exec(migration("0023_add_org_seat_billing_operation_context.sql"))
     await db.exec(migration("0028_create_org_workspace_seat_assignment.sql"))
     await db.exec(migration("0032_extend_org_seat_billing_operation_activity_identity.sql"))
+    await db.exec(migration("0033_create_org_activity_seat_readiness.sql"))
     await db
       .prepare("INSERT INTO tenant (installation_id, tier, created_at, updated_at) VALUES (?, 'teams', 't', 't')")
       .bind(42)
@@ -663,6 +680,87 @@ describe("D1 seat reconciliation store", () => {
     await expect(
       db.prepare("SELECT assigned FROM org_seat_assignment WHERE installation_id = 42 AND login = 'mallory'").first(),
     ).resolves.toBeNull()
+  })
+
+  it("returns typed conflicts for legacy writes after activity readiness without widening installation scope", async () => {
+    await seedReadySnapshot(db, 2)
+    const fence = await acquireLease(db)
+    await db
+      .prepare("INSERT INTO repo (repo_id, installation_id, full_name, updated_at) VALUES (7, 42, 'acme/api', 't')")
+      .run()
+    for (const [prNumber, login] of [
+      [1, "bob"],
+      [2, "carol"],
+    ] as const) {
+      await db
+        .prepare(
+          `INSERT INTO usage_ledger
+            (installation_id, repo_id, pr_number, head_sha, model_calls, tokens, author_login, created_at)
+           VALUES (42, 7, ?, ?, 1, 1, ?, '2026-07-13T00:00:00.000Z')`,
+        )
+        .bind(prNumber, `head-${prNumber}`, login)
+        .run()
+    }
+    await activateActivitySeatReadiness(db, fence)
+
+    await expect(
+      writeLocalOrgSeatAssignment(env(db), {
+        installationId: 42,
+        login: "alice",
+        assigned: true,
+        targetIsAdmin: false,
+        actorLogin: "owner",
+        nowIso: "2026-07-13T00:01:00.000Z",
+        ...fence,
+        capacity: { kind: "local-only" },
+      }),
+    ).resolves.toEqual({ kind: "conflict" })
+    await expect(db.prepare("SELECT 1 FROM org_seat_assignment WHERE installation_id = 42").first()).resolves.toBeNull()
+
+    await expect(
+      createPendingOrgSeatExpansion(env(db), {
+        installationId: 42,
+        operationId: "op-after-cutover",
+        idempotencyKey: "seat-42-after-cutover",
+        login: "alice",
+        actorLogin: "owner",
+        targetIsAdmin: false,
+        expectedAssignedQuantity: 2,
+        desiredQuantity: 3,
+        expectedSnapshotRevision: 1,
+        subscriptionId: "sub_42",
+        subscriptionItemId: "si_42",
+        nextAttemptAtMs: 20,
+        ...fence,
+      }),
+    ).resolves.toEqual({ kind: "conflict" })
+    await expect(
+      db.prepare("SELECT 1 FROM org_seat_billing_operation WHERE installation_id = 42").first(),
+    ).resolves.toBeNull()
+
+    await db
+      .prepare("INSERT INTO tenant (installation_id, tier, created_at, updated_at) VALUES (43, 'teams', 't', 't')")
+      .run()
+    await expect(
+      acquireOrgSeatBillingLease(env(db), { installationId: 43, token: "lease-43", nowMs: 10, ttlMs: 100 }),
+    ).resolves.toEqual({ kind: "acquired", expiresAtMs: 110 })
+    await expect(
+      writeLocalOrgSeatAssignment(env(db), {
+        installationId: 43,
+        login: "alice",
+        assigned: true,
+        targetIsAdmin: false,
+        actorLogin: "owner",
+        nowIso: "2026-07-13T00:02:00.000Z",
+        leaseToken: "lease-43",
+        leaseAcquiredAtMs: 10,
+        nowMs: 10,
+        capacity: { kind: "local-only" },
+      }),
+    ).resolves.toEqual({ kind: "written", snapshotRevision: null })
+    await expect(
+      db.prepare("SELECT assigned FROM org_seat_assignment WHERE installation_id = 43 AND login = 'alice'").first(),
+    ).resolves.toEqual({ assigned: 1 })
   })
 
   it("allocates a monotonic pending expansion and treats an exact retry as existing", async () => {

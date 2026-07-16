@@ -15,30 +15,6 @@ import type { Env } from "@/src/shared/types/env"
 const SESSION_COOKIE = "__Host-sigilix_session"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(9))
 
-const MIGRATION_USAGE_SQL = readFileSync(
-  new URL("../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url),
-  "utf8",
-)
-const MIGRATION_SEAT_SQL = readFileSync(
-  new URL("../../migrations/0007_create_org_seat_assignment.sql", import.meta.url),
-  "utf8",
-)
-const MIGRATION_SUBSCRIPTION_STATUS_SQL = readFileSync(
-  new URL("../../migrations/0011_add_tenant_subscription_status.sql", import.meta.url),
-  "utf8",
-)
-const MIGRATION_BILLING_SOURCE_SQL = readFileSync(
-  new URL("../../migrations/0012_add_tenant_billing_source.sql", import.meta.url),
-  "utf8",
-)
-const MIGRATION_STRIPE_SEATS_SQL = readFileSync(
-  new URL("../../migrations/0020_create_stripe_seat_reconciliation.sql", import.meta.url),
-  "utf8",
-)
-const MIGRATION_STRIPE_SEAT_CONTEXT_SQL = readFileSync(
-  new URL("../../migrations/0023_add_org_seat_billing_operation_context.sql", import.meta.url),
-  "utf8",
-)
 const migration = (name: string) => readFileSync(new URL(`../../migrations/${name}`, import.meta.url), "utf8")
 function makeKV(): KVNamespace {
   const store = new Map<string, string>()
@@ -59,16 +35,17 @@ function makeKV(): KVNamespace {
 
 async function makeDb(): Promise<D1Database> {
   const db = makeD1()
-  await db.exec(MIGRATION_USAGE_SQL)
+  await db.exec(migration("0001_create_tenant_repo_usage.sql"))
   await db.exec(migration("0006_create_user_identity.sql"))
-  await db.exec(MIGRATION_SUBSCRIPTION_STATUS_SQL)
-  await db.exec(MIGRATION_BILLING_SOURCE_SQL)
-  await db.exec(MIGRATION_SEAT_SQL)
-  await db.exec(MIGRATION_STRIPE_SEATS_SQL)
-  await db.exec(MIGRATION_STRIPE_SEAT_CONTEXT_SQL)
+  await db.exec(migration("0011_add_tenant_subscription_status.sql"))
+  await db.exec(migration("0012_add_tenant_billing_source.sql"))
+  await db.exec(migration("0007_create_org_seat_assignment.sql"))
+  await db.exec(migration("0020_create_stripe_seat_reconciliation.sql"))
+  await db.exec(migration("0023_add_org_seat_billing_operation_context.sql"))
   await db.exec(migration("0022_create_org_workspace_access.sql"))
   await db.exec(migration("0028_create_org_workspace_seat_assignment.sql"))
   await db.exec(migration("0032_extend_org_seat_billing_operation_activity_identity.sql"))
+  await db.exec(migration("0033_create_org_activity_seat_readiness.sql"))
   await db.exec(
     `INSERT INTO user_identity (user_id, github_user_id, providers, created_at, last_login_at) VALUES
             ('seat-user-111', '111', '["github"]', 't', 't'),

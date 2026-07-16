@@ -122,6 +122,10 @@ describe("buildOpencodeConfig", () => {
     }
     // Out-of-repo mutation is explicitly denied even though edit/write are allowed.
     expect(perm.external_directory).toBe("deny");
+    // The grounding tool is allowed here because this call wires the plugin — without
+    // the allow, deny-by-default filters it out of the model's toolset (the plugin
+    // loads but the model never sees `retrieve_codebase`, so it can't ground).
+    expect(perm.retrieve_codebase).toBe("allow");
     // Nothing else is allowed. A dangerous tool must be strictly absent — not
     // even "ask" (which would hang a headless run, the very failure the catch-all
     // exists to prevent). toBeUndefined() catches an accidental allow OR ask.
@@ -130,8 +134,28 @@ describe("buildOpencodeConfig", () => {
     }
     // Lock the allow-list to EXACTLY these keys — adding a new allow must fail here.
     expect(new Set(Object.keys(perm))).toEqual(
-      new Set(["*", "read", "edit", "write", "grep", "glob", "list", "todowrite", "external_directory"]),
+      new Set([
+        "*",
+        "read",
+        "edit",
+        "write",
+        "grep",
+        "glob",
+        "list",
+        "todowrite",
+        "retrieve_codebase",
+        "external_directory",
+      ]),
     );
+  });
+
+  it("allows retrieve_codebase ONLY when the grounding plugin is wired (same gate as the plugin entry)", () => {
+    // Plugin wired → tool exists → must be allowed, or it is filtered from the toolset.
+    const grounded = buildOpencodeConfig(MODEL, "/opt/sigilix/grounding/index.js");
+    expect((grounded.permission as Record<string, string>).retrieve_codebase).toBe("allow");
+    // No plugin → tool doesn't exist → no allow (and no stray key in the map).
+    const bare = buildOpencodeConfig(MODEL, "");
+    expect((bare.permission as Record<string, string>).retrieve_codebase).toBeUndefined();
   });
 
   it("wires the packet model as an OpenAI-compatible provider", () => {

@@ -10,6 +10,7 @@ import type { Env } from "@/src/shared/types/env"
 import type { EnqueueRequest } from "./types"
 import { buildPausedKey, buildIgnoredKey } from "@/src/lib/pr-lifecycle-commands"
 import { upsertTenantAndRepo } from "@/src/features/tenancy"
+import { persistActivitySeatCommand, type ActivitySeatEvidence } from "@/src/features/billing"
 
 const DO_BASE_URL = "https://do.internal"
 
@@ -47,6 +48,8 @@ export interface PrReviewEnqueueArgs {
    * absent when `pull_request.user` is null (rare anonymous/Actions contexts).
    */
   authorLogin?: string
+  /** Immutable activity evidence captured after GitHub webhook verification. */
+  activitySeatEvidence?: ActivitySeatEvidence
 }
 
 // SIG-98 note on slash-command reruns + the pause/ignore gate:
@@ -75,6 +78,12 @@ export type PrReviewEnqueueResult =
       reason: "do-transport" | "do-status"
       /** Set when reason === "do-status". */
       status?: number
+    }
+  | {
+      ok: false
+      route: "activity-seat"
+      reason: "activity-command-conflict" | "activity-command-invalid" | "activity-command-unavailable"
+      status: 409 | 503
     }
 
 function instanceName(owner: string, repo: string, prNumber: number): string {
@@ -132,6 +141,23 @@ export async function enqueuePrReviewJob(
     return { ok: true, route: "skipped-paused" }
   }
 
+  const evidence = args.activitySeatEvidence
+  if (
+    evidence !== undefined &&
+    (evidence.installationId !== args.installationId ||
+      evidence.repositoryId !== args.repoId ||
+      evidence.prNumber !== args.prNumber ||
+      evidence.headSha !== args.headSha ||
+      evidence.deliveryId !== args.deliveryId)
+  ) {
+    return {
+      ok: false,
+      route: "activity-seat",
+      reason: "activity-command-invalid",
+      status: 409,
+    }
+  }
+
   // SIG-343: lazily register the tenant + repo in the platform DB (best-effort,
   // fail-open — upsertTenantAndRepo never throws and no-ops when D1 is unbound).
   // Deferred via ctx.waitUntil when a context is provided so the D1 write does
@@ -145,8 +171,49 @@ export async function enqueuePrReviewJob(
       ...(args.accountLogin !== undefined ? { accountLogin: args.accountLogin } : {}),
       ...(args.accountType !== undefined ? { accountType: args.accountType } : {}),
     })
-    if (ctx) ctx.waitUntil(upsertP)
+    if (evidence !== undefined) await upsertP
+    else if (ctx) ctx.waitUntil(upsertP)
     else await upsertP
+  }
+
+  if (evidence !== undefined) {
+    const persisted = await persistActivitySeatCommand(env, evidence)
+    if (persisted.kind === "conflict") {
+      console.error(
+        JSON.stringify({
+          event: "activity-seat-command-conflict",
+          deliveryId: evidence.deliveryId,
+          installationId: evidence.installationId,
+          repositoryId: evidence.repositoryId,
+          prNumber: evidence.prNumber,
+        }),
+      )
+      return {
+        ok: false,
+        route: "activity-seat",
+        reason: "activity-command-conflict",
+        status: 409,
+      }
+    }
+    if (persisted.kind === "error") {
+      const invalid = persisted.reason === "invalid_input"
+      console.error(
+        JSON.stringify({
+          event: "activity-seat-command-persist-failed",
+          reason: persisted.reason,
+          deliveryId: evidence.deliveryId,
+          installationId: evidence.installationId,
+          repositoryId: evidence.repositoryId,
+          prNumber: evidence.prNumber,
+        }),
+      )
+      return {
+        ok: false,
+        route: "activity-seat",
+        reason: invalid ? "activity-command-invalid" : "activity-command-unavailable",
+        status: invalid ? 409 : 503,
+      }
+    }
   }
 
   const body: EnqueueRequest = {

@@ -68,6 +68,15 @@ export {
 } from "./adapters/d1-seat-reconciliation-store"
 export { prepareCancelActiveManagedOrgSeatBillingOperation } from "./adapters/managed-seat-reconciliation-store"
 export {
+  ACTIVITY_SEAT_ACTIONS,
+  ACTIVITY_SEAT_ASSOCIATIONS,
+  persistActivitySeatCommand,
+  type ActivitySeatAction,
+  type ActivitySeatAssociation,
+  type ActivitySeatEvidence,
+  type PersistActivitySeatCommandResult,
+} from "./adapters/activity-seat-command-store"
+export {
   decodeStripeSeatSubscriptionRow,
   decodeOrgSeatBillingOperationRow,
   type OrgSeatBillingOperation,

@@ -5,9 +5,12 @@
 // the DO owns queue dispatch with runId populated.
 
 import { describe, it, expect, vi } from "vitest"
+import { readFileSync } from "node:fs"
 import { enqueuePrReviewJob } from "@/src/do/webhook-enqueue"
 import type { Env } from "@/src/shared/types/env"
 import type { EnqueueRequest } from "@/src/do/types"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import type { ActivitySeatEvidence } from "@/src/features/billing"
 
 interface DoCall {
   url: string
@@ -25,6 +28,7 @@ interface MakeEnvArgs {
   kvState?: Record<string, string>
   /** SIG-343: optional platform DB binding for lazy tenant+repo registration tests. */
   platformDb?: D1Database
+  onDoFetch?: () => void | Promise<void>
 }
 
 function makeEnv(args: MakeEnvArgs = {}): {
@@ -47,6 +51,7 @@ function makeEnv(args: MakeEnvArgs = {}): {
       }
     }
     doCalls.push({ url, method, body })
+    await args.onDoFetch?.()
     const r = args.doResponse ?? { kind: "200" as const }
     if (r.kind === "throw") throw new Error("DO transport failed")
     if (r.kind === "non-ok") {
@@ -90,6 +95,33 @@ const baseArgs = {
   baseSha: "b".repeat(40),
   installationId: 99,
   deliveryId: "delivery-abc-123",
+}
+
+const activitySeatEvidence: ActivitySeatEvidence = {
+  deliveryId: "delivery-abc-123",
+  payloadSha256: "a".repeat(64),
+  installationId: 99,
+  repositoryId: 42,
+  prNumber: 7,
+  headSha: "a".repeat(40),
+  action: "opened",
+  targetGithubUserId: "111",
+  targetLogin: "target",
+  actorGithubUserId: "222",
+  actorLogin: "actor",
+  authorAssociation: "MEMBER",
+  receivedAtMs: 1_000,
+}
+
+function migration(name: string): string {
+  return readFileSync(new URL(`../../migrations/${name}`, import.meta.url), "utf8")
+}
+
+async function makeActivityDb(): Promise<D1Database> {
+  const db = makeD1()
+  await db.exec(migration("0001_create_tenant_repo_usage.sql"))
+  await db.exec(migration("0034_create_org_activity_seat_command.sql"))
+  return db
 }
 
 describe("enqueuePrReviewJob — authoritative DO path", () => {
@@ -266,6 +298,162 @@ describe("enqueuePrReviewJob — SIG-98 pause/ignore gate", () => {
     expect(result).toEqual({ ok: true, route: "do" })
     expect(doCalls).toHaveLength(1)
     expect(queueSend).not.toHaveBeenCalled()
+  })
+})
+
+describe("enqueuePrReviewJob — immutable activity event", () => {
+  it("persists exact event evidence before invoking the review DO", async () => {
+    const db = await makeActivityDb()
+    let rowsAtDoCall = -1
+    const { env, doCalls } = makeEnv({
+      platformDb: db,
+      onDoFetch: async () => {
+        const row = await db.prepare("SELECT COUNT(*) AS count FROM org_activity_seat_command").first<{
+          count: number
+        }>()
+        rowsAtDoCall = row?.count ?? -1
+      },
+    })
+
+    const result = await enqueuePrReviewJob(env, {
+      ...baseArgs,
+      repoId: 42,
+      activitySeatEvidence,
+    })
+
+    expect(result).toEqual({ ok: true, route: "do" })
+    expect(rowsAtDoCall).toBe(1)
+    expect(doCalls).toHaveLength(1)
+  })
+
+  it("keeps identical replay idempotent while retrying the review DO", async () => {
+    const db = await makeActivityDb()
+    const { env, doCalls } = makeEnv({ platformDb: db })
+    const args = { ...baseArgs, repoId: 42, activitySeatEvidence }
+
+    await expect(enqueuePrReviewJob(env, args)).resolves.toEqual({ ok: true, route: "do" })
+    await expect(
+      enqueuePrReviewJob(env, {
+        ...args,
+        activitySeatEvidence: { ...activitySeatEvidence, receivedAtMs: 2_000 },
+      }),
+    ).resolves.toEqual({ ok: true, route: "do" })
+
+    expect(doCalls).toHaveLength(2)
+    await expect(
+      db.prepare("SELECT COUNT(*) AS count, received_at_ms FROM org_activity_seat_command").first(),
+    ).resolves.toEqual({ count: 1, received_at_ms: 1_000 })
+  })
+
+  it("returns a non-transient conflict and never calls the DO for changed evidence", async () => {
+    const db = await makeActivityDb()
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const { env, doCalls } = makeEnv({ platformDb: db })
+    const args = { ...baseArgs, repoId: 42, activitySeatEvidence }
+    await enqueuePrReviewJob(env, args)
+
+    const result = await enqueuePrReviewJob(env, {
+      ...args,
+      activitySeatEvidence: {
+        ...activitySeatEvidence,
+        payloadSha256: "b".repeat(64),
+        targetGithubUserId: "333",
+      },
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      route: "activity-seat",
+      reason: "activity-command-conflict",
+      status: 409,
+    })
+    expect(doCalls).toHaveLength(1)
+    errSpy.mockRestore()
+  })
+
+  it("blocks a delivery collision even when its body hash belongs to another event", async () => {
+    const db = await makeActivityDb()
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const { env, doCalls } = makeEnv({ platformDb: db })
+    await enqueuePrReviewJob(env, { ...baseArgs, repoId: 42, activitySeatEvidence })
+    const secondEvidence = {
+      ...activitySeatEvidence,
+      deliveryId: "delivery-second",
+      payloadSha256: "b".repeat(64),
+      targetGithubUserId: "333",
+    }
+    await enqueuePrReviewJob(env, {
+      ...baseArgs,
+      deliveryId: "delivery-second",
+      repoId: 42,
+      activitySeatEvidence: secondEvidence,
+    })
+
+    const result = await enqueuePrReviewJob(env, {
+      ...baseArgs,
+      repoId: 42,
+      activitySeatEvidence: {
+        ...secondEvidence,
+        deliveryId: baseArgs.deliveryId,
+      },
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      route: "activity-seat",
+      reason: "activity-command-conflict",
+      status: 409,
+    })
+    expect(doCalls).toHaveLength(2)
+    errSpy.mockRestore()
+  })
+
+  it("fails before the DO when durable event persistence is unavailable", async () => {
+    const broken = {
+      withSession: () => {
+        throw new Error("D1 unavailable")
+      },
+    } as unknown as D1Database
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const { env, doCalls } = makeEnv({ platformDb: broken })
+
+    const result = await enqueuePrReviewJob(env, {
+      ...baseArgs,
+      repoId: 42,
+      activitySeatEvidence,
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      route: "activity-seat",
+      reason: "activity-command-unavailable",
+      status: 503,
+    })
+    expect(doCalls).toHaveLength(0)
+    errSpy.mockRestore()
+    warnSpy.mockRestore()
+  })
+
+  it("does not record activity for paused or ignored automatic reviews", async () => {
+    for (const [key, route] of [
+      ["pr-paused:Sigilix/sigilix#7", "skipped-paused"],
+      ["pr-ignored:Sigilix/sigilix#7", "skipped-ignored"],
+    ] as const) {
+      const db = await makeActivityDb()
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+      const { env, doCalls } = makeEnv({ platformDb: db, kvState: { [key]: "1700000000000" } })
+
+      await expect(enqueuePrReviewJob(env, { ...baseArgs, repoId: 42, activitySeatEvidence })).resolves.toEqual({
+        ok: true,
+        route,
+      })
+      await expect(db.prepare("SELECT COUNT(*) AS count FROM org_activity_seat_command").first()).resolves.toEqual({
+        count: 0,
+      })
+      expect(doCalls).toHaveLength(0)
+      logSpy.mockRestore()
+    }
   })
 })
 

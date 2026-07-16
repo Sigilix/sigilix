@@ -236,6 +236,7 @@ that depends on them. This section is the **living ledger** — every migration 
 | 14 | managed seat identity | D1 | `migrations/0028_create_org_workspace_seat_assignment.sql` | Adds exact-installation, immutable GitHub-user seat assignments and pins recoverable Stripe seat operations to either legacy-login or managed-GitHub identity | `wrangler d1 migrations apply` (pre-deploy) |
 | 15 | immutable usage author identity | D1 | `migrations/0029_add_usage_author_github_identity.sql` | Adds nullable immutable GitHub-user attribution to PR-review usage while leaving historical login-only rows explicitly unresolved | `wrangler d1 migrations apply` (pre-deploy) |
 | 16 | historical usage author attribution | D1 | `migrations/0030_backfill_usage_author_github_identity.sql` | Resolves the bounded pre-0029 usage backlog from exact GitHub PR metadata without inferring identity from mutable logins | `wrangler d1 migrations apply` (pre-deploy) |
+| 17 | immutable activity seat identity | D1 | `migrations/0031_create_org_activity_seat_assignment.sql` | Adds a dark exact-installation activity-seat assignment table keyed by immutable GitHub user id; no runtime cutover or legacy operation rewrite | `wrangler d1 migrations apply` (pre-deploy) |
 
 > Rule: a PR that adds a DO bumps the `[[migrations]]` list (never reorders existing tags); a PR that
 > touches D1 schema adds the next-numbered SQL file (never edits a prior one) and updates this ledger.

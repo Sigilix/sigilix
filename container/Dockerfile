@@ -14,6 +14,12 @@ RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 RUN npm i -g @sigilix/cli@1.17.14 && sigilix --version
 ENV SIGILIX_CLI_BIN=sigilix
 
+# SIG-545 B2: point the CLI agent at the compiled Sigilix grounding plugin (built
+# from container/src → dist below). cli-agent.ts adds this to the opencode config's
+# `plugin` array and injects SIGILIX_ENDPOINT/API_KEY/REPO_SLUG only when set, so
+# the agent gains the live multi-hop `retrieve_codebase` tool (→ Worker /v1/context).
+ENV SIGILIX_GROUNDING_PLUGIN=/app/dist/grounding-plugin.js
+
 WORKDIR /app
 
 # Install all deps (including devDeps for the compile step) before copying src

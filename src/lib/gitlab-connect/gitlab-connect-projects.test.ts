@@ -24,6 +24,10 @@ import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 
 const SESSION_COOKIE = "__Host-sigilix_session"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(7))
+const IDENTITY_MIGRATION = readFileSync(
+  new URL("../../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
 const AUTHORITY_MIGRATION = readFileSync(
   new URL("../../../migrations/0026_create_repository_context_authority.sql", import.meta.url),
   "utf8",
@@ -60,6 +64,17 @@ async function seedSession(kv: KVNamespace, sessionId: string, githubUserId: num
     encryptionKeyB64url: ENC_KEY,
     ...(userId ? { userId } : {}),
   })
+}
+
+async function seedIdentity(db: D1Database, userId: string, githubUserId = "111"): Promise<void> {
+  await db.exec(IDENTITY_MIGRATION)
+  await db
+    .prepare(
+      "INSERT INTO user_identity" +
+        " (user_id, github_user_id, providers, created_at, last_login_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(userId, githubUserId, JSON.stringify(["github"]), "2026-07-15T00:00:00.000Z", "2026-07-15T00:00:00.000Z")
+    .run()
 }
 
 function req(url: string, sessionId: string | null, init?: RequestInit): Request {
@@ -230,8 +245,9 @@ describe("gitlab connect — project endpoints", () => {
   it("connect + disconnect: activates and then removes exact stable-user D1 repository-context authority", async () => {
     const kv = makeKV()
     const stableUserId = "018f4f03-a7d3-7f32-8ad8-9c49c7440941"
-    await seedSession(kv, "s1", 111, stableUserId)
     const db = makeD1()
+    await seedIdentity(db, stableUserId)
+    await seedSession(kv, "s1", 111, stableUserId)
     await db.exec(CONTEXT_MIGRATION)
     await db.exec(AUTHORITY_MIGRATION)
     const env = {
@@ -327,8 +343,9 @@ describe("gitlab connect — project endpoints", () => {
   it("disconnect: removes a persisted pending authority generation and its exact credentials", async () => {
     const kv = makeKV()
     const stableUserId = "018f4f03-a7d3-7f32-8ad8-9c49c7440941"
-    await seedSession(kv, "s1", 111, stableUserId)
     const db = makeD1()
+    await seedIdentity(db, stableUserId)
+    await seedSession(kv, "s1", 111, stableUserId)
     await db.exec(CONTEXT_MIGRATION)
     await db.exec(AUTHORITY_MIGRATION)
     const env = {
@@ -389,8 +406,9 @@ describe("gitlab connect — project endpoints", () => {
     const kv = makeKV()
     const stableUserId = "018f4f03-a7d3-7f32-8ad8-9c49c7440941"
     const replacementUserId = "018f4f03-a7d3-7f32-8ad8-9c49c7440999"
-    await seedSession(kv, "s1", 111, stableUserId)
     const db = makeD1()
+    await seedIdentity(db, stableUserId)
+    await seedSession(kv, "s1", 111, stableUserId)
     await db.exec(AUTHORITY_MIGRATION)
     const env = {
       ...makeEnv(kv),
@@ -487,8 +505,9 @@ describe("gitlab connect — project endpoints", () => {
 
   it("connect: requires a stable session before any GitLab side effect when context authority is on", async () => {
     const kv = makeKV()
-    await seedSession(kv, "s1", 111)
     const db = makeD1()
+    await db.exec(IDENTITY_MIGRATION)
+    await seedSession(kv, "s1", 111)
     await db.exec(AUTHORITY_MIGRATION)
     const env = {
       ...makeEnv(kv),
@@ -508,16 +527,18 @@ describe("gitlab connect — project endpoints", () => {
       env,
       ctx,
     )
-    expect(response.status).toBe(409)
-    expect(await response.json()).toEqual({ error: "session_reauthenticate" })
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: "unauthorized" })
+    expect(await kv.get("auth_session:s1")).toBeNull()
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it("connect: D1 ownership conflict stops before any GitLab provisioning side effect", async () => {
     const kv = makeKV()
     const requesterId = "018f4f03-a7d3-7f32-8ad8-9c49c7440941"
-    await seedSession(kv, "s1", 111, requesterId)
     const db = makeD1()
+    await seedIdentity(db, requesterId)
+    await seedSession(kv, "s1", 111, requesterId)
     await db.exec(AUTHORITY_MIGRATION)
     const competing = await claimGitLabRepositoryAuthority(db, {
       scopeId: "018f4f03-a7d3-7f32-8ad8-9c49c7440999",

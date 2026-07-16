@@ -20,6 +20,10 @@ const MIGRATION_0004 = readFileSync(
   new URL("../../../migrations/0004_create_usage_events.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_0006 = readFileSync(
+  new URL("../../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
 const MIGRATION_0011 = readFileSync(
   new URL("../../../migrations/0011_add_tenant_subscription_status.sql", import.meta.url),
   "utf8",
@@ -299,10 +303,17 @@ describe("handleResearchCreate — session org repo grounding", () => {
     await db.exec(MIGRATION_0001)
     await db.exec(MIGRATION_0003)
     await db.exec(MIGRATION_0004)
+    await db.exec(MIGRATION_0006)
     await db.exec(MIGRATION_0011)
     await db
       .prepare(
         "INSERT INTO account_tenant (github_user_id, installation_id, role, created_at) VALUES ('42', 99, 'member', 't')",
+      )
+      .run()
+    await db
+      .prepare(
+        "INSERT INTO user_identity (user_id, github_user_id, providers, created_at, last_login_at)" +
+          " VALUES ('user-42', '42', '[\"github\"]', 't', 't')",
       )
       .run()
     const kv = makeKv()
@@ -311,6 +322,7 @@ describe("handleResearchCreate — session org repo grounding", () => {
       sessionId: "session-1",
       login: "former-member",
       githubUserId: 42,
+      userId: "user-42",
       accessToken: "github-user-token",
       encryptionKeyB64url: ENC_KEY,
     })

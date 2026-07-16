@@ -12,6 +12,7 @@ import type { Env } from "@/src/shared/types/env"
 const SESSION_ID = "checkout-race-session"
 const SESSION_COOKIE = "__Host-sigilix_session"
 const INSTALLATION_ID = 555
+const USER_ID = "checkout-race-user"
 const PORTAL_ORIGIN = "https://app.sigilix.ai"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(23))
 
@@ -56,6 +57,7 @@ async function makeDatabase(): Promise<D1Database> {
   const db = makeD1()
   for (const name of [
     "0001_create_tenant_repo_usage.sql",
+    "0006_create_user_identity.sql",
     "0011_add_tenant_subscription_status.sql",
     "0012_add_tenant_billing_source.sql",
     "0020_create_stripe_seat_reconciliation.sql",
@@ -63,6 +65,14 @@ async function makeDatabase(): Promise<D1Database> {
   ]) {
     await db.exec(migration(name))
   }
+  await db
+    .prepare(
+      `INSERT INTO user_identity
+        (user_id, github_user_id, providers, created_at, last_login_at)
+       VALUES (?, '42', '["github"]', ?, ?)`,
+    )
+    .bind(USER_ID, "2026-07-15T00:00:00.000Z", "2026-07-15T00:00:00.000Z")
+    .run()
   await db
     .prepare(
       `INSERT INTO tenant
@@ -83,6 +93,7 @@ async function makeHarness(): Promise<{ db: D1Database; env: Env }> {
     sessionId: SESSION_ID,
     login: "octocat",
     githubUserId: 42,
+    userId: USER_ID,
     accessToken: "ghu_checkout_race",
     encryptionKeyB64url: ENC_KEY,
   })

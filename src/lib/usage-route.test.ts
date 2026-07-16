@@ -32,6 +32,10 @@ const MIGRATION_EVENTS_SQL = readFileSync(
   new URL("../../migrations/0004_create_usage_events.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_IDENTITY_SQL = readFileSync(
+  new URL("../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
 const MIGRATION_SUBSCRIPTION_STATUS_SQL = readFileSync(
   new URL("../../migrations/0011_add_tenant_subscription_status.sql", import.meta.url),
   "utf8",
@@ -59,8 +63,17 @@ async function makeDb(): Promise<D1Database> {
   await db.exec(MIGRATION_USAGE_SQL)
   await db.exec(MIGRATION_API_KEY_SQL)
   await db.exec(MIGRATION_EVENTS_SQL)
+  await db.exec(MIGRATION_IDENTITY_SQL)
   await db.exec(MIGRATION_SUBSCRIPTION_STATUS_SQL)
   await applyCostMigrations(db)
+  const insertIdentity = db.prepare(
+    `INSERT INTO user_identity
+     (user_id, github_user_id, providers, created_at, last_login_at)
+     VALUES (?, ?, '["github"]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+  )
+  for (const githubUserId of [111, 222, 333, 444, 555]) {
+    await insertIdentity.bind(`user-${githubUserId}`, String(githubUserId)).run()
+  }
   return db
 }
 
@@ -68,6 +81,7 @@ async function seedSession(kv: KVNamespace, sessionId: string, login: string, gi
   await createSession({
     kv,
     sessionId,
+    userId: `user-${githubUserId}`,
     login,
     githubUserId,
     accessToken: "ghu_test_token",

@@ -71,6 +71,17 @@ async function seedSession(kv: KVNamespace, sessionId: string, over: Partial<Ses
   await kv.put(`auth_session:${sessionId}`, JSON.stringify(sessionRecord(over)))
 }
 
+async function seedLiveIdentity(db: D1Database, userId: string, githubUserId: string): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO user_identity
+        (user_id, github_user_id, providers, created_at, last_login_at)
+       VALUES (?, ?, '["github"]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+    )
+    .bind(userId, githubUserId)
+    .run()
+}
+
 function req(url: string, sessionId: string | null, init?: RequestInit): Request {
   const headers = new Headers(init?.headers)
   if (sessionId) headers.set("cookie", `${SESSION_COOKIE}=${sessionId}`)
@@ -345,12 +356,14 @@ describe("DELETE /v1/account", () => {
     )
 
     expect(res?.status).toBe(401)
-    expect(res?.headers.get("set-cookie")).toContain("__Host-sigilix_session=")
+    expect(res?.headers.get("set-cookie")).toBeNull()
+    expect(await res?.json()).toEqual({ error: "unauthenticated" })
+    expect(kv._store.has("auth_session:mismatch")).toBe(false)
     expect(await db.prepare("SELECT user_id FROM user_identity WHERE user_id = 'user-a'").first()).not.toBeNull()
     expect(await db.prepare("SELECT user_id FROM user_identity WHERE user_id = 'user-b'").first()).not.toBeNull()
   })
 
-  it("requires reauthentication before a legacy session can delete an account", async () => {
+  it("rejects and revokes a legacy session before account deletion", async () => {
     await kv.put("auth_session:legacy-delete", JSON.stringify(legacySessionRecord()))
 
     const res = await worker.fetch(
@@ -364,8 +377,8 @@ describe("DELETE /v1/account", () => {
     )
 
     expect(res.status).toBe(401)
-    expect(res.headers.get("set-cookie")).toContain("__Host-sigilix_session=")
-    await expect(res.json()).resolves.toEqual({ error: "reauthentication_required" })
+    expect(res.headers.get("set-cookie")).toBeNull()
+    await expect(res.json()).resolves.toEqual({ error: "unauthenticated" })
     expect(kv._store.has("auth_session:legacy-delete")).toBe(false)
     await expect(
       db.prepare("SELECT user_id FROM user_identity WHERE user_id = 'user-a'").first(),
@@ -887,11 +900,12 @@ describe("GET /v1/account/export", () => {
     )
 
     expect(res?.status).toBe(401)
-    expect(res?.headers.get("set-cookie")).toContain("__Host-sigilix_session=")
+    expect(res?.headers.get("set-cookie")).toBeNull()
     expect(await res?.json()).toEqual({ error: "unauthenticated" })
+    expect(kv._store.has("auth_session:mismatch")).toBe(false)
   })
 
-  it("requires reauthentication before a legacy GitHub session can export an account", async () => {
+  it("rejects and revokes a legacy GitHub session before account export", async () => {
     const { env, db, kv } = await makeEnv()
     await seedAccount(db, { userId: "user-a", githubUserId: "111", login: "octocat" })
     await seedPersonalAppMemory(db, { id: "appmem_legacy", userId: "user-a", content: "Legacy session memory." })
@@ -904,15 +918,17 @@ describe("GET /v1/account/export", () => {
       new URL("https://x/v1/account/export"),
     )
     expect(res?.status).toBe(401)
-    expect(res?.headers.get("set-cookie")).toContain("__Host-sigilix_session=")
-    await expect(res?.json()).resolves.toEqual({ error: "reauthentication_required" })
+    expect(res?.headers.get("set-cookie")).toBeNull()
+    await expect(res?.json()).resolves.toEqual({ error: "unauthenticated" })
     expect(kv._store.has("auth_session:legacy")).toBe(false)
   })
 })
 
 describe("POST /v1/account/logout-all", () => {
   it("revokes every session the caller holds — and nobody else's", async () => {
-    const { env, kv } = await makeEnv()
+    const { env, db, kv } = await makeEnv()
+    await seedLiveIdentity(db, "user-a", "111")
+    await seedLiveIdentity(db, "user-b", "222")
     // three sessions for user-a (across devices), one for a different user.
     await seedSession(kv, "a1", { userId: "user-a", githubUserId: 111 })
     await seedSession(kv, "a2", { userId: "user-a", githubUserId: 111 })
@@ -953,7 +969,8 @@ describe("POST /v1/account/logout-all", () => {
   })
 
   it("415 without application/json (CSRF guard)", async () => {
-    const { env, kv } = await makeEnv()
+    const { env, db, kv } = await makeEnv()
+    await seedLiveIdentity(db, "user-a", "111")
     await seedSession(kv, "a1")
     const res = await tryHandleAccountRoute(
       req("https://x/v1/account/logout-all", "a1", {

@@ -17,6 +17,7 @@ const ACCESS_SQL = readFileSync(
   new URL("../../migrations/0022_create_org_workspace_access.sql", import.meta.url),
   "utf8",
 )
+const IDENTITY_SQL = readFileSync(new URL("../../migrations/0006_create_user_identity.sql", import.meta.url), "utf8")
 
 function makeKV(): KVNamespace {
   const store = new Map<string, string>()
@@ -35,7 +36,18 @@ async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(TENANT_SQL)
   await db.exec(ACCOUNT_SQL)
+  await db.exec(IDENTITY_SQL)
   await db.exec(ACCESS_SQL)
+  await db
+    .prepare(
+      `INSERT INTO user_identity
+       (user_id, github_user_id, providers, created_at, last_login_at)
+       VALUES
+         ('org-access-user-111', '111', '["github"]', 't', 't'),
+         ('org-access-user-222', '222', '["github"]', 't', 't'),
+         ('org-access-user-no-github', NULL, '[]', 't', 't')`,
+    )
+    .run()
   await db
     .prepare(
       "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
@@ -55,6 +67,8 @@ async function seedSession(
     sessionId: options.sessionId ?? "s1",
     login: options.login ?? "octocat",
     ...(options.githubUserId !== undefined ? { githubUserId: options.githubUserId } : {}),
+    userId:
+      options.githubUserId !== undefined ? `org-access-user-${options.githubUserId}` : "org-access-user-no-github",
     accessToken: "ghu_test",
     encryptionKeyB64url: ENC_KEY,
   })

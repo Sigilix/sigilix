@@ -7,6 +7,7 @@ import type { Env } from "@/src/shared/types/env"
 
 const INSTALLATION_ID = 1
 const ACTOR_ID = "111"
+const ACTOR_USER_ID = "managed-seat-actor"
 const TARGET_ID = "222"
 const SESSION_ID = "managed-seat-session"
 const SESSION_COOKIE = "__Host-sigilix_session"
@@ -32,6 +33,7 @@ async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   for (const name of [
     "0001_create_tenant_repo_usage.sql",
+    "0006_create_user_identity.sql",
     "0007_create_org_seat_assignment.sql",
     "0011_add_tenant_subscription_status.sql",
     "0012_add_tenant_billing_source.sql",
@@ -42,6 +44,14 @@ async function makeDb(): Promise<D1Database> {
   ]) {
     await db.exec(migration(name))
   }
+  await db
+    .prepare(
+      `INSERT INTO user_identity
+        (user_id, github_user_id, providers, created_at, last_login_at)
+       VALUES (?, ?, '["github"]', ?, ?)`,
+    )
+    .bind(ACTOR_USER_ID, ACTOR_ID, NOW, NOW)
+    .run()
   await db
     .prepare(
       "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
@@ -80,6 +90,7 @@ async function setup(targetAccess = true): Promise<{ db: D1Database; env: Env }>
     sessionId: SESSION_ID,
     login: "owner",
     githubUserId: Number(ACTOR_ID),
+    userId: ACTOR_USER_ID,
     accessToken: "ghu_actor",
     encryptionKeyB64url: ENC_KEY,
   })

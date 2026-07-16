@@ -65,15 +65,17 @@ describe("handleIdentityEmailRoute", () => {
   })
 
   it("415 without application/json (CSRF guard)", async () => {
-    await seed(kv, "s1", { userId: "u1" })
+    const gh = await upsertGithubIdentity(db, { githubUserId: "1", nowIso: "2026-07-02T00:00:00.000Z" })
+    await seed(kv, "s1", { userId: gh!.userId, githubUserId: 1 })
     expect((await handleIdentityEmailRoute(req("s1", { email: "a@b.com" }, "text/plain"), env)).status).toBe(415)
   })
 
   it("409 identity_not_linked when the session predates user_identity (no userId)", async () => {
     await seed(kv, "legacy", { githubUserId: 5 })
     const res = await handleIdentityEmailRoute(req("legacy", { email: "a@b.com" }), env)
-    expect(res.status).toBe(409)
-    expect(await res.json()).toMatchObject({ error: "identity_not_linked" })
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ error: "unauthenticated" })
+    expect(await kv.get("auth_session:legacy")).toBeNull()
   })
 
   it("400 on an invalid email", async () => {

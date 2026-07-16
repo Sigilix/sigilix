@@ -16,6 +16,10 @@ const USER_ID = "018f4f03-a7d3-7f32-8ad8-9c49c7440941"
 const SESSION_COOKIE = "__Host-sigilix_session"
 const PORTAL_ORIGIN = "https://app.sigilix.ai"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(53))
+const IDENTITY_MIGRATION = readFileSync(
+  new URL("../../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
 const CONTEXT_MIGRATION = readFileSync(
   new URL("../../../migrations/0024_create_repository_context.sql", import.meta.url),
   "utf8",
@@ -57,8 +61,16 @@ describe("GitLab canonical repository-context route", () => {
 
   beforeEach(async () => {
     db = makeD1()
+    await db.exec(IDENTITY_MIGRATION)
     await db.exec(CONTEXT_MIGRATION)
     await db.exec(AUTHORITY_MIGRATION)
+    await db
+      .prepare(
+        "INSERT INTO user_identity" +
+          " (user_id, providers, created_at, last_login_at) VALUES (?, ?, '2026-07-15T00:00:00.000Z', '2026-07-15T00:00:00.000Z')",
+      )
+      .bind(USER_ID, JSON.stringify(["gitlab"]))
+      .run()
     kv = makeKV()
     await createSession({
       kv,
@@ -255,8 +267,16 @@ describe("GitLab canonical repository-context route", () => {
 
   it("does not treat pre-activation connector KV as repository-context authority", async () => {
     const isolatedDb = makeD1()
+    await isolatedDb.exec(IDENTITY_MIGRATION)
     await isolatedDb.exec(CONTEXT_MIGRATION)
     await isolatedDb.exec(AUTHORITY_MIGRATION)
+    await isolatedDb
+      .prepare(
+        "INSERT INTO user_identity" +
+          " (user_id, providers, created_at, last_login_at) VALUES (?, ?, '2026-07-15T00:00:00.000Z', '2026-07-15T00:00:00.000Z')",
+      )
+      .bind(USER_ID, JSON.stringify(["gitlab"]))
+      .run()
     await kv.put("gitlab-project-token:99", "glpat-not-authority")
     await kv.put("gitlab-webhook-secret:99", "not-authority")
     await kv.put(

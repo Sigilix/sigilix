@@ -17,6 +17,10 @@ const MIGRATION_API_KEY_SQL = readFileSync(
   new URL("../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_IDENTITY_SQL = readFileSync(
+  new URL("../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
 const MIGRATION_SEAT_SQL = readFileSync(
   new URL("../migrations/0007_create_org_seat_assignment.sql", import.meta.url),
   "utf8",
@@ -50,16 +54,18 @@ async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(MIGRATION_USAGE_SQL)
   await db.exec(MIGRATION_API_KEY_SQL)
+  await db.exec(MIGRATION_IDENTITY_SQL)
   await db.exec(MIGRATION_SEAT_SQL)
   return db
 }
 
-async function seedSession(kv: KVNamespace): Promise<void> {
+async function seedSession(kv: KVNamespace, userId?: string): Promise<void> {
   await createSession({
     kv,
     sessionId: "sess-1",
     login: "octocat",
     githubUserId: 111,
+    ...(userId ? { userId } : {}),
     accessToken: "ghu_test_token",
     encryptionKeyB64url: ENC_KEY,
   })
@@ -135,7 +141,13 @@ describe("organization bootstrap authorization through the real Worker", () => {
   it("admin of A but member of selected B receives only B's own-seat member response", async () => {
     const kv = makeKV()
     const db = await makeDb()
-    await seedSession(kv)
+    await db
+      .prepare(
+        "INSERT INTO user_identity (user_id, github_user_id, providers, created_at, last_login_at)" +
+          " VALUES ('user-111', '111', '[\"github\"]', 't', 't')",
+      )
+      .run()
+    await seedSession(kv, "user-111")
     await seedOrgUsage(db)
 
     const githubFetch = vi.fn(async (input: RequestInfo | URL) => {

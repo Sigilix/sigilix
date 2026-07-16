@@ -19,6 +19,10 @@ const PORTAL_ORIGIN = "https://app.sigilix.ai"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(41))
 const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext
 const wrangler = readFileSync(new URL("../../wrangler.toml", import.meta.url), "utf8")
+const identityMigration = readFileSync(
+  new URL("../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
 const migration = readFileSync(new URL("../../migrations/0024_create_repository_context.sql", import.meta.url), "utf8")
 const orgMembershipMigration = readFileSync(
   new URL("../../migrations/0022_create_org_workspace_access.sql", import.meta.url),
@@ -64,6 +68,7 @@ function makeKV(): KVNamespace {
 
 async function makeDb(applyMigration = true): Promise<D1Database> {
   const db = makeD1()
+  await db.exec(identityMigration)
   if (applyMigration) await db.exec(migration)
   return db
 }
@@ -76,14 +81,34 @@ async function makeEnv(
     membershipMode?: string
     appCredentials?: boolean
     cacheAppToken?: boolean
+    identityDb?: D1Database
   } = {},
 ): Promise<Env> {
   const kv = makeKV()
+  const githubUserId = options.githubUserId ?? 111
+  const userId = `repository-context-user-${githubUserId}`
+  const identityDb = options.identityDb ?? options.db
+  if (identityDb) {
+    await identityDb
+      .prepare(
+        "INSERT OR IGNORE INTO user_identity" +
+          " (user_id, github_user_id, providers, created_at, last_login_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .bind(
+        userId,
+        String(githubUserId),
+        JSON.stringify(["github"]),
+        "2026-07-15T00:00:00.000Z",
+        "2026-07-15T00:00:00.000Z",
+      )
+      .run()
+  }
   await createSession({
     kv,
     sessionId: SESSION_ID,
     login: "owner",
-    githubUserId: options.githubUserId ?? 111,
+    githubUserId,
+    userId,
     accessToken: "ghu_repository_context",
     encryptionKeyB64url: ENC_KEY,
   })
@@ -382,13 +407,15 @@ describe("repository-context route", () => {
 
   it("completes the exact repository lookup before touching repository-context D1 and maps failure to 503", async () => {
     const events: string[] = []
+    const identityDb = await makeDb()
     const db = {
-      prepare() {
+      prepare(sql: string) {
+        if (sql.includes("FROM user_identity")) return identityDb.prepare(sql)
         events.push("d1")
         throw new Error("migration missing")
       },
     } as unknown as D1Database
-    const env = await makeEnv({ db })
+    const env = await makeEnv({ db, identityDb })
     stubGitHub({ events })
     const response = await handleGetRepositoryContext(request("GET"), env, undefined, INSTALLATION_ID)
     expect(response.status).toBe(503)
@@ -414,12 +441,19 @@ describe("repository-context route", () => {
     ]
 
     for (const testCase of cases) {
-      const dbPrepare = vi.fn(() => {
+      const identityDb = await makeDb()
+      const downstreamPrepare = vi.fn((_sql: string) => {
         throw new Error("repository-context D1 must not run")
       })
+      const db = {
+        prepare(sql: string) {
+          return sql.includes("FROM user_identity") ? identityDb.prepare(sql) : downstreamPrepare(sql)
+        },
+      } as unknown as D1Database
       const env = await makeEnv({
         ...testCase.env,
-        db: { prepare: dbPrepare } as unknown as D1Database,
+        db,
+        identityDb,
       })
       stubGitHub(testCase.github)
       const putRequest = request("PUT", { body: JSON.stringify(validBody()) })
@@ -437,12 +471,13 @@ describe("repository-context route", () => {
       expect(response.status, testCase.name).toBe(503)
       expect(await response.json()).toEqual({ error: "repository_scope_unavailable" })
       expect(bodyReads, testCase.name).toBe(0)
-      expect(dbPrepare, testCase.name).not.toHaveBeenCalled()
+      expect(downstreamPrepare, testCase.name).not.toHaveBeenCalled()
     }
   })
 
   it("uses app-installed repos so a stored admin can retain context hidden from their user-scoped list", async () => {
     const db = makeD1()
+    await db.exec(identityMigration)
     await db.exec(orgMembershipMigration)
     await db.exec(migration)
     await seedSnapshot(db)

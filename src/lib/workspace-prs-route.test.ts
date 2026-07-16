@@ -24,6 +24,10 @@ const MIGRATION_API_KEY_SQL = readFileSync(
   new URL("../../migrations/0003_create_account_tenant_and_api_key.sql", import.meta.url),
   "utf8",
 )
+const MIGRATION_IDENTITY_SQL = readFileSync(
+  new URL("../../migrations/0006_create_user_identity.sql", import.meta.url),
+  "utf8",
+)
 
 function makeKV(): KVNamespace {
   const store = new Map<string, string>()
@@ -46,15 +50,37 @@ async function makeDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(MIGRATION_USAGE_SQL)
   await db.exec(MIGRATION_API_KEY_SQL)
+  await db.exec(MIGRATION_IDENTITY_SQL)
   return db
 }
 
-async function seedSession(kv: KVNamespace, sessionId: string, login: string, githubUserId: number): Promise<void> {
+async function seedSession(
+  db: D1Database,
+  kv: KVNamespace,
+  sessionId: string,
+  login: string,
+  githubUserId: number,
+): Promise<void> {
+  const userId = `workspace-prs-user-${githubUserId}`
+  await db
+    .prepare(
+      "INSERT OR IGNORE INTO user_identity" +
+        " (user_id, github_user_id, providers, created_at, last_login_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(
+      userId,
+      String(githubUserId),
+      JSON.stringify(["github"]),
+      "2026-07-15T00:00:00.000Z",
+      "2026-07-15T00:00:00.000Z",
+    )
+    .run()
   await createSession({
     kv,
     sessionId,
     login,
     githubUserId,
+    userId,
     accessToken: "ghu_test_token",
     encryptionKeyB64url: ENC_KEY,
   })
@@ -149,7 +175,7 @@ describe("handleWorkspacePrsRoute (GET /v1/workspace/prs)", () => {
     it("splits org/mine, case-insensitively, collapses repeat reviews to the latest, newest-first", async () => {
       const db = await makeDb()
       const kv = makeKV()
-      await seedSession(kv, "sess-1", "Octocat", 111)
+      await seedSession(db, kv, "sess-1", "Octocat", 111)
       const env = {
         OPENCLAW_STATE: kv,
         OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
@@ -209,7 +235,7 @@ describe("handleWorkspacePrsRoute (GET /v1/workspace/prs)", () => {
     it("attaches installationId + a GitHub-resolved author (avatar + id) to each row, incl. bot authors", async () => {
       const db = await makeDb()
       const kv = makeKV()
-      await seedSession(kv, "sess-1", "octocat", 111)
+      await seedSession(db, kv, "sess-1", "octocat", 111)
       const env = {
         OPENCLAW_STATE: kv,
         OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
@@ -294,7 +320,7 @@ describe("handleWorkspacePrsRoute (GET /v1/workspace/prs)", () => {
     it("degrades to a login-only author (null avatar/id) when the GitHub user lookup fails", async () => {
       const db = await makeDb()
       const kv = makeKV()
-      await seedSession(kv, "sess-1", "octocat", 111)
+      await seedSession(db, kv, "sess-1", "octocat", 111)
       const env = {
         OPENCLAW_STATE: kv,
         OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
@@ -331,7 +357,7 @@ describe("handleWorkspacePrsRoute (GET /v1/workspace/prs)", () => {
     it("busy installation: a less-active author's own recent PR still reaches `mine` even though it falls outside the old raw-100 window (regression for the pre-collapse-cap bug)", async () => {
       const db = await makeDb()
       const kv = makeKV()
-      await seedSession(kv, "sess-1", "quiet-dev", 111)
+      await seedSession(db, kv, "sess-1", "quiet-dev", 111)
       const env = {
         OPENCLAW_STATE: kv,
         OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
@@ -382,7 +408,7 @@ describe("handleWorkspacePrsRoute (GET /v1/workspace/prs)", () => {
     it("scopes org to only the session user's own installations (never another tenant's rows)", async () => {
       const db = await makeDb()
       const kv = makeKV()
-      await seedSession(kv, "sess-1", "octocat", 111)
+      await seedSession(db, kv, "sess-1", "octocat", 111)
       const env = {
         OPENCLAW_STATE: kv,
         OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
@@ -431,7 +457,7 @@ describe("handleWorkspacePrsRoute (GET /v1/workspace/prs)", () => {
     it("soft-fails to empty org/mine when GitHub's installations call errors (never 500s the panel)", async () => {
       const db = await makeDb()
       const kv = makeKV()
-      await seedSession(kv, "sess-1", "octocat", 111)
+      await seedSession(db, kv, "sess-1", "octocat", 111)
       const env = {
         OPENCLAW_STATE: kv,
         OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
@@ -546,14 +572,16 @@ describe("handleWorkspacePrsRoute (GET /v1/workspace/prs)", () => {
   })
 
   it("fail-soft on a D1 read error: 200 with empty org/mine, never a 500", async () => {
-    // Session path (KV-only auth — never touches D1) so the fault under test
-    // is isolated to the usage_ledger READ, not auth. requireApiTenant's own
+    // Let central identity proof succeed so the fault remains isolated to the
+    // usage_ledger read. requireApiTenant's own
     // D1 lookup fails CLOSED on a broken db (401, see api-key-resolver.ts) —
     // that's a different, already-covered contract, not this one.
     const kv = makeKV()
-    await seedSession(kv, "sess-1", "octocat", 111)
+    const identityDb = await makeDb()
+    await seedSession(identityDb, kv, "sess-1", "octocat", 111)
     const brokenDb = {
-      prepare() {
+      prepare(sql: string) {
+        if (sql.includes("FROM user_identity")) return identityDb.prepare(sql)
         throw new Error("simulated D1 error")
       },
     } as unknown as D1Database

@@ -12,6 +12,7 @@ import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import type { Env } from "@/src/shared/types/env"
 
 const BASE_SQL = readFileSync(new URL("../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
+const IDENTITY_SQL = readFileSync(new URL("../../migrations/0006_create_user_identity.sql", import.meta.url), "utf8")
 const LINEAR_SQL = readFileSync(new URL("../../migrations/0016_create_linear_integration.sql", import.meta.url), "utf8")
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(4))
 const COOKIE = "__Host-sigilix_session"
@@ -35,6 +36,7 @@ function makeKV(): { kv: KVNamespace; values: Map<string, string> } {
 async function setup() {
   const db = makeD1()
   await db.exec(BASE_SQL)
+  await db.exec(IDENTITY_SQL)
   await db.exec(LINEAR_SQL)
   const now = "2026-07-10T00:00:00.000Z"
   for (const [installationId, login, repoId, repo] of [
@@ -55,11 +57,24 @@ async function setup() {
   }
 
   const { kv, values } = makeKV()
+  for (const [userId, githubUserId] of [
+    ["linear-user-111", "111"],
+    ["linear-user-222", "222"],
+  ] as const) {
+    await db
+      .prepare(
+        "INSERT INTO user_identity" +
+          " (user_id, github_user_id, providers, created_at, last_login_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .bind(userId, githubUserId, JSON.stringify(["github"]), now, now)
+      .run()
+  }
   await createSession({
     kv,
     sessionId: "alice-session",
     login: "alice",
     githubUserId: 111,
+    userId: "linear-user-111",
     accessToken: "gh-alice",
     encryptionKeyB64url: ENC_KEY,
   })
@@ -68,6 +83,7 @@ async function setup() {
     sessionId: "mallory-session",
     login: "mallory",
     githubUserId: 222,
+    userId: "linear-user-222",
     accessToken: "gh-mallory",
     encryptionKeyB64url: ENC_KEY,
   })
@@ -244,7 +260,12 @@ describe("tenant-bound Linear OAuth", () => {
     expect(new URL(startBodyA.authorizeUrl).searchParams.get("prompt")).toBe("consent")
     const stateA = stateFrom(startBodyA)
     const storedState = JSON.parse(values.get(`linear-oauth-state:${stateA}`) ?? "{}") as Record<string, unknown>
-    expect(storedState).toMatchObject({ version: 1, installationId: 11, userId: "111", login: "alice" })
+    expect(storedState).toMatchObject({
+      version: 1,
+      installationId: 11,
+      userId: "linear-user-111",
+      login: "alice",
+    })
 
     const wrongUser = await handleLinearOAuthCallback(callbackRequest("code-a", stateA, "mallory-session"), env)
     expect(wrongUser.status).toBe(403)

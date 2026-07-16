@@ -13,6 +13,7 @@ const SESSION_COOKIE = "__Host-sigilix_session"
 const ENC_KEY = base64urlEncode(new Uint8Array(32).fill(9))
 const MIGRATIONS = [
   "0001_create_tenant_repo_usage.sql",
+  "0006_create_user_identity.sql",
   "0011_add_tenant_subscription_status.sql",
   "0017_create_org_skill_policy.sql",
 ].map((name) => readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"))
@@ -111,12 +112,19 @@ describe("governed skill route → D1 → run DO → model", () => {
     await db
       .prepare("INSERT INTO tenant (installation_id, tier, created_at, updated_at) VALUES (42, 'pro', 't', 't')")
       .run()
+    await db
+      .prepare(
+        "INSERT INTO user_identity (user_id, github_user_id, providers, created_at, last_login_at)" +
+          " VALUES ('user-111', '111', '[\"github\"]', 't', 't')",
+      )
+      .run()
     state = kv()
     await createSession({
       kv: state,
       sessionId: "sess-1",
       login: "octocat",
       githubUserId: 111,
+      userId: "user-111",
       accessToken: "ghu_111",
       encryptionKeyB64url: ENC_KEY,
     })

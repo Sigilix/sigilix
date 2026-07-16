@@ -252,7 +252,7 @@ export function buildPrompt(
     ...(groundingToolAvailable
       ? [
           "",
-          "You have a `retrieve_codebase` tool that returns the most relevant code, symbols, and team conventions from this repository's Sigilix index for a query. Before you edit, CALL IT to find the exact files, functions, and patterns you need — and call it again whenever you need more context. Prefer it over reading whole files or guessing; it is cheaper and more precise.",
+          "MANDATORY FIRST STEP: before you read any file or make any edit, you MUST call the `retrieve_codebase` tool at least once with a query describing what this ticket needs. It returns the most relevant code AND this team's conventions/past decisions (which are NOT in the files) from the Sigilix index. Do not skip it. Call it again whenever you need more context. It is cheaper and more precise than reading whole files.",
         ]
       : []),
     ...(mcpAvailable

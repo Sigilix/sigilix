@@ -11,8 +11,7 @@ import worker from "@/src/index"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { tryHandleAccountRoute } from "@/src/lib/account-routes"
 import { purgeUserAccount, subjectFromSession } from "@/src/lib/account-store"
-import { insertApiKey, linkAccountTenant } from "@/src/lib/api-key-store"
-import { sha256Hex } from "@/src/lib/auth-bearer"
+import { seedAccount, seedLiveIdentity } from "./account-routes.test-helpers"
 import type { SessionRecord } from "@/src/lib/auth-session"
 import type { Env } from "@/src/shared/types/env"
 
@@ -69,17 +68,6 @@ function legacySessionRecord(over: Partial<SessionRecord> = {}): SessionRecord {
 
 async function seedSession(kv: KVNamespace, sessionId: string, over: Partial<SessionRecord> = {}): Promise<void> {
   await kv.put(`auth_session:${sessionId}`, JSON.stringify(sessionRecord(over)))
-}
-
-async function seedLiveIdentity(db: D1Database, userId: string, githubUserId: string): Promise<void> {
-  await db
-    .prepare(
-      `INSERT INTO user_identity
-        (user_id, github_user_id, providers, created_at, last_login_at)
-       VALUES (?, ?, '["github"]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
-    )
-    .bind(userId, githubUserId)
-    .run()
 }
 
 function req(url: string, sessionId: string | null, init?: RequestInit): Request {
@@ -244,47 +232,6 @@ afterEach(() => {
 })
 
 /** Seed a full account footprint for a GitHub user (identity, profile, tenant, key, usage). */
-async function seedAccount(
-  db: D1Database,
-  args: { userId: string; githubUserId: string; login: string; email?: string },
-): Promise<void> {
-  const now = "2026-01-01T00:00:00Z"
-  await db
-    .prepare(
-      "INSERT INTO user_identity (user_id, github_user_id, email, email_verified, name, providers, created_at, last_login_at) VALUES (?, ?, ?, 0, ?, ?, ?, ?)",
-    )
-    .bind(args.userId, args.githubUserId, args.email ?? null, args.login, JSON.stringify(["github"]), now, now)
-    .run()
-  await db
-    .prepare("INSERT INTO user_credential (user_id, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)")
-    .bind(args.userId, "pbkdf2-sha256$1$x$y", now, now)
-    .run()
-  await db
-    .prepare(
-      "INSERT INTO user_profile (github_user_id, display_name, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(Number(args.githubUserId), args.login, '{"theme":"dark"}', now, now)
-    .run()
-  await linkAccountTenant(db, { githubUserId: args.githubUserId, installationId: 42, role: "owner", nowIso: now })
-  await insertApiKey(db, {
-    id: `key-${args.userId}`,
-    keyHash: await sha256Hex(`plain-${args.userId}`),
-    installationId: 42,
-    createdBy: args.githubUserId,
-    nowIso: now,
-    name: "laptop",
-  })
-  await db
-    .prepare("INSERT INTO usage_events (meter, installation_id, user_key, surface, created_at) VALUES (?, ?, ?, ?, ?)")
-    .bind("coding_agent", 42, `gh:${args.githubUserId}`, "cli", now)
-    .run()
-  await db
-    .prepare(
-      "INSERT INTO email_verification_token (token_hash, user_id, email, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(`tok-${args.userId}`, args.userId, args.email ?? "x@y.com", now, "2099-01-01T00:00:00Z")
-    .run()
-}
 
 describe("DELETE /v1/account", () => {
   let env: Env
@@ -884,6 +831,21 @@ describe("GET /v1/account/export", () => {
       new URL("https://x/v1/account/export"),
     )
     expect(res?.status).toBe(401)
+  })
+
+  it("400 on any unexpected query parameter", async () => {
+    const { env, db, kv } = await makeEnv()
+    await seedAccount(db, { userId: "user-a", githubUserId: "111", login: "octocat" })
+    await seedSession(kv, "s1", { userId: "user-a", githubUserId: 111, login: "octocat" })
+
+    const res = await tryHandleAccountRoute(
+      req("https://x/v1/account/export?foo=bar", "s1"),
+      env,
+      ctx,
+      new URL("https://x/v1/account/export?foo=bar"),
+    )
+    expect(res?.status).toBe(400)
+    await expect(res?.json()).resolves.toEqual({ error: "unexpected_query_parameter" })
   })
 
   it("401 without exporting either identity when durable identity disagrees with the session", async () => {

@@ -54,6 +54,10 @@ const MIGRATION_SQL = readFileSync(
   new URL("../../../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url),
   "utf8",
 )
+const IMMUTABLE_AUTHOR_MIGRATION_SQL = readFileSync(
+  new URL("../../../../migrations/0029_add_usage_author_github_identity.sql", import.meta.url),
+  "utf8",
+)
 
 function makeTelemetry(overrides: Partial<FinalizeTelemetry> = {}): FinalizeTelemetry {
   return {
@@ -126,6 +130,7 @@ describe("finalize — SIG-343 usage-ledger metering", () => {
     db = makeD1()
     await db.exec(MIGRATION_SQL)
     await applyCostMigrations(db)
+    await db.exec(IMMUTABLE_AUTHOR_MIGRATION_SQL)
     vi.clearAllMocks()
   })
 
@@ -208,6 +213,22 @@ describe("finalize — SIG-343 usage-ledger metering", () => {
       .prepare("SELECT author_login FROM usage_ledger LIMIT 1")
       .first<{ author_login: string | null }>()
     expect(row?.author_login).toBe("torvalds")
+  })
+
+  it("finalize threads immutable GitHub author identity beside the display login", async () => {
+    const env = { SIGILIX_PLATFORM_DB: db } as unknown as Env
+    const tel = makeTelemetry({
+      installationId: 10,
+      repoId: 200,
+      authorLogin: "torvalds",
+      authorGithubUserId: "1024025",
+    })
+
+    await finalize(tel, env, "posted", null)
+
+    await expect(
+      db.prepare("SELECT author_login, author_github_user_id FROM usage_ledger LIMIT 1").first(),
+    ).resolves.toEqual({ author_login: "torvalds", author_github_user_id: "1024025" })
   })
 
   it("finalize writes NULL author_login when authorLogin is absent from telemetry", async () => {

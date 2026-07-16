@@ -24,7 +24,7 @@ export interface PullRequestMeta {
   number: number
   title: string
   body: string | null
-  user: { login: string } | null
+  user: { login: string; id?: number } | null
   head: { sha: string; ref: string }
   base: { sha: string; ref: string }
   draft?: boolean

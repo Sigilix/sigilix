@@ -23,6 +23,7 @@
 // `vi.mock`s don't have to bleed across files.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { readFileSync } from "node:fs"
 
 const {
   mockGetInstallationToken,
@@ -108,6 +109,8 @@ import {
 import type { EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
 import { ALL_SPECIALISTS } from "@/src/lib/ensemble-router"
 import type { Env } from "@/src/shared/types/env"
+import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
+import { applyCostMigrations } from "@/src/test-shims/apply-cost-migrations"
 
 // ─── shared helpers ─────────────────────────────────────────────────
 
@@ -208,6 +211,14 @@ afterEach(() => {
 
 const HEAD_SHA = "deadbeef1234567890abcdef1234567890abcdef"
 const BASE_SHA = "basesha000000000000000000000000000000000"
+const USAGE_MIGRATION_SQL = readFileSync(
+  new URL("../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url),
+  "utf8",
+)
+const IMMUTABLE_AUTHOR_MIGRATION_SQL = readFileSync(
+  new URL("../../migrations/0029_add_usage_author_github_identity.sql", import.meta.url),
+  "utf8",
+)
 
 const DOCS_ONLY_DIFF = `diff --git a/README.md b/README.md
 index abc1234..def5678 100644
@@ -273,6 +284,44 @@ describe("review-slo-summary — full orchestrator, no-fan-out exit (SIG-149)", 
     // value is null (not 0) and the overview dimension is not a breach.
     expect(ev["timeToFirstOverviewMs"]).toBeNull()
     expect(ev["overviewLatencyOverBudget"]).toBe(false)
+  })
+
+  it("persists the live PR author's immutable GitHub id through the real finalize path", async () => {
+    const db = makeD1()
+    await db.exec(USAGE_MIGRATION_SQL)
+    await applyCostMigrations(db)
+    await db.exec(IMMUTABLE_AUTHOR_MIGRATION_SQL)
+    mockGetPullRequest.mockResolvedValueOnce({
+      head: { sha: HEAD_SHA },
+      base: { sha: BASE_SHA },
+      merged_at: null,
+      labels: [],
+      user: { id: 12345, login: "renamed-author" },
+    })
+    mockGetPullRequestDiff.mockResolvedValueOnce(DOCS_ONLY_DIFF)
+    mockListOpenPullRequests.mockResolvedValueOnce([])
+    mockGetFileContent.mockResolvedValueOnce(null)
+
+    const result = await handlePrReviewEnsemble({
+      scmProvider: "github",
+      owner: "Sigilix",
+      repo: "sigilix",
+      prNumber: 9002,
+      headSha: HEAD_SHA,
+      installationId: 1,
+      repoId: 99,
+      env: makeEnv({
+        OPENCLAW_ENSEMBLE_ROUTER_ENABLED: "on",
+        SIGILIX_PLATFORM_DB: db,
+      } as unknown as Env),
+    })
+
+    expect(result.status).toBe("skipped")
+    await expect(
+      db
+        .prepare("SELECT author_login, author_github_user_id FROM usage_ledger LIMIT 1")
+        .first<{ author_login: string | null; author_github_user_id: string | null }>(),
+    ).resolves.toEqual({ author_login: "renamed-author", author_github_user_id: "12345" })
   })
 })
 

@@ -494,6 +494,9 @@ export interface EnsembleTelemetry {
    *  meta and forwarded to appendUsage for per-developer attribution. Optional so
    *  early-bail paths and headless/CLI dry-runs that skip getPullRequest are unaffected. */
   authorLogin?: string
+  /** Immutable GitHub account id from the live pull-request metadata. Historical
+   *  and non-GitHub runs omit it and remain explicitly unresolved in D1. */
+  authorGithubUserId?: string
 }
 
 export type EnsembleResult = EnsembleResultBase<EnsembleTelemetry>

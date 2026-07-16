@@ -1,7 +1,8 @@
 // SIG-343 PR C Task 3 — usage ledger append adapter.
 //
 // Appends one row per unique (installation_id, repo_id, pr_number, head_sha)
-// tuple; INSERT OR IGNORE deduplicates webhook redeliveries transparently.
+// tuple; webhook redeliveries preserve the first metrics/login and may only
+// enrich a previously unresolved immutable author id.
 // Rows with missing identity (empty headSha, non-finite ids) are skipped
 // before touching D1 so the ledger never holds identity-less noise.
 //
@@ -15,10 +16,14 @@ import type { Env } from "@/src/shared/types/env"
  * (non-finite installationId / repoId / prNumber, or empty headSha) AND rows
  * with non-finite metric values (non-finite modelCalls / tokens — e.g. NaN
  * from a malformed tokenUsageByModel reduce).  Deduplicates on the
- * `UNIQUE(installation_id, repo_id, pr_number, head_sha)` constraint via
- * INSERT OR IGNORE (first-write-wins on all metric + author columns).
+ * `UNIQUE(installation_id, repo_id, pr_number, head_sha)` constraint. Metrics
+ * and login are first-write-wins; immutable identity permits only NULL → id so
+ * an older in-flight writer cannot leave the exact review unresolved forever.
  *
- * `authorLogin` is supplementary attribution — NOT part of the identity key.
+ * `authorLogin` is supplementary display attribution — NOT part of the row's
+ * identity key. `authorGithubUserId` is the immutable GitHub account identity;
+ * historical/non-GitHub rows deliberately store NULL rather than guessing from
+ * the mutable login.
  *
  * `costUsd` (sig-cost-based-metering) is the blended per-review model spend in
  * USD (`computeReviewCost(...).totalUsd`). Optional for back-compat with callers
@@ -40,6 +45,7 @@ export async function appendUsage(
     tokens: number
     costUsd?: number
     authorLogin?: string | null
+    authorGithubUserId?: string | null
     nowIso: string
   },
 ): Promise<void> {
@@ -58,13 +64,25 @@ export async function appendUsage(
   // value to 0 (fail-safe: 0 never inflates window spend against a budget).
   const costUsd =
     typeof args.costUsd === "number" && Number.isFinite(args.costUsd) && args.costUsd > 0 ? args.costUsd : 0
+  const authorGithubUserId =
+    typeof args.authorGithubUserId === "string" &&
+    /^[1-9]\d*$/.test(args.authorGithubUserId) &&
+    Number.isSafeInteger(Number(args.authorGithubUserId)) &&
+    String(Number(args.authorGithubUserId)) === args.authorGithubUserId
+      ? args.authorGithubUserId
+      : null
   const db = env.SIGILIX_PLATFORM_DB
   try {
     await db
       .prepare(
-        "INSERT OR IGNORE INTO usage_ledger" +
-          " (installation_id, repo_id, pr_number, head_sha, model_calls, tokens, cost_usd, author_login, created_at)" +
-          " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO usage_ledger" +
+          " (installation_id, repo_id, pr_number, head_sha, model_calls, tokens, cost_usd," +
+          " author_login, author_github_user_id, created_at)" +
+          " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" +
+          " ON CONFLICT(installation_id, repo_id, pr_number, head_sha) DO UPDATE SET" +
+          " author_github_user_id = excluded.author_github_user_id" +
+          " WHERE usage_ledger.author_github_user_id IS NULL" +
+          " AND excluded.author_github_user_id IS NOT NULL",
       )
       .bind(
         args.installationId,
@@ -75,6 +93,7 @@ export async function appendUsage(
         args.tokens,
         costUsd,
         args.authorLogin ?? null,
+        authorGithubUserId,
         args.nowIso,
       )
       .run()

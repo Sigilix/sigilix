@@ -35,6 +35,7 @@ import {
 } from "@/src/lib/ensemble/domain/validation"
 import { finalize, type ReviewMeta } from "./session"
 import type { PrReviewVerdict, PrReviewFinding } from "@/src/shared/domain/pr-review-finding"
+import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
 import type { EnsembleHandlerArgs, EnsembleTelemetry, EnsembleResult } from "./orchestrator-types"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -78,6 +79,18 @@ export const INLINE_OVERVIEW_MAX_BUDGET_MS = 90_000
  */
 export function resolveEnsembleConfig(args: Pick<EnsembleHandlerArgs, "env" | "ensembleConfig">): EnsembleConfig {
   return args.ensembleConfig ?? parseEnsembleConfig(args.env)
+}
+
+/** Capture live PR attribution without treating mutable login or provider-local ids as GitHub identity. */
+export function capturePrAuthorTelemetry(
+  telemetry: Pick<EnsembleTelemetry, "authorLogin" | "authorGithubUserId">,
+  scmProvider: ScmProviderKind,
+  user: { login: string; id?: number } | null,
+): void {
+  if (user?.login) telemetry.authorLogin = user.login
+  if (scmProvider === "github" && typeof user?.id === "number" && Number.isSafeInteger(user.id) && user.id > 0) {
+    telemetry.authorGithubUserId = String(user.id)
+  }
 }
 
 // SIG-360: thin public wrapper preserving the original `validateForSubmission`

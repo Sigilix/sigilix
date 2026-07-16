@@ -581,7 +581,9 @@ describe("activity identity in durable seat operations through real Wrangler mig
     } finally {
       await rm(fixture.root, { recursive: true, force: true })
     }
-  }, 90_000)
+    // Cloudflare Workers Builds measured about 4.2x slower on the same
+    // real-Wrangler path; 240s covers the 38-52s local range with headroom.
+  }, 240_000)
 
   it("rolls back a late object collision and succeeds unchanged on retry", async () => {
     const fixture = await makeFixture()

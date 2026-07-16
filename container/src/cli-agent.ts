@@ -271,9 +271,14 @@ export function buildPrompt(
  * Counts `step_finish` events as model turns and flags any error event.
  * Lines that don't parse are skipped (robust to partial/non-JSON output).
  */
-export function parseCliEvents(stdout: string): { modelCalls: number; errored: boolean } {
+export function parseCliEvents(stdout: string): {
+  modelCalls: number;
+  errored: boolean;
+  retrieveCodebaseCalls: number;
+} {
   let modelCalls = 0;
   let errored = false;
+  const retrieveCodebaseParts = new Set<string>();
   for (const line of stdout.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -285,8 +290,34 @@ export function parseCliEvents(stdout: string): { modelCalls: number; errored: b
     }
     if (ev.type === "step_finish") modelCalls++;
     if (ev.type === "error" || ev.error != null) errored = true;
+    // SIG-545 B2: count DISTINCT retrieve_codebase tool invocations. opencode emits
+    // several NDJSON lines per tool call (start/running/completed) that share one
+    // part/call id, so dedupe by that id to avoid over-counting; fall back to a
+    // per-line count when no id is present. Tolerant of the fork's exact shape.
+    if (mentionsRetrieveCodebase(ev)) {
+      retrieveCodebaseParts.add(toolPartId(ev) ?? `line:${retrieveCodebaseParts.size}`);
+    }
   }
-  return { modelCalls, errored };
+  return { modelCalls, errored, retrieveCodebaseCalls: retrieveCodebaseParts.size };
+}
+
+/** True when this NDJSON event references the grounding tool as a tool call. */
+function mentionsRetrieveCodebase(ev: Record<string, unknown>): boolean {
+  if (ev.tool === "retrieve_codebase" || ev.toolName === "retrieve_codebase") return true;
+  const part = ev.part;
+  if (part && typeof part === "object" && (part as Record<string, unknown>).tool === "retrieve_codebase") return true;
+  return false;
+}
+
+/** Best-effort stable id for a tool call so its multiple NDJSON lines dedupe to one. */
+function toolPartId(ev: Record<string, unknown>): string | null {
+  const part = ev.part;
+  if (part && typeof part === "object") {
+    const id = (part as Record<string, unknown>).id ?? (part as Record<string, unknown>).callID;
+    if (typeof id === "string") return id;
+  }
+  const id = ev.id ?? ev.callID;
+  return typeof id === "string" ? id : null;
 }
 
 /** opencode's file-mutating tools (it collapses write/apply_patch into "edit"). */
@@ -330,8 +361,13 @@ export function buildCliArgs(model: CliAgentArgs["model"], dir: string, prompt: 
 
 // ── Subprocess + git helpers ──────────────────────────────────────────────────
 
+/** Cap on captured stderr (bytes). Plugin-load errors print at startup, so keep the HEAD. */
+const STDERR_CAP = 8_000;
+
 interface SpawnResult {
   stdout: string;
+  /** Bounded HEAD of stderr, Bearer-redacted (SIG-545 B2 diagnostics). */
+  stderr: string;
   code: number | null;
   timedOut: boolean;
 }
@@ -344,6 +380,7 @@ function spawnCli(
 ): Promise<SpawnResult> {
   return new Promise((resolve) => {
     let stdout = "";
+    let stderr = "";
     let lineBuf = "";
     let timedOut = false;
     let settled = false;
@@ -405,10 +442,15 @@ function spawnCli(
       if (stdout.length < STDOUT_CAP) stdout += s;
       pumpLines(s);
     });
-    // stderr may carry the model body on failure — drained but NOT captured/logged.
-    child.stderr?.on("data", () => {});
-    child.on("error", () => finish({ stdout, code: -1, timedOut }));
-    child.on("close", (code) => finish({ stdout, code, timedOut }));
+    // SIG-545 B2: capture a bounded HEAD of stderr (Bearer-redacted at finish) so
+    // an opencode plugin-load error — printed to stderr at startup — is observable
+    // in the admin run record. Was previously drained + discarded.
+    child.stderr?.on("data", (d: Buffer) => {
+      if (stderr.length < STDERR_CAP) stderr += d.toString();
+    });
+    const redacted = (): string => stderr.replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer [redacted]").slice(0, STDERR_CAP);
+    child.on("error", () => finish({ stdout, stderr: redacted(), code: -1, timedOut }));
+    child.on("close", (code) => finish({ stdout, stderr: redacted(), code, timedOut }));
   });
 }
 
@@ -497,7 +539,7 @@ export async function runCliAgent(args: CliAgentArgs): Promise<EditLoopResult> {
       emitChain = emitChain.then(() => emitFileEdit(args.events, dir, rel)).catch(() => {});
     };
 
-    const { stdout, code, timedOut } = await spawnCli(CLI_BIN, cliArgs, {
+    const { stdout, stderr, code, timedOut } = await spawnCli(CLI_BIN, cliArgs, {
       cwd: dir,
       env,
       timeoutMs: caps.timeoutMs,
@@ -510,7 +552,8 @@ export async function runCliAgent(args: CliAgentArgs): Promise<EditLoopResult> {
     stoppedReason = timedOut ? "timeout" : code === 0 && !parsed.errored ? "done" : "error";
 
     const changed = await hasChanges(dir);
-    return { changed, modelCalls, tokens: 0, stoppedReason };
+    const diag = { retrieveCodebaseCalls: parsed.retrieveCodebaseCalls, stderrTail: stderr };
+    return { changed, modelCalls, tokens: 0, stoppedReason, diag };
   } catch {
     return { changed: false, modelCalls, tokens: 0, stoppedReason: "error" };
   } finally {

@@ -86,6 +86,7 @@ export interface AgentRunOutcome {
   status: AgentRunRecord["status"]
   prUrl?: string
   error?: string
+  diag?: NonNullable<AgentRunRecord["diag"]>
 }
 
 // ── Internal: task-packet shape sent over the wire ────────────────────────────
@@ -369,11 +370,22 @@ export async function dispatchAgentRun(
         status?: string
         prUrl?: string
         error?: string
+        diag?: { retrieveCodebaseCalls?: unknown; stderrTail?: unknown }
       }
+      // SIG-545 B2: carry the full-engine grounding diagnostics through to the DO
+      // record (→ GET /admin/agent-run-status). Defensive-parse the shape.
+      const diag =
+        result.diag && typeof result.diag.retrieveCodebaseCalls === "number"
+          ? {
+              retrieveCodebaseCalls: result.diag.retrieveCodebaseCalls,
+              stderrTail: typeof result.diag.stderrTail === "string" ? result.diag.stderrTail : "",
+            }
+          : undefined
       outcome = {
         status: (result.status as AgentRunRecord["status"]) ?? "error",
         ...(result.prUrl !== undefined ? { prUrl: result.prUrl } : {}),
         ...(result.error !== undefined ? { error: result.error } : {}),
+        ...(diag !== undefined ? { diag } : {}),
       }
       await agentRunnerStub(env, runId).setRunRecord({ runId, ...outcome })
     } catch (persistErr) {

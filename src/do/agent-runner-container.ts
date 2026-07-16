@@ -50,6 +50,16 @@ export interface AgentRunRecord {
   status: "started" | "opened" | "no-change" | "error"
   prUrl?: string
   error?: string
+  /**
+   * SIG-545 B2 diagnostics from the full CLI agent — surfaced via
+   * GET /admin/agent-run-status so grounding is observable without container logs:
+   * whether the model called the `retrieve_codebase` tool, and a bounded,
+   * Bearer-redacted tail of the CLI's stderr (which carries plugin-load errors).
+   */
+  diag?: {
+    retrieveCodebaseCalls: number
+    stderrTail: string
+  }
 }
 
 /**

@@ -43,7 +43,8 @@ const SNAPSHOT_COLUMNS = `installation_id, stripe_customer_id, stripe_subscripti
   refresh_due_at_ms, created_at_ms, updated_at_ms`
 
 const OPERATION_COLUMNS = `operation_id, installation_id, revision, login, target_identity_kind,
-  target_github_user_id, actor_login, target_is_admin, requested_assigned, previous_assigned, desired_quantity, state, stripe_subscription_id,
+  target_github_user_id, activity_actor_github_user_id, actor_login, target_is_admin,
+  requested_assigned, previous_assigned, desired_quantity, state, stripe_subscription_id,
   stripe_subscription_item_id, stripe_observed_quantity, idempotency_key, attempts, error_code,
   next_attempt_at_ms, created_at_ms, updated_at_ms, stripe_applied_at_ms, completed_at_ms`
 
@@ -937,6 +938,9 @@ type CreatePendingOrgSeatExpansionArgs = LeaseFence & {
 
 function exactExpansionRetry(operation: OrgSeatBillingOperation, args: CreatePendingOrgSeatExpansionArgs): boolean {
   return (
+    operation.targetIdentityKind === "legacy_login" &&
+    operation.targetGithubUserId === null &&
+    operation.activityActorGithubUserId === null &&
     operation.operationId === args.operationId &&
     operation.installationId === args.installationId &&
     operation.login === normalizeLogin(args.login) &&
@@ -1159,6 +1163,9 @@ function commitExpansionCondition(args: {
         JOIN stripe_seat_subscription AS snapshot
           ON snapshot.installation_id = operation.installation_id
        WHERE operation.installation_id = ? AND operation.operation_id = ? AND operation.revision = ?
+         AND operation.target_identity_kind = 'legacy_login'
+         AND operation.target_github_user_id IS NULL
+         AND operation.activity_actor_github_user_id IS NULL
          AND operation.state = 'stripe_applied'
          AND operation.requested_assigned = 1 AND operation.previous_assigned = 0
          AND operation.stripe_observed_quantity = operation.desired_quantity
@@ -1211,6 +1218,8 @@ export async function commitOrgSeatExpansion(
            SELECT installation_id, login, 1, target_is_admin, ?, actor_login
              FROM org_seat_billing_operation
             WHERE installation_id = ? AND operation_id = ? AND revision = ? AND state = 'stripe_applied'
+              AND target_identity_kind = 'legacy_login'
+              AND target_github_user_id IS NULL AND activity_actor_github_user_id IS NULL
            ON CONFLICT(installation_id, login) DO UPDATE SET
              assigned = 1,
              is_admin = MAX(org_seat_assignment.is_admin, excluded.is_admin),
@@ -1229,6 +1238,8 @@ export async function commitOrgSeatExpansion(
              SELECT 1 FROM org_seat_billing_operation
               WHERE installation_id = ? AND operation_id = ? AND revision = ?
                 AND state = 'stripe_applied'
+                AND target_identity_kind = 'legacy_login'
+                AND target_github_user_id IS NULL AND activity_actor_github_user_id IS NULL
                 AND stripe_subscription_id = stripe_seat_subscription.stripe_subscription_id
                 AND stripe_subscription_item_id = stripe_seat_subscription.stripe_subscription_item_id
            )`,
@@ -1249,7 +1260,9 @@ export async function commitOrgSeatExpansion(
           `UPDATE org_seat_billing_operation SET
              state = 'committed', error_code = NULL, next_attempt_at_ms = NULL,
              updated_at_ms = ?, completed_at_ms = ?
-           WHERE installation_id = ? AND operation_id = ? AND revision = ? AND state = 'stripe_applied'`,
+           WHERE installation_id = ? AND operation_id = ? AND revision = ? AND state = 'stripe_applied'
+             AND target_identity_kind = 'legacy_login'
+             AND target_github_user_id IS NULL AND activity_actor_github_user_id IS NULL`,
         )
         .bind(args.nowMs, args.nowMs, args.installationId, args.operationId, args.revision),
     ])
@@ -1299,6 +1312,9 @@ function cancelOperationCondition(args: CancelActiveOrgSeatBillingOperationArgs)
     sql: `EXISTS (
       SELECT 1 FROM org_seat_billing_operation AS operation
        WHERE operation.installation_id = ? AND operation.operation_id = ? AND operation.revision = ?
+         AND operation.target_identity_kind = 'legacy_login'
+         AND operation.target_github_user_id IS NULL
+         AND operation.activity_actor_github_user_id IS NULL
          AND operation.state = ? AND operation.requested_assigned = 1 AND operation.previous_assigned = 0
          AND operation.actor_login IS NOT NULL AND operation.target_is_admin IS NOT NULL
          ${snapshotPredicate}
@@ -1336,6 +1352,8 @@ export function prepareCancelActiveOrgSeatBillingOperation(
          SELECT installation_id, login, 0, 0, ?, ?
            FROM org_seat_billing_operation
           WHERE installation_id = ? AND operation_id = ? AND revision = ? AND state = ?
+            AND target_identity_kind = 'legacy_login'
+            AND target_github_user_id IS NULL AND activity_actor_github_user_id IS NULL
          ON CONFLICT(installation_id, login) DO UPDATE SET
            assigned = 0, is_admin = 0, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
       )
@@ -1362,6 +1380,8 @@ export function prepareCancelActiveOrgSeatBillingOperation(
            WHERE installation_id = ? AND EXISTS (
              SELECT 1 FROM org_seat_billing_operation
               WHERE installation_id = ? AND operation_id = ? AND revision = ? AND state = 'stripe_applied'
+                AND target_identity_kind = 'legacy_login'
+                AND target_github_user_id IS NULL AND activity_actor_github_user_id IS NULL
                 AND stripe_subscription_id = stripe_seat_subscription.stripe_subscription_id
                 AND stripe_subscription_item_id = stripe_seat_subscription.stripe_subscription_item_id
            )`,
@@ -1390,7 +1410,9 @@ export function prepareCancelActiveOrgSeatBillingOperation(
             `UPDATE org_seat_billing_operation SET
                state = 'canceled', error_code = ?, next_attempt_at_ms = NULL,
                updated_at_ms = ?, completed_at_ms = ?
-             WHERE installation_id = ? AND operation_id = ? AND revision = ? AND state = 'pending'`,
+             WHERE installation_id = ? AND operation_id = ? AND revision = ? AND state = 'pending'
+               AND target_identity_kind = 'legacy_login'
+               AND target_github_user_id IS NULL AND activity_actor_github_user_id IS NULL`,
           )
           .bind(args.errorCode.trim(), args.nowMs, args.nowMs, args.installationId, args.operationId, args.revision)
       : db
@@ -1398,7 +1420,9 @@ export function prepareCancelActiveOrgSeatBillingOperation(
             `UPDATE org_seat_billing_operation SET
                state = 'committed', error_code = NULL, next_attempt_at_ms = NULL,
                updated_at_ms = ?, completed_at_ms = ?
-             WHERE installation_id = ? AND operation_id = ? AND revision = ? AND state = 'stripe_applied'`,
+             WHERE installation_id = ? AND operation_id = ? AND revision = ? AND state = 'stripe_applied'
+               AND target_identity_kind = 'legacy_login'
+               AND target_github_user_id IS NULL AND activity_actor_github_user_id IS NULL`,
           )
           .bind(args.nowMs, args.nowMs, args.installationId, args.operationId, args.revision),
   )

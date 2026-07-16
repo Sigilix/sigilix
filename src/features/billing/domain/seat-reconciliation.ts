@@ -12,7 +12,7 @@ export const ORG_SEAT_BILLING_OPERATION_STATES = [
 
 export type OrgSeatBillingOperationState = (typeof ORG_SEAT_BILLING_OPERATION_STATES)[number]
 
-export const ORG_SEAT_TARGET_IDENTITY_KINDS = ["legacy_login", "managed_github"] as const
+export const ORG_SEAT_TARGET_IDENTITY_KINDS = ["legacy_login", "managed_github", "activity_github"] as const
 
 export type OrgSeatTargetIdentityKind = (typeof ORG_SEAT_TARGET_IDENTITY_KINDS)[number]
 
@@ -23,6 +23,7 @@ export interface OrgSeatBillingOperation {
   login: string
   targetIdentityKind: OrgSeatTargetIdentityKind
   targetGithubUserId: string | null
+  activityActorGithubUserId: string | null
   actorLogin: string | null
   targetIsAdmin: boolean | null
   requestedAssigned: boolean
@@ -102,6 +103,7 @@ type OperationRow = {
   login: unknown
   target_identity_kind: unknown
   target_github_user_id: unknown
+  activity_actor_github_user_id: unknown
   actor_login: unknown
   target_is_admin: unknown
   requested_assigned: unknown
@@ -244,6 +246,7 @@ export function decodeOrgSeatBillingOperationRow(value: unknown): OrgSeatBilling
   const operationId = nullableString(row.operation_id)
   const login = nullableString(row.login)
   const targetGithubUserId = nullableString(row.target_github_user_id)
+  const activityActorGithubUserId = nullableString(row.activity_actor_github_user_id)
   const actorLogin = nullableString(row.actor_login)
   const targetIsAdmin = nullableBoolean(row.target_is_admin)
   const stripeSubscriptionId = nullableString(row.stripe_subscription_id)
@@ -264,6 +267,7 @@ export function decodeOrgSeatBillingOperationRow(value: unknown): OrgSeatBilling
     login.trim() === "" ||
     !isTargetIdentityKind(row.target_identity_kind) ||
     targetGithubUserId === undefined ||
+    activityActorGithubUserId === undefined ||
     actorLogin === undefined ||
     targetIsAdmin === undefined ||
     (row.requested_assigned !== 0 && row.requested_assigned !== 1) ||
@@ -285,8 +289,12 @@ export function decodeOrgSeatBillingOperationRow(value: unknown): OrgSeatBilling
     return null
   }
   if (
-    (row.target_identity_kind === "legacy_login" && targetGithubUserId !== null) ||
-    (row.target_identity_kind === "managed_github" && !isCanonicalGithubUserId(targetGithubUserId))
+    (row.target_identity_kind === "legacy_login" &&
+      (targetGithubUserId !== null || activityActorGithubUserId !== null)) ||
+    (row.target_identity_kind === "managed_github" &&
+      (!isCanonicalGithubUserId(targetGithubUserId) || activityActorGithubUserId !== null)) ||
+    (row.target_identity_kind === "activity_github" &&
+      (!isCanonicalGithubUserId(targetGithubUserId) || !isCanonicalGithubUserId(activityActorGithubUserId)))
   ) {
     return null
   }
@@ -326,6 +334,7 @@ export function decodeOrgSeatBillingOperationRow(value: unknown): OrgSeatBilling
     login,
     targetIdentityKind: row.target_identity_kind,
     targetGithubUserId,
+    activityActorGithubUserId,
     actorLogin,
     targetIsAdmin,
     requestedAssigned: row.requested_assigned === 1,

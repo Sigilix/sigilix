@@ -66,6 +66,7 @@ export {
   type StripeSeatSubscriptionSnapshotWrite,
   type StripeSeatSubscriptionSnapshotWriteResult,
 } from "./adapters/d1-seat-reconciliation-store"
+export { prepareCancelActiveManagedOrgSeatBillingOperation } from "./adapters/managed-seat-reconciliation-store"
 export {
   decodeStripeSeatSubscriptionRow,
   decodeOrgSeatBillingOperationRow,

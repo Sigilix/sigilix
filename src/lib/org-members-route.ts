@@ -17,8 +17,10 @@ import {
 import {
   acquireOrgSeatBillingLease,
   prepareCancelActiveOrgSeatBillingOperation,
+  prepareCancelActiveManagedOrgSeatBillingOperation,
   readActiveOrgSeatBillingOperation,
   releaseOrgSeatBillingLease,
+  type OrgSeatBillingOperation,
 } from "@/src/features/billing"
 import { requireOrgAccess } from "@/src/lib/org-access"
 import {
@@ -186,10 +188,7 @@ export async function handleDeleteOrgMember(
       return json({ error: "org_membership_unavailable" }, 503)
     }
     if (active.kind === "ok") {
-      const sameTarget =
-        active.operation.targetIdentityKind === "managed_github"
-          ? active.operation.targetGithubUserId === githubUserId
-          : roster.value.target !== null && active.operation.login === roster.value.target.login.trim().toLowerCase()
+      const sameTarget = activeOperationMatchesMember(active.operation, githubUserId, roster.value.target)
       if (!sameTarget) {
         // An installation has at most one expansion in flight. Settling another
         // member's operation here would unassign that member; wait for recovery
@@ -199,21 +198,33 @@ export async function handleDeleteOrgMember(
         return json({ error: "org_membership_busy" }, 503)
       }
     }
-    const preparedSettlement =
-      active.kind === "ok"
-        ? prepareCancelActiveOrgSeatBillingOperation(context.value.db, {
-            installationId,
-            operationId: active.operation.operationId,
-            revision: active.operation.revision,
-            expectedState: active.operation.state === "stripe_applied" ? "stripe_applied" : "pending",
-            errorCode: "member_removed",
-            actorLogin: context.value.access.login,
-            nowIso,
-            leaseToken,
-            leaseAcquiredAtMs: nowMs,
-            nowMs,
-          })
-        : null
+    let preparedSettlement: ReturnType<typeof prepareCancelActiveOrgSeatBillingOperation> | null = null
+    if (active.kind === "ok") {
+      const settlementArgs = {
+        installationId,
+        operationId: active.operation.operationId,
+        revision: active.operation.revision,
+        expectedState: active.operation.state === "stripe_applied" ? ("stripe_applied" as const) : ("pending" as const),
+        errorCode: "member_removed",
+        actorLogin: context.value.access.login,
+        nowIso,
+        leaseToken,
+        leaseAcquiredAtMs: nowMs,
+        nowMs,
+      }
+      switch (active.operation.targetIdentityKind) {
+        case "legacy_login":
+          preparedSettlement = prepareCancelActiveOrgSeatBillingOperation(context.value.db, settlementArgs)
+          break
+        case "managed_github":
+          preparedSettlement = prepareCancelActiveManagedOrgSeatBillingOperation(context.value.db, settlementArgs)
+          break
+        case "activity_github":
+          return json({ error: "org_membership_busy" }, 503)
+        default:
+          return assertNever(active.operation.targetIdentityKind)
+      }
+    }
     if (preparedSettlement?.kind === "error") {
       return json({ error: "org_membership_unavailable" }, 503)
     }
@@ -268,6 +279,27 @@ export async function handleDeleteOrgMember(
       emitFailure("org-member-remove-lease-release-failed", released.reason, installationId, githubUserId)
     }
   }
+}
+
+function activeOperationMatchesMember(
+  operation: OrgSeatBillingOperation,
+  githubUserId: string,
+  rosterTarget: RosterTarget | null,
+): boolean {
+  switch (operation.targetIdentityKind) {
+    case "legacy_login":
+      return rosterTarget !== null && operation.login === rosterTarget.login.trim().toLowerCase()
+    case "managed_github":
+      return operation.targetGithubUserId === githubUserId
+    case "activity_github":
+      return false
+    default:
+      return assertNever(operation.targetIdentityKind)
+  }
+}
+
+function assertNever(value: never): never {
+  throw new Error(`unsupported seat target identity kind: ${String(value)}`)
 }
 
 async function requireMutationContext(

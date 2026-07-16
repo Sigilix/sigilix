@@ -41,6 +41,7 @@ async function makeDb(): Promise<D1Database> {
   await db.exec(migration("0022_create_org_workspace_access.sql"))
   await db.exec(migration("0023_add_org_seat_billing_operation_context.sql"))
   await db.exec(migration("0028_create_org_workspace_seat_assignment.sql"))
+  await db.exec(migration("0032_extend_org_seat_billing_operation_activity_identity.sql"))
   await db
     .prepare(
       "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +
@@ -370,6 +371,64 @@ describe("PATCH /v1/org/:installationId/members/:githubUserId", () => {
 })
 
 describe("DELETE /v1/org/:installationId/members/:githubUserId", () => {
+  it("leaves an active activity seat operation and member access untouched", async () => {
+    const db = await makeDb()
+    const providerFetch = vi.spyOn(globalThis, "fetch")
+    await seedAccess(db, ACTOR_ID, "admin")
+    await seedAccess(db, TARGET_ID, "member")
+    await db
+      .prepare(
+        `INSERT INTO org_seat_billing_operation
+          (operation_id, installation_id, revision, login, target_identity_kind, target_github_user_id,
+           activity_actor_github_user_id, actor_login, target_is_admin,
+           requested_assigned, previous_assigned, desired_quantity, state,
+           stripe_subscription_id, stripe_subscription_item_id, stripe_observed_quantity,
+           idempotency_key, attempts, next_attempt_at_ms, created_at_ms, updated_at_ms)
+         VALUES ('op-activity-target', ?, 1, 'target', 'activity_github', ?, ?, 'owner', 0,
+                 1, 0, 2, 'pending', 'sub_1', 'si_1', 1,
+                 'sigilix-seat-op-activity-target', 0, 1, 1, 1)`,
+      )
+      .bind(INSTALLATION_ID, TARGET_ID, ACTOR_ID)
+      .run()
+
+    const response = await handleDeleteOrgMember(
+      request("DELETE", `/v1/org/${INSTALLATION_ID}/members/${TARGET_ID}`),
+      env(db),
+      undefined,
+      INSTALLATION_ID,
+      TARGET_ID,
+    )
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toEqual({ error: "org_membership_busy" })
+    await expect(
+      db
+        .prepare(
+          `SELECT revision, state, target_identity_kind, target_github_user_id,
+                  activity_actor_github_user_id, error_code, completed_at_ms
+             FROM org_seat_billing_operation WHERE operation_id = 'op-activity-target'`,
+        )
+        .first(),
+    ).resolves.toEqual({
+      revision: 1,
+      state: "pending",
+      target_identity_kind: "activity_github",
+      target_github_user_id: TARGET_ID,
+      activity_actor_github_user_id: ACTOR_ID,
+      error_code: null,
+      completed_at_ms: null,
+    })
+    await expect(readOrgWorkspaceAccess(db, INSTALLATION_ID, TARGET_ID)).resolves.toMatchObject({ revokedAt: null })
+    await expect(
+      db
+        .prepare("SELECT 1 AS held FROM org_seat_billing_lease WHERE installation_id = ?")
+        .bind(INSTALLATION_ID)
+        .first(),
+    ).resolves.toBeNull()
+    expect(providerFetch).not.toHaveBeenCalled()
+    providerFetch.mockRestore()
+  })
+
   it("does not cancel another member's active seat expansion", async () => {
     const db = await makeDb()
     await seedAccess(db, ACTOR_ID, "admin")
@@ -482,7 +541,17 @@ describe("DELETE /v1/org/:installationId/members/:githubUserId", () => {
     ).resolves.toBeUndefined()
     await expect(
       db
-        .prepare("SELECT assigned FROM org_seat_assignment WHERE installation_id = ? AND login = 'target'")
+        .prepare(
+          `SELECT github_user_id, assigned, last_known_login
+             FROM org_workspace_seat_assignment
+            WHERE installation_id = ? AND github_user_id = ?`,
+        )
+        .bind(INSTALLATION_ID, TARGET_ID)
+        .first(),
+    ).resolves.toEqual({ github_user_id: TARGET_ID, assigned: 0, last_known_login: "target" })
+    await expect(
+      db
+        .prepare("SELECT assigned FROM org_seat_assignment WHERE installation_id = ? AND login = 'roster-renamed'")
         .bind(INSTALLATION_ID)
         .first(),
     ).resolves.toEqual({ assigned: 0 })

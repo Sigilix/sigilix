@@ -41,6 +41,7 @@ async function makeDb(): Promise<D1Database> {
     "0022_create_org_workspace_access.sql",
     "0023_add_org_seat_billing_operation_context.sql",
     "0028_create_org_workspace_seat_assignment.sql",
+    "0032_extend_org_seat_billing_operation_activity_identity.sql",
   ]) {
     await db.exec(migration(name))
   }

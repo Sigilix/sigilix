@@ -21,6 +21,7 @@ import {
   readManagedOrgSeatAssignment,
   writeLocalManagedOrgSeatAssignment,
 } from "./managed-seat-reconciliation-store"
+import { commitActivityOrgSeatExpansion } from "./activity-seat-reconciliation-store"
 import { listSubscriptionItems, updateSubscriptionItemQuantity } from "./stripe-api"
 import { resolvePriceTierConfig } from "./stripe-webhook-route"
 import { decideSeatCapacityChange } from "@/src/features/billing/domain/seat-capacity"
@@ -72,6 +73,10 @@ function validInstallationId(value: number): boolean {
 
 function validGithubUserId(value: string): boolean {
   return /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)) && String(Number(value)) === value
+}
+
+function assertNever(value: never): never {
+  throw new Error(`unsupported seat target identity kind: ${String(value)}`)
 }
 
 function normalizeTarget(target: OrgSeatReconcileTarget): OrgSeatReconcileTarget | null {
@@ -265,8 +270,20 @@ async function commitAppliedOperation(
     })
     if (marked.kind !== "written") return "pending"
   }
-  const commit =
-    operation.targetIdentityKind === "managed_github" ? commitManagedOrgSeatExpansion : commitOrgSeatExpansion
+  let commit: typeof commitOrgSeatExpansion
+  switch (operation.targetIdentityKind) {
+    case "legacy_login":
+      commit = commitOrgSeatExpansion
+      break
+    case "managed_github":
+      commit = commitManagedOrgSeatExpansion
+      break
+    case "activity_github":
+      commit = commitActivityOrgSeatExpansion
+      break
+    default:
+      return assertNever(operation.targetIdentityKind)
+  }
   const committed = await commit(env, {
     installationId: operation.installationId,
     operationId: operation.operationId,
@@ -284,10 +301,19 @@ async function settleActiveForUnassign(
   actorLogin: string,
   fence: LeaseFence,
 ): Promise<boolean> {
-  const cancel =
-    active.targetIdentityKind === "managed_github"
-      ? cancelActiveManagedOrgSeatBillingOperation
-      : cancelActiveOrgSeatBillingOperation
+  let cancel: typeof cancelActiveOrgSeatBillingOperation
+  switch (active.targetIdentityKind) {
+    case "legacy_login":
+      cancel = cancelActiveOrgSeatBillingOperation
+      break
+    case "managed_github":
+      cancel = cancelActiveManagedOrgSeatBillingOperation
+      break
+    case "activity_github":
+      return false
+    default:
+      return assertNever(active.targetIdentityKind)
+  }
   const settled = await cancel(env, {
     installationId: active.installationId,
     operationId: active.operationId,

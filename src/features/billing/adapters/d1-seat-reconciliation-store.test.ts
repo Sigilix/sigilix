@@ -924,6 +924,7 @@ describe("D1 seat reconciliation store", () => {
       .run()
     await historicalDb.exec(migration("0023_add_org_seat_billing_operation_context.sql"))
     await historicalDb.exec(migration("0028_create_org_workspace_seat_assignment.sql"))
+    await historicalDb.exec(migration("0032_extend_org_seat_billing_operation_activity_identity.sql"))
     await expect(listDueOrgSeatBillingOperations(env(historicalDb), { nowMs: 1, limit: 10 })).resolves.toEqual({
       kind: "error",
       reason: "invalid_row",

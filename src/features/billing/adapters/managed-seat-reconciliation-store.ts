@@ -17,7 +17,8 @@ type LeaseFence = {
 type ActiveOperationState = "pending" | "stripe_applied"
 
 const OPERATION_COLUMNS = `operation_id, installation_id, revision, login, target_identity_kind,
-  target_github_user_id, actor_login, target_is_admin, requested_assigned, previous_assigned,
+  target_github_user_id, activity_actor_github_user_id, actor_login, target_is_admin,
+  requested_assigned, previous_assigned,
   desired_quantity, state, stripe_subscription_id, stripe_subscription_item_id,
   stripe_observed_quantity, idempotency_key, attempts, error_code, next_attempt_at_ms,
   created_at_ms, updated_at_ms, stripe_applied_at_ms, completed_at_ms`

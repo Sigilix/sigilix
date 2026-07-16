@@ -230,6 +230,10 @@ async function handleLogoutAll(request: Request, env: Env, ctx: ExecutionContext
   // NO ctx (see handleDeleteAccount): skip the sliding-TTL touch so it can't
   // race the revoke sweep and resurrect the current session.
   void ctx
+  const logoutUrl = new URL(request.url)
+  if (logoutUrl.searchParams.size > 0) {
+    return json({ error: "unexpected_query_parameter" }, 400)
+  }
   const session = await requireSession(request, env)
   if (!session) return json({ error: "unauthenticated" }, 401)
   if (!hasJsonContentType(request)) return json({ error: "content-type must be application/json" }, 415)

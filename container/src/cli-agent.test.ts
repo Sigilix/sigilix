@@ -170,9 +170,20 @@ describe("buildOpencodeConfig", () => {
     expect(cfg.plugin).toEqual(["/p/index.js"]);
   });
 
-  it("omits the plugin entry when the grounding plugin is not provisioned", () => {
-    const cfg = buildOpencodeConfig(MODEL, "");
+  it("omits the plugin entry when NO plugin is provisioned (grounding + toolcap both empty)", () => {
+    const cfg = buildOpencodeConfig(MODEL, "", undefined, "");
     expect(cfg.plugin).toBeUndefined();
+  });
+
+  it("always wires the tool-output-cap plugin, even on an ungrounded run", () => {
+    // Ungrounded (grounding path empty) but toolcap provisioned → cap still loads.
+    const cfg = buildOpencodeConfig(MODEL, "", undefined, "/app/dist/tool-output-cap-plugin.js");
+    expect(cfg.plugin).toEqual(["/app/dist/tool-output-cap-plugin.js"]);
+  });
+
+  it("loads toolcap BEFORE grounding when both are provisioned", () => {
+    const cfg = buildOpencodeConfig(MODEL, "/g/grounding.js", undefined, "/c/toolcap.js");
+    expect(cfg.plugin).toEqual(["/c/toolcap.js", "/g/grounding.js"]);
   });
 
   it("defaults baseURL to OpenRouter when the model has none", () => {

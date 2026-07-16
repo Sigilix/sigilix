@@ -81,6 +81,14 @@ const CLI_BIN = process.env.SIGILIX_CLI_BIN ?? "sigilix";
 const GROUNDING_PLUGIN_PATH = process.env.SIGILIX_GROUNDING_PLUGIN ?? "";
 
 /**
+ * Absolute path to the pre-bundled tool-output-cap plugin in the image. Unlike
+ * the grounding plugin this loads on EVERY run (grounded or not) — the tool-dump
+ * bloat it bounds is worst on ungrounded runs. Empty (unprovisioned) → omitted,
+ * same fail-safe as the grounding path. Set SIGILIX_TOOLCAP_PLUGIN in the image.
+ */
+const TOOLCAP_PLUGIN_PATH = process.env.SIGILIX_TOOLCAP_PLUGIN ?? "";
+
+/**
  * The grounding plugin loads for a run ONLY when the image provisions it (env
  * SIGILIX_GROUNDING_PLUGIN) AND the Worker passed COMPLETE grounding config for
  * this run. Gating on `sigilix` is the no-rebuild kill switch: the Worker sets
@@ -141,7 +149,14 @@ export function buildOpencodeConfig(
   model: CliAgentArgs["model"],
   groundingPluginPath: string,
   agentMcpEndpoint?: string,
+  toolcapPluginPath: string = TOOLCAP_PLUGIN_PATH,
 ): Record<string, unknown> {
+  // Plugins to load, in order: the always-on tool-output cap (present whenever
+  // provisioned), then the grounding plugin (only when grounding is active).
+  const plugins = [
+    ...(toolcapPluginPath ? [toolcapPluginPath] : []),
+    ...(groundingPluginPath ? [groundingPluginPath] : []),
+  ];
   const baseURL = model.baseUrl ?? DEFAULT_BASE_URL;
   return {
     $schema: "https://opencode.ai/config.json",
@@ -158,9 +173,9 @@ export function buildOpencodeConfig(
         models: { [model.id]: { name: model.id } },
       },
     },
-    // Only wire the grounding plugin when it is actually provisioned — pointing
-    // opencode at a missing plugin file would crash the run.
-    ...(groundingPluginPath ? { plugin: [groundingPluginPath] } : {}),
+    // Only wire plugins actually provisioned — pointing opencode at a missing
+    // plugin file would crash the run.
+    ...(plugins.length ? { plugin: plugins } : {}),
     ...(agentMcpEndpoint
       ? {
           mcp: {

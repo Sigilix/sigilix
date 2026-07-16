@@ -80,6 +80,18 @@ const CLI_BIN = process.env.SIGILIX_CLI_BIN ?? "sigilix";
  */
 const GROUNDING_PLUGIN_PATH = process.env.SIGILIX_GROUNDING_PLUGIN ?? "";
 
+/**
+ * The grounding plugin loads for a run ONLY when the image provisions it (env
+ * SIGILIX_GROUNDING_PLUGIN) AND the Worker passed COMPLETE grounding config for
+ * this run. Gating on `sigilix` is the no-rebuild kill switch: the Worker sets
+ * grounding via OPENCLAW_AGENT_GROUNDING_ENDPOINT (a [vars] flag), so flipping
+ * that off drops `sigilix` from the packet → the plugin is never added to the
+ * opencode config → it can't load. Fail-closed: partial/absent config → dark.
+ */
+export function isGroundingActive(pluginPath: string, sigilix: CliAgentArgs["sigilix"]): boolean {
+  return pluginPath !== "" && !!sigilix?.endpoint && !!sigilix?.apiKey && !!sigilix?.repoSlug;
+}
+
 /** Synthetic provider id the rendered config registers for the packet's model. */
 const PROVIDER_ID = "runner";
 
@@ -421,16 +433,26 @@ export async function runCliAgent(args: CliAgentArgs): Promise<EditLoopResult> {
         // coding engine from completing with its local editing tools.
       }
     }
+    // Load the grounding plugin ONLY when the image provisions it AND the worker
+    // actually passed grounding config for this run. Gating on `args.sigilix` makes
+    // the plugin an instant, no-rebuild kill switch: the Worker sets grounding via
+    // OPENCLAW_AGENT_GROUNDING_ENDPOINT (a [vars] flag), so flipping that off drops
+    // `sigilix` from the packet → the plugin is never added to the opencode config
+    // → it can't even load. This bounds the blast radius of a plugin regression to
+    // "grounding on" and keeps the fail-closed default (no plugin = today's behavior).
+    const groundingActive = isGroundingActive(GROUNDING_PLUGIN_PATH, args.sigilix);
+    const pluginPath = groundingActive ? GROUNDING_PLUGIN_PATH : "";
+
     // Write the hardened config OUTSIDE the repo so it never shows up in git status.
     cfgDir = await fs.mkdtemp(path.join(os.tmpdir(), "sigilix-cfg-"));
     const configPath = path.join(cfgDir, "opencode-config.json");
-    await fs.writeFile(configPath, JSON.stringify(buildOpencodeConfig(model, GROUNDING_PLUGIN_PATH, mcpBridge?.endpoint)), {
+    await fs.writeFile(configPath, JSON.stringify(buildOpencodeConfig(model, pluginPath, mcpBridge?.endpoint)), {
       mode: 0o600,
     });
 
     // Only carry the grounding secret into the child env when the plugin that
-    // consumes it is actually provisioned (see header (c) + buildCliEnv).
-    const env = buildCliEnv(args, process.env, GROUNDING_PLUGIN_PATH !== "");
+    // consumes it is actually loaded (see header (c) + buildCliEnv).
+    const env = buildCliEnv(args, process.env, groundingActive);
     env.OPENCODE_CONFIG = configPath;
     // Gate (c): the real model key lives ONLY in the child env (referenced as
     // {env:…} in the config, never embedded). The untrusted agent can't read it —

@@ -31,6 +31,7 @@ import {
   buildCliEnv,
   buildPrompt,
   buildCliArgs,
+  isGroundingActive,
   parseCliEvents,
   parseEditFilePath,
   runCliAgent,
@@ -85,6 +86,27 @@ function fakeChildChunks(chunks: string[], code: number) {
   }, 0);
   return child;
 }
+
+// ── isGroundingActive (no-rebuild kill switch) ────────────────────────────────
+
+describe("isGroundingActive", () => {
+  const full = { endpoint: "https://api.sigilix.ai", apiKey: "k", repoSlug: "o/r" };
+  it("active only when the plugin is provisioned AND complete grounding config is present", () => {
+    expect(isGroundingActive("/app/dist/grounding-plugin.js", full)).toBe(true);
+  });
+  it("dark when the image did not provision the plugin (empty path)", () => {
+    expect(isGroundingActive("", full)).toBe(false);
+  });
+  it("dark when the Worker passed no grounding config (kill switch: flag off → no sigilix)", () => {
+    expect(isGroundingActive("/p", undefined)).toBe(false);
+  });
+  it("fail-closed on PARTIAL grounding config (missing any of endpoint/apiKey/repoSlug)", () => {
+    expect(isGroundingActive("/p", { endpoint: "https://x", apiKey: "k" })).toBe(false);
+    expect(isGroundingActive("/p", { endpoint: "https://x", repoSlug: "o/r" })).toBe(false);
+    expect(isGroundingActive("/p", { apiKey: "k", repoSlug: "o/r" })).toBe(false);
+    expect(isGroundingActive("/p", { endpoint: "", apiKey: "k", repoSlug: "o/r" })).toBe(false);
+  });
+});
 
 // ── buildOpencodeConfig ───────────────────────────────────────────────────────
 

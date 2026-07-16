@@ -6,6 +6,9 @@
   "scripts": {
     "test": "vitest run"
   },
+  "dependencies": {
+    "@opencode-ai/plugin": "1.18.2"
+  },
   "devDependencies": {
     "@types/node": "^22.19.21",
     "typescript": "^5.7.0",

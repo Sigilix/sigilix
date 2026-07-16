@@ -79,6 +79,8 @@ describe("captureInstructiveLearning", () => {
     expect(orgStore.entries[0].rule).toBe("always use named exports")
     expect(orgStore.entries[0].source.kind).toBe("chat")
     expect(orgStore.entries[0].scope).toBe("org")
+    // SIG-600 PR2: a human teaching carries no runnable evidence → unverified.
+    expect(orgStore.entries[0].verification).toEqual({ status: "unverified", evidence: ["none"] })
   })
 
   it("QUALITY GATE — ordinary chatter (extractor declines) writes nothing", async () => {

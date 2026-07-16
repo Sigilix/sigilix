@@ -17,6 +17,8 @@ export type { SurfaceMemoryApplied } from "./adapters/surface-apply"
 export { mirrorLearningToOrgScope } from "./adapters/org-mirror"
 export { classifyLearningMemory } from "./domain/classify"
 export type { ClassifiedLearningMemory, ClassifyLearningMemoryInput } from "./domain/classify"
+export { classifyLearningVerification } from "./domain/verify-provenance"
+export type { ClassifyLearningVerificationInput } from "./domain/verify-provenance"
 export { parseLearningsCommand } from "./domain/command"
 export { EPHEMERAL_MEMORY_TYPES, MEMORY_DECAY_WINDOW_DAYS, isMemoryDecayEligible } from "./domain/decay"
 export {

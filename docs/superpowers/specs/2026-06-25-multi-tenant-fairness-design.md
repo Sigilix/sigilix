@@ -234,6 +234,7 @@ that depends on them. This section is the **living ledger** — every migration 
 | 12 | GitLab repository context authority | D1 | `migrations/0026_create_repository_context_authority.sql` | Adds strong D1 authority for GitLab canonical repository context, including generation-guarded pending claims, active repository scope, and stale-claim expiry lookup; KV remains credential/status storage rather than authorization | `wrangler d1 migrations apply` (pre-deploy) |
 | 13 | Stripe Checkout attempt guard | D1 | `migrations/0027_create_billing_checkout_attempt.sql` | Adds one installation-scoped, expiring Checkout attempt with a persisted request body, Stripe idempotency key, lease generation, and ready-URL fence | `wrangler d1 migrations apply` (pre-deploy) |
 | 14 | managed seat identity | D1 | `migrations/0028_create_org_workspace_seat_assignment.sql` | Adds exact-installation, immutable GitHub-user seat assignments and pins recoverable Stripe seat operations to either legacy-login or managed-GitHub identity | `wrangler d1 migrations apply` (pre-deploy) |
+| 15 | immutable usage author identity | D1 | `migrations/0029_add_usage_author_github_identity.sql` | Adds nullable immutable GitHub-user attribution to PR-review usage while leaving historical login-only rows explicitly unresolved | `wrangler d1 migrations apply` (pre-deploy) |
 
 > Rule: a PR that adds a DO bumps the `[[migrations]]` list (never reorders existing tags); a PR that
 > touches D1 schema adds the next-numbered SQL file (never edits a prior one) and updates this ledger.

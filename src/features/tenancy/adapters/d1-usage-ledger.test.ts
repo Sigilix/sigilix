@@ -13,6 +13,10 @@ const MIGRATION_SQL = readFileSync(
   new URL("../../../../migrations/0001_create_tenant_repo_usage.sql", import.meta.url),
   "utf8",
 )
+const IMMUTABLE_AUTHOR_MIGRATION_SQL = readFileSync(
+  new URL("../../../../migrations/0029_add_usage_author_github_identity.sql", import.meta.url),
+  "utf8",
+)
 
 function makeEnv(db: D1Database): Pick<Env, "SIGILIX_PLATFORM_DB"> {
   return { SIGILIX_PLATFORM_DB: db }
@@ -59,6 +63,7 @@ describe("appendUsage", () => {
     db = makeD1()
     await db.exec(MIGRATION_SQL)
     await applyCostMigrations(db)
+    await db.exec(IMMUTABLE_AUTHOR_MIGRATION_SQL)
     // usage_ledger has no FK to tenant/repo, so we can insert rows without seeding those tables.
   })
 
@@ -89,7 +94,7 @@ describe("appendUsage", () => {
     expect(row?.created_at).toBe("2026-01-01T00:00:00Z")
   })
 
-  it("duplicate (same installation/repo/pr/head) — INSERT OR IGNORE keeps exactly one row", async () => {
+  it("duplicate (same installation/repo/pr/head) keeps exactly one row", async () => {
     await appendUsage(makeEnv(db), BASE_ARGS)
     await appendUsage(makeEnv(db), { ...BASE_ARGS, modelCalls: 99, tokens: 99999 })
 
@@ -141,6 +146,25 @@ describe("appendUsage", () => {
     expect(row?.author_login).toBe("octocat")
   })
 
+  it("stores the canonical immutable GitHub author id when provided", async () => {
+    await appendUsage(makeEnv(db), { ...BASE_ARGS, authorLogin: "octocat", authorGithubUserId: "123" })
+
+    await expect(
+      db
+        .prepare("SELECT author_login, author_github_user_id FROM usage_ledger LIMIT 1")
+        .first<{ author_login: string | null; author_github_user_id: string | null }>(),
+    ).resolves.toEqual({ author_login: "octocat", author_github_user_id: "123" })
+  })
+
+  it("keeps usage metering but stores unresolved identity for a malformed GitHub id", async () => {
+    await appendUsage(makeEnv(db), { ...BASE_ARGS, authorLogin: "octocat", authorGithubUserId: "00123" })
+
+    expect(await rowCount(db)).toBe(1)
+    await expect(db.prepare("SELECT author_github_user_id FROM usage_ledger LIMIT 1").first()).resolves.toEqual({
+      author_github_user_id: null,
+    })
+  })
+
   it("stores NULL author_login when omitted", async () => {
     await appendUsage(makeEnv(db), BASE_ARGS)
 
@@ -151,15 +175,63 @@ describe("appendUsage", () => {
   })
 
   it("duplicate dedupe is unchanged when authorLogin differs (first-write-wins)", async () => {
-    await appendUsage(makeEnv(db), { ...BASE_ARGS, authorLogin: "alice" })
-    await appendUsage(makeEnv(db), { ...BASE_ARGS, authorLogin: "bob" })
+    await appendUsage(makeEnv(db), { ...BASE_ARGS, authorLogin: "alice", authorGithubUserId: "111" })
+    await appendUsage(makeEnv(db), { ...BASE_ARGS, authorLogin: "bob", authorGithubUserId: "222" })
 
     expect(await rowCount(db)).toBe(1)
     const row = await db
-      .prepare("SELECT author_login FROM usage_ledger LIMIT 1")
-      .first<{ author_login: string | null }>()
-    // INSERT OR IGNORE: first row wins on all columns
+      .prepare("SELECT author_login, author_github_user_id FROM usage_ledger LIMIT 1")
+      .first<{ author_login: string | null; author_github_user_id: string | null }>()
+    // Immutable identity and the mutable display login are both first-write-wins once resolved.
     expect(row?.author_login).toBe("alice")
+    expect(row?.author_github_user_id).toBe("111")
+  })
+
+  it("monotonically enriches an unresolved duplicate without changing first-write metrics or login", async () => {
+    await appendUsage(makeEnv(db), { ...BASE_ARGS, authorLogin: "first-login", modelCalls: 1 })
+    await appendUsage(makeEnv(db), {
+      ...BASE_ARGS,
+      authorLogin: "later-login",
+      authorGithubUserId: "111",
+      modelCalls: 99,
+    })
+    await appendUsage(makeEnv(db), {
+      ...BASE_ARGS,
+      authorLogin: "conflicting-login",
+      authorGithubUserId: "222",
+      modelCalls: 100,
+    })
+
+    await expect(
+      db.prepare("SELECT author_login, author_github_user_id, model_calls FROM usage_ledger LIMIT 1").first(),
+    ).resolves.toEqual({ author_login: "first-login", author_github_user_id: "111", model_calls: 1 })
+  })
+
+  it("keeps historical rows unresolved and rejects clearing or rebinding a proven identity", async () => {
+    const historicalDb = makeD1()
+    await historicalDb.exec(MIGRATION_SQL)
+    await applyCostMigrations(historicalDb)
+    await historicalDb
+      .prepare(
+        "INSERT INTO usage_ledger" +
+          " (installation_id, repo_id, pr_number, head_sha, model_calls, tokens, author_login, created_at)" +
+          " VALUES (10, 200, 42, 'historical', 1, 1, 'old-login', '2026-01-01T00:00:00Z')",
+      )
+      .run()
+    await historicalDb.exec(IMMUTABLE_AUTHOR_MIGRATION_SQL)
+
+    await expect(
+      historicalDb.prepare("SELECT author_github_user_id FROM usage_ledger WHERE head_sha = 'historical'").first(),
+    ).resolves.toEqual({ author_github_user_id: null })
+    await historicalDb
+      .prepare("UPDATE usage_ledger SET author_github_user_id = '111' WHERE head_sha = 'historical'")
+      .run()
+    await expect(
+      historicalDb.prepare("UPDATE usage_ledger SET author_github_user_id = NULL WHERE head_sha = 'historical'").run(),
+    ).rejects.toThrow(/immutable once set/)
+    await expect(
+      historicalDb.prepare("UPDATE usage_ledger SET author_github_user_id = '222' WHERE head_sha = 'historical'").run(),
+    ).rejects.toThrow(/immutable once set/)
   })
 
   it("NaN tokens — skipped, no row inserted, does not throw", async () => {

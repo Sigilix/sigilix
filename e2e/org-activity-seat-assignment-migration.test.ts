@@ -123,6 +123,7 @@ function insertAssignment(
 }
 
 describe("organization activity seat identity through real Wrangler migrations", () => {
+  // Cloudflare Workers Builds can run this real-Wrangler path past 60 seconds.
   it("applies an exact-installation immutable assignment schema", async () => {
     const fixture = await makeFixture()
     try {
@@ -250,7 +251,7 @@ describe("organization activity seat identity through real Wrangler migrations",
     } finally {
       await rm(fixture.root, { recursive: true, force: true })
     }
-  }, 60_000)
+  }, 120_000)
 
   it("rolls back a partial 0031 attempt and succeeds on retry", async () => {
     const fixture = await makeFixture()

@@ -20,6 +20,12 @@ ENV SIGILIX_CLI_BIN=sigilix
 # the agent gains the live multi-hop `retrieve_codebase` tool (→ Worker /v1/context).
 ENV SIGILIX_GROUNDING_PLUGIN=/app/dist/grounding-plugin.js
 
+# Always-on tool-output cap plugin (built from container/src → dist below).
+# cli-agent.ts adds it to the opencode `plugin` array on EVERY run so a broad
+# grep/glob/list can't dump tens of thousands of chars that ride along in every
+# subsequent model call and dominate token spend.
+ENV SIGILIX_TOOLCAP_PLUGIN=/app/dist/tool-output-cap-plugin.js
+
 WORKDIR /app
 
 # Install all deps (including devDeps for the compile step) before copying src

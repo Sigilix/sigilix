@@ -206,6 +206,9 @@ export interface FinalizeTelemetry {
    *  Forwarded to appendUsage for per-developer attribution. Optional — absent
    *  on early-bail / headless paths that skip getPullRequest. */
   authorLogin?: string
+  /** Immutable GitHub account id captured beside the mutable author login.
+   *  Optional for historical, non-GitHub, and pre-metadata bail paths. */
+  authorGithubUserId?: string
   retrievalCacheStats: RetrievalCacheStats | null
   tokenUsageByModel: TokenUsageByModel
   specialistVerdicts: ReadonlyArray<{ attemptsUsed?: number }>
@@ -282,6 +285,7 @@ export async function finalize<Tel extends FinalizeTelemetry>(
         tokens,
         costUsd,
         authorLogin: telemetry.authorLogin ?? null,
+        authorGithubUserId: telemetry.authorGithubUserId ?? null,
         nowIso: new Date().toISOString(),
       })
     } catch (error) {

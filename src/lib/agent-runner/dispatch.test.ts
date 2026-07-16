@@ -326,6 +326,61 @@ describe("dispatchAgentRun", () => {
     expect(body.grounding).toBe("some grounding context")
   })
 
+  // ── SIG-545 B2: pre-fetch grounding from /v1/context ────────────────────────
+
+  it('mode "on": pre-fetches grounding from /v1/context when configured and none supplied', async () => {
+    const stub = makeStub()
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ context: "PREFETCHED GROUNDING" }), { status: 200 }))
+    try {
+      const env = makeEnv("on", {
+        OPENCLAW_AGENT_GROUNDING_ENDPOINT: "https://api.sigilix.ai",
+        OPENCLAW_SIGILIX_API_KEY: GROUNDING_API_KEY,
+      })
+      const { grounding: _drop, ...noGrounding } = SAMPLE_INPUT
+      await dispatchAgentRun(env, noGrounding as AgentRunTaskInput)
+
+      // the /v1/context prefetch fired against the configured endpoint with the
+      // bearer + {owner, repo, query} contract the route expects
+      const [url, init] = fetchSpy.mock.calls[0]! as [string, RequestInit]
+      expect(url).toBe("https://api.sigilix.ai/v1/context")
+      expect(init.method).toBe("POST")
+      expect(init.headers).toMatchObject({
+        authorization: `Bearer ${GROUNDING_API_KEY}`,
+        "content-type": "application/json",
+      })
+      const sentBody = JSON.parse(String(init.body)) as Record<string, unknown>
+      expect(sentBody).toMatchObject({ owner: "Sigilix", repo: "sigilix" })
+      expect(typeof sentBody.query).toBe("string")
+      // and the pre-fetched slice landed in the container packet (was undefined before this fix)
+      const req = stub.fetch.mock.calls[0]![0]!
+      const body = (await req.json()) as Record<string, unknown>
+      expect(body.grounding).toBe("PREFETCHED GROUNDING")
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('mode "on": no /v1/context pre-fetch when grounding is unconfigured (agent stays blind, unchanged)', async () => {
+    const stub = makeStub()
+    mockGetContainer.mockReturnValue(stub)
+    mockGetInstallationToken.mockResolvedValue(STUB_TOKEN)
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+    try {
+      const { grounding: _drop, ...noGrounding } = SAMPLE_INPUT
+      await dispatchAgentRun(makeEnv("on"), noGrounding as AgentRunTaskInput) // no endpoint/key
+      expect(fetchSpy).not.toHaveBeenCalled()
+      const req = stub.fetch.mock.calls[0]![0]!
+      const body = (await req.json()) as Record<string, unknown>
+      expect(body.grounding).toBeUndefined()
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
   // ── (b2) model.baseUrl threading (Ollama-Turbo vs OpenRouter default) ────────
 
   it('mode "on": forwards model.baseUrl into the task packet when present', async () => {

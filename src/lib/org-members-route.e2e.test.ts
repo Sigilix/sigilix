@@ -44,6 +44,7 @@ async function makeEnv(): Promise<{ env: Env; db: D1Database }> {
   await db.exec(migration("0022_create_org_workspace_access.sql"))
   await db.exec(migration("0023_add_org_seat_billing_operation_context.sql"))
   await db.exec(migration("0028_create_org_workspace_seat_assignment.sql"))
+  await db.exec(migration("0032_extend_org_seat_billing_operation_activity_identity.sql"))
   await db
     .prepare(
       `INSERT INTO user_identity

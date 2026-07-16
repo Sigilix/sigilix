@@ -68,6 +68,7 @@ async function makeDb(): Promise<D1Database> {
   await db.exec(MIGRATION_STRIPE_SEAT_CONTEXT_SQL)
   await db.exec(migration("0022_create_org_workspace_access.sql"))
   await db.exec(migration("0028_create_org_workspace_seat_assignment.sql"))
+  await db.exec(migration("0032_extend_org_seat_billing_operation_activity_identity.sql"))
   await db.exec(
     `INSERT INTO user_identity (user_id, github_user_id, providers, created_at, last_login_at) VALUES
             ('seat-user-111', '111', '["github"]', 't', 't'),

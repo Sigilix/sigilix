@@ -279,8 +279,24 @@ describe("parseCliEvents", () => {
   });
 
   it("handles empty / whitespace output", () => {
-    expect(parseCliEvents("")).toEqual({ modelCalls: 0, errored: false });
-    expect(parseCliEvents("\n  \n")).toEqual({ modelCalls: 0, errored: false });
+    expect(parseCliEvents("")).toEqual({ modelCalls: 0, errored: false, retrieveCodebaseCalls: 0 });
+    expect(parseCliEvents("\n  \n")).toEqual({ modelCalls: 0, errored: false, retrieveCodebaseCalls: 0 });
+  });
+
+  it("counts DISTINCT retrieve_codebase tool calls, deduped by part id", () => {
+    // Two calls (parts p1, p2), each with multiple NDJSON lines sharing the part id.
+    const ndjson = [
+      JSON.stringify({ type: "part", part: { tool: "retrieve_codebase", id: "p1", state: "running" } }),
+      JSON.stringify({ type: "part", part: { tool: "retrieve_codebase", id: "p1", state: "completed" } }),
+      JSON.stringify({ type: "step_finish" }),
+      JSON.stringify({ type: "part", part: { tool: "edit", id: "p9" } }),
+      JSON.stringify({ type: "part", part: { tool: "retrieve_codebase", id: "p2", state: "completed" } }),
+    ].join("\n");
+    expect(parseCliEvents(ndjson).retrieveCodebaseCalls).toBe(2);
+    // A run that never calls the tool → 0 (the "why isn't it firing" signal).
+    expect(parseCliEvents(JSON.stringify({ type: "part", part: { tool: "edit", id: "x" } })).retrieveCodebaseCalls).toBe(
+      0,
+    );
   });
 });
 
@@ -329,7 +345,8 @@ describe("runCliAgent", () => {
     mocks.execFile.mockImplementation((_cmd, _args, _opts, cb) => cb(null, " M file.ts\n", ""));
 
     const result = await runCliAgent(makeArgs());
-    expect(result).toEqual({ changed: true, modelCalls: 1, tokens: 0, stoppedReason: "done" });
+    expect(result).toMatchObject({ changed: true, modelCalls: 1, tokens: 0, stoppedReason: "done" });
+    expect(result.diag).toEqual({ retrieveCodebaseCalls: 0, stderrTail: expect.any(String) });
     // config written to a 0600 file OUTSIDE the repo dir (cfgDir under tmp)
     expect(mocks.writeFile).toHaveBeenCalledWith("/tmp/sigilix-cfg-x/opencode-config.json", expect.any(String), {
       mode: 0o600,

@@ -946,4 +946,22 @@ describe("POST /v1/account/logout-all", () => {
     )
     expect(res?.status).toBe(415)
   })
+
+  it("400 on any unexpected query parameter", async () => {
+    const { env, db, kv } = await makeEnv()
+    await seedLiveIdentity(db, "user-a", "111")
+    await seedSession(kv, "a1")
+    const res = await tryHandleAccountRoute(
+      req("https://x/v1/account/logout-all?foo=bar", "a1", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+      env,
+      ctx,
+      new URL("https://x/v1/account/logout-all?foo=bar"),
+    )
+    expect(res?.status).toBe(400)
+    await expect(res?.json()).resolves.toEqual({ error: "unexpected_query_parameter" })
+  })
 })

@@ -37,6 +37,7 @@ import { parseEffort, parseMode, parseTier } from "./config"
 import { CREATOR_HEADER } from "./deep-research-do"
 import { isCodebaseQuestion, resolveRepoTarget } from "./repo-grounding"
 import type { Env } from "@/src/shared/types/env"
+import { validAttachmentIds } from "@/src/lib/chat-image-attachment-route"
 
 const DO_BASE = "https://deep-research.do"
 
@@ -127,6 +128,7 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
     owner?: unknown
     repo?: unknown
     installationId?: unknown
+    imageAttachmentIds?: unknown
   }
   try {
     body = (await request.json()) as typeof body
@@ -151,6 +153,10 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   if (effort === null) return json({ error: "effort must be one of: low, medium, high" }, 400)
   const mode = body.mode === undefined ? "deep" : parseMode(body.mode)
   if (mode === null) return json({ error: "mode must be one of: deep, chat" }, 400)
+  const imageAttachmentIds = body.imageAttachmentIds === undefined ? undefined : body.imageAttachmentIds
+  if (imageAttachmentIds !== undefined && !validAttachmentIds(imageAttachmentIds)) {
+    return json({ error: "invalid_image_attachments" }, 400)
+  }
 
   const explicitOwner = typeof body.owner === "string" ? body.owner : undefined
   const explicitRepo = typeof body.repo === "string" ? body.repo : undefined
@@ -210,6 +216,14 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
       console.warn(JSON.stringify({ event: "research-mcp-installation-denied", reason: access.reason }))
     }
   }
+  // Attachment scope must come only from a freshly verified selector for a
+  // session, or from the installation embedded in an API key. The legacy
+  // account_tenant link below is metering attribution, never attachment auth.
+  const imageAttachmentInstallationId = auth.session
+    ? verifiedSelectedInstallationId
+    : Number.isSafeInteger(auth.installationId) && Number(auth.installationId) > 0
+      ? Number(auth.installationId)
+      : undefined
 
   // SIG-303 SEAT pool (chatbot). GRACE POLICY: checked at the START of a new run,
   // before the DO is spun up — an over-cap seat blocks the NEXT run, never aborts
@@ -294,6 +308,12 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
       mode,
       creator: auth.creator,
       ...(mcpTenantScope ? { mcpTenantScope } : {}),
+      ...(imageAttachmentIds
+        ? {
+            imageAttachmentIds,
+            ...(imageAttachmentInstallationId !== undefined ? { imageAttachmentInstallationId } : {}),
+          }
+        : {}),
       ...(repoTarget ? { owner: repoTarget.owner, repo: repoTarget.repo } : {}),
       hasIndexedRepo,
     }),

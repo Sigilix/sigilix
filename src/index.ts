@@ -51,6 +51,7 @@ import {
   handleMemoryCreateRoute,
 } from "@/src/lib/agent-memory"
 import { handleResearchCreate, handleResearchStream, handleResearchCancel } from "@/src/do/deep-research/routes"
+import { isChatImageAttachmentPath, tryHandleChatImageAttachmentRoute } from "@/src/lib/chat-image-attachment-route"
 import { tryHandleMcpRoute } from "@/src/do/mcp/routes"
 import { tryHandleSkillRoute } from "@/src/lib/skills-route"
 import { handleTestSuppressionsMetricsRoute } from "@/src/lib/metrics-test-suppressions-route"
@@ -485,6 +486,7 @@ export default {
       isAgentPortalPath(url.pathname) ||
       url.pathname === "/v1/research" ||
       url.pathname.startsWith("/v1/research/") ||
+      isChatImageAttachmentPath(url.pathname) ||
       url.pathname === "/v1/workspace/prs" ||
       url.pathname === "/v1/metrics/dashboard" || // sig-metrics-dashboard (see metrics-dashboard-route.ts)
       // sig-memory-crud: POST (session create) / GET (list) / DELETE are
@@ -511,16 +513,14 @@ export default {
     const agentPortalResponse = await tryHandleAgentPortalRoute(request, env, ctx, url)
     if (agentPortalResponse) return withPortalCors(request, agentPortalResponse, env)
 
-    // sig-gitlab-connector: the GitLab connect surface — OAuth round-trip
-    // (top-level 302s) + the portal project endpoints (CORS-wrapped internally).
+    const chatAttachmentResponse = await tryHandleChatImageAttachmentRoute(request, env, ctx, url)
+    if (chatAttachmentResponse) return withPortalCors(request, chatAttachmentResponse, env)
+    // sig-gitlab-connector: OAuth round-trip + portal project endpoints (CORS-wrapped internally).
     const gitlabConnectResponse = await tryHandleGitLabConnectRoute(request, env, ctx, url)
     if (gitlabConnectResponse) return gitlabConnectResponse
 
-    // SIG-298: deep web research engine. Auth = session OR API key (handled in
-    // the route). CORS'd via portal-cors (the SSE stream body passes through).
-    //   POST /v1/research            → { id }
-    //   GET  /v1/research/:id/stream → SSE transcript (replay-from-start + live)
-    //   POST /v1/research/:id/cancel → cooperative cancel
+    // SIG-298: deep research. Auth = session OR API key in-route; responses are portal-CORS'd.
+    // POST creates; GET /:id/stream replays SSE; POST /:id/cancel cooperatively cancels.
     if (request.method === "POST" && url.pathname === "/v1/research") {
       return withPortalCors(request, await handleResearchCreate(request, env, ctx), env)
     }

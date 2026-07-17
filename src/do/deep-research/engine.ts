@@ -30,6 +30,7 @@ import type { SearchQueryResult } from "./search"
 import type { FetchPageResult } from "./fetch-guard"
 import { resolveRuntimeApp, type RuntimeAppId } from "@/src/shared/domain/runtime-app-registry"
 import { applySkillGuidance, renderSkillProvenanceNote, type ResolvedSkillContext } from "@/src/features/skills"
+import { describeImageEvidence, withImageEvidence, type ResearchImageEvidence } from "./image-evidence"
 import type {
   QuestionCategory,
   RepoGrounding,
@@ -63,6 +64,9 @@ export interface EngineDeps {
   mode?: ResearchMode
   emit: (event: ResearchEvent) => Promise<void> | void
   model: ResearchModelFn
+  /** Verified images are reduced to cited, untrusted text by a dedicated
+   * image-capable model before the normal text-only research pipeline. */
+  imageEvidence?: ResearchImageEvidence
   /** Verified installation-scoped read-only MCP runtime. Omitted when the
    *  caller has no positively authorized tenant selector. */
   mcp?: ResearchMcpRuntime
@@ -218,6 +222,7 @@ async function runDirectAnswer(
 ): Promise<void> {
   const { config } = deps
   await deps.emit({ type: "status", phase: "planning", round: 0, model: config.tier, effort: config.effort })
+  if (deps.imageEvidence) await deps.emit({ type: "note", text: describeImageEvidence(deps.imageEvidence) })
   if (mcpEvidence) await deps.emit({ type: "note", text: describeMcpEvidence(mcpEvidence) })
   if (note) await deps.emit({ type: "note", text: note })
   if (deps.isCancelled()) return cancel(deps)
@@ -225,7 +230,12 @@ async function runDirectAnswer(
   const skillContext = await loadSkillContext(deps)
   const answer = await deps.model(
     "finalReport",
-    toMessages(applySkillGuidance(withMcpEvidence(buildDirectAnswerPrompt(deps.question), mcpEvidence), skillContext)),
+    toMessages(
+      applySkillGuidance(
+        withImageEvidence(withMcpEvidence(buildDirectAnswerPrompt(deps.question), mcpEvidence), deps.imageEvidence),
+        skillContext,
+      ),
+    ),
   )
   if (skillContext) await deps.emit({ type: "note", text: renderSkillProvenanceNote(skillContext) })
   // Re-check after the (awaited) model call so a /cancel that lands mid-answer
@@ -248,6 +258,7 @@ async function runRepoGrounded(
 ): Promise<void> {
   const { config } = deps
   await deps.emit({ type: "status", phase: "planning", round: 0, model: config.tier, effort: config.effort })
+  if (deps.imageEvidence) await deps.emit({ type: "note", text: describeImageEvidence(deps.imageEvidence) })
   if (mcpEvidence) await deps.emit({ type: "note", text: describeMcpEvidence(mcpEvidence) })
   await deps.emit({
     type: "note",
@@ -266,7 +277,9 @@ async function runRepoGrounded(
   const skillContext = await loadSkillContext(deps)
   const answer = await deps.model(
     "finalReport",
-    toMessages(applySkillGuidance(withMcpEvidence(prompt, mcpEvidence), skillContext)),
+    toMessages(
+      applySkillGuidance(withImageEvidence(withMcpEvidence(prompt, mcpEvidence), deps.imageEvidence), skillContext),
+    ),
   )
   if (skillContext) await deps.emit({ type: "note", text: renderSkillProvenanceNote(skillContext) })
   // Re-check after the awaited model call so a mid-answer /cancel wins the race.
@@ -299,8 +312,9 @@ async function runInner(deps: EngineDeps, mcpEvidence?: ResearchMcpEvidence | nu
   // ONLY this first status carries model + effort (the UI reads them here);
   // every other status event omits them (the original contract shape).
   await deps.emit({ type: "status", phase: "planning", round: 0, model: config.tier, effort: config.effort })
+  if (deps.imageEvidence) await deps.emit({ type: "note", text: describeImageEvidence(deps.imageEvidence) })
   if (mcpEvidence) await deps.emit({ type: "note", text: describeMcpEvidence(mcpEvidence) })
-  const planPrompt = withMcpEvidence(buildPlanPrompt(deps.question), mcpEvidence)
+  const planPrompt = withImageEvidence(withMcpEvidence(buildPlanPrompt(deps.question), mcpEvidence), deps.imageEvidence)
   const plan = await deps.model("planner", toMessages(planPrompt))
   track(plan.tokens)
   await deps.emit({ type: "plan", text: plan.text })
@@ -335,14 +349,17 @@ async function runInner(deps: EngineDeps, mcpEvidence?: ResearchMcpEvidence | nu
 
     // ── generate queries ────────────────────────────────────────────
     await deps.emit({ type: "status", phase: "searching", round })
-    const queryPrompt = buildQueryPrompt({
-      question: deps.question,
-      category,
-      plan: plan.text,
-      notes,
-      maxQueries: config.maxQueriesPerRound,
-      round,
-    })
+    const queryPrompt = withImageEvidence(
+      buildQueryPrompt({
+        question: deps.question,
+        category,
+        plan: plan.text,
+        notes,
+        maxQueries: config.maxQueriesPerRound,
+        round,
+      }),
+      deps.imageEvidence,
+    )
     const queryResp = await deps.model("planner", toMessages(queryPrompt))
     track(queryResp.tokens)
     const queries = parseQueries(queryResp.text, config.maxQueriesPerRound)
@@ -410,7 +427,12 @@ async function runInner(deps: EngineDeps, mcpEvidence?: ResearchMcpEvidence | nu
   const skillContext = await loadSkillContext(deps)
   const report = await deps.model(
     "finalReport",
-    toMessages(applySkillGuidance(withMcpEvidence(reportPrompt, mcpEvidence), skillContext)),
+    toMessages(
+      applySkillGuidance(
+        withImageEvidence(withMcpEvidence(reportPrompt, mcpEvidence), deps.imageEvidence),
+        skillContext,
+      ),
+    ),
   )
   track(report.tokens)
   if (skillContext) await deps.emit({ type: "note", text: renderSkillProvenanceNote(skillContext) })

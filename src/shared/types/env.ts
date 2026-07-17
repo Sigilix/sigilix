@@ -44,9 +44,9 @@ export interface Env extends AwsBedrockEnv {
   // is absent (the launch default — the bucket is intentionally not yet
   // provisioned) the store no-ops, so retention is impossible even if the flag
   // were flipped. Provision via `wrangler r2 bucket create sigilix-training-data`
-  // and uncomment the wrangler.toml [[r2_buckets]] block only AFTER the legal
-  // prerequisites in src/features/training-consent/README.md are met.
+  // Provision only after the legal prerequisites in src/features/training-consent/README.md are met.
   SIGILIX_TRAINING_DATA?: R2Bucket
+  SIGILIX_CHAT_ATTACHMENTS?: R2Bucket
   // Workers AI binding for embedding queries at retrieval time.
   AI: Ai
   // Cloudflare Queue producer binding. Webhook handlers enqueue
@@ -68,9 +68,9 @@ export interface Env extends AwsBedrockEnv {
   // SIG-406 (OpenRouter alpha): the PRIMARY review API key — every review specialist +
   // the synthesizer + the dispatcher run on OpenRouter ids, and the per-call key is
   // selected by model-id shape (slash-id → this key). Review FAILS CLOSED without it.
-  // Typed optional so the Worker still boots without it (non-review paths use
-  // OLLAMA_API_KEY); a review that selects OpenRouter without it returns missing_api_key.
+  // Optional: non-review paths use OLLAMA_API_KEY; OpenRouter review fails closed when absent.
   OPENROUTER_API_KEY?: string
+  SIGILIX_RESEARCH_IMAGE_MODELS?: string
   LINEAR_OAUTH_CLIENT_ID?: string
   LINEAR_OAUTH_CLIENT_SECRET?: string
   OPENCLAW_LINEAR_AGENT_CLIENT_ID?: string // dedicated agent-app OAuth; falls back to LINEAR_OAUTH_CLIENT_ID

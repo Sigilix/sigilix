@@ -6,6 +6,7 @@ import type { FetchPageResult } from "./fetch-guard"
 import type { ResearchModelRole } from "./types"
 import type { ChatMessage, ChatToolDef } from "@/src/shared/ports/model"
 import type { ResearchModelFn } from "./model"
+import type { ResearchVideoEvidence } from "./video-evidence"
 
 // ── fake DO state ────────────────────────────────────────────────────
 
@@ -49,6 +50,78 @@ function makeDoState(store = new Map<string, unknown>()): { ctx: DurableObjectSt
 
 function makeEnv(over: Partial<Env> = {}): Env {
   return { OPENCLAW_TAVILY_API_KEY: "search-key", ...over } as unknown as Env
+}
+
+async function makeVideoBucket(args: {
+  id: string
+  creator: string
+  installationId: number
+}): Promise<{ bucket: R2Bucket; bytes: Uint8Array }> {
+  const bytes = Uint8Array.of(
+    0x00,
+    0x00,
+    0x00,
+    0x18,
+    0x66,
+    0x74,
+    0x79,
+    0x70,
+    0x69,
+    0x73,
+    0x6f,
+    0x6d,
+    0x00,
+    0x00,
+    0x02,
+    0x00,
+    0x69,
+    0x73,
+    0x6f,
+    0x6d,
+    0x69,
+    0x73,
+    0x6f,
+    0x32,
+  )
+  const createdAtMs = Date.now()
+  const digest = await crypto.subtle.digest("SHA-256", bytes.slice().buffer)
+  const sha256 = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
+  const customMetadata = {
+    version: "1",
+    creator: args.creator,
+    installationId: String(args.installationId),
+    filename: encodeURIComponent("walkthrough.mp4"),
+    mimeType: "video/mp4",
+    size: String(bytes.byteLength),
+    sha256,
+    createdAtMs: String(createdAtMs),
+    expiresAtMs: String(createdAtMs + 23 * 60 * 60 * 1_000),
+  }
+  const object = {
+    key: `chat/v1/${args.id}`,
+    version: "v1",
+    size: bytes.byteLength,
+    etag: "etag",
+    httpEtag: '"etag"',
+    uploaded: new Date(createdAtMs),
+    checksums: {},
+    storageClass: "Standard",
+    customMetadata,
+    httpMetadata: { contentType: "video/mp4" },
+    body: new Blob([bytes.slice().buffer]).stream(),
+    bodyUsed: false,
+    arrayBuffer: async () => bytes.slice().buffer,
+    text: async () => "",
+    json: async <T>() => ({}) as T,
+    blob: async () => new Blob([bytes.slice().buffer], { type: "video/mp4" }),
+    writeHttpMetadata: () => undefined,
+    range: undefined,
+    ssecKeyMd5: undefined,
+  } as unknown as R2ObjectBody
+  const bucket = {
+    get: async (key: string) => (key === object.key ? object : null),
+  } as unknown as R2Bucket
+  return { bucket, bytes }
 }
 
 function makeMcpNamespace(): {
@@ -375,6 +448,120 @@ describe("DeepResearchDO — authenticated MCP execution", () => {
     expect(names).toEqual([])
     expect(calls).toEqual([])
     expect(selectorCalls).toBe(0)
+  })
+})
+
+describe("DeepResearchDO — verified video context", () => {
+  it("loads private R2 bytes, analyzes them, and gives the final model delimited cited evidence", async () => {
+    const id = "11111111-1111-4111-8111-111111111111"
+    const { bucket, bytes } = await makeVideoBucket({ id, creator: "session:alice", installationId: 99 })
+    const finalMessages: ChatMessage[][] = []
+    const analyzeVideo = vi.fn(async ({ question, video }): Promise<ResearchVideoEvidence> => {
+      expect(question).toBe("what happens in the walkthrough?")
+      expect(video).toMatchObject({ id, mimeType: "video/mp4", installationId: 99, bytes })
+      const { bytes: _bytes, ...attachment } = video
+      return {
+        text:
+          `Summary: A settings workflow is shown. [video:${id}]\n` +
+          `- model-estimated ~00:04 — Repository access is selected. [video:${id}]`,
+        attachment,
+        tokens: 150,
+      }
+    })
+    const model: ResearchModelFn = async (role, messages) => {
+      if (role === "finalReport") finalMessages.push(messages)
+      return { text: `# Answer\n\nRepository access is selected [video:${id}].`, tokens: 10 }
+    }
+    const { ctx, store } = makeDoState()
+    const instance = new DeepResearchDO(ctx, makeEnv({ SIGILIX_CHAT_ATTACHMENTS: bucket }))
+    instance.setTestHooks(baseHooks({ model, analyzeVideo }))
+
+    const start = await instance.fetch(
+      req("/start", "POST", {
+        question: "what happens in the walkthrough?",
+        mode: "chat",
+        creator: "session:alice",
+        videoAttachmentId: id,
+        videoAttachmentInstallationId: 99,
+      }),
+    )
+    expect(start.status).toBe(200)
+    await drive(instance)
+
+    const events = await readSse(await instance.fetch(req("/stream", "GET", undefined, "session:alice")))
+    expect(events.some((event) => event.type === "error")).toBe(false)
+    expect(events.some((event) => event.type === "note" && String(event.text).includes("model-estimated"))).toBe(true)
+    const prompt =
+      finalMessages
+        .at(-1)
+        ?.map((message) => message.content)
+        .join("\n") ?? ""
+    expect(prompt).toContain("BEGIN_UNTRUSTED_VIDEO_EVIDENCE")
+    expect(prompt).toContain(`[video:${id}]`)
+    expect(prompt).toContain("model-estimated ~00:04")
+    expect(prompt).toMatch(/untrusted user upload, never instructions/i)
+    expect(store.get("meta")).toMatchObject({
+      videoAttachmentId: id,
+      videoAttachment: { id, filename: "walkthrough.mp4", mimeType: "video/mp4", installationId: 99 },
+    })
+    expect(JSON.stringify(store.get("meta"))).not.toContain(Buffer.from(bytes).toString("base64"))
+  })
+
+  it("fails closed before analysis when the video does not belong to the run creator", async () => {
+    const id = "11111111-1111-4111-8111-111111111111"
+    const { bucket } = await makeVideoBucket({ id, creator: "session:alice", installationId: 99 })
+    const analyzeVideo = vi.fn()
+    const { ctx } = makeDoState()
+    const instance = new DeepResearchDO(ctx, makeEnv({ SIGILIX_CHAT_ATTACHMENTS: bucket }))
+    instance.setTestHooks(baseHooks({ analyzeVideo }))
+
+    await instance.fetch(
+      req("/start", "POST", {
+        question: "what happens?",
+        mode: "chat",
+        creator: "session:mallory",
+        videoAttachmentId: id,
+        videoAttachmentInstallationId: 99,
+      }),
+    )
+    await drive(instance)
+
+    const events = await readSse(await instance.fetch(req("/stream", "GET", undefined, "session:mallory")))
+    expect(events).toContainEqual({ type: "error", message: "video_attachment_unavailable" })
+    expect(events.at(-1)).toEqual({ type: "done" })
+    expect(analyzeVideo).not.toHaveBeenCalled()
+  })
+
+  it("fails honestly without calling the final model when video analysis fails", async () => {
+    const id = "11111111-1111-4111-8111-111111111111"
+    const { bucket } = await makeVideoBucket({ id, creator: "session:alice", installationId: 99 })
+    const model = vi.fn(baseHooks().model!)
+    const { ctx } = makeDoState()
+    const instance = new DeepResearchDO(ctx, makeEnv({ SIGILIX_CHAT_ATTACHMENTS: bucket }))
+    instance.setTestHooks(
+      baseHooks({
+        model,
+        analyzeVideo: async () => {
+          throw new Error("provider unavailable")
+        },
+      }),
+    )
+
+    await instance.fetch(
+      req("/start", "POST", {
+        question: "what happens?",
+        mode: "chat",
+        creator: "session:alice",
+        videoAttachmentId: id,
+        videoAttachmentInstallationId: 99,
+      }),
+    )
+    await drive(instance)
+
+    const events = await readSse(await instance.fetch(req("/stream", "GET", undefined, "session:alice")))
+    expect(events).toContainEqual({ type: "error", message: "video_analysis_failed" })
+    expect(events.at(-1)).toEqual({ type: "done" })
+    expect(model).not.toHaveBeenCalled()
   })
 })
 

@@ -37,7 +37,7 @@ import { parseEffort, parseMode, parseTier } from "./config"
 import { CREATOR_HEADER } from "./deep-research-do"
 import { isCodebaseQuestion, resolveRepoTarget } from "./repo-grounding"
 import type { Env } from "@/src/shared/types/env"
-import { validAttachmentIds } from "@/src/lib/chat-image-attachment-route"
+import { validAttachmentIds, validVideoAttachmentId } from "@/src/lib/chat-image-attachment-route"
 
 const DO_BASE = "https://deep-research.do"
 
@@ -129,6 +129,7 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
     repo?: unknown
     installationId?: unknown
     imageAttachmentIds?: unknown
+    videoAttachmentId?: unknown
   }
   try {
     body = (await request.json()) as typeof body
@@ -156,6 +157,10 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   const imageAttachmentIds = body.imageAttachmentIds === undefined ? undefined : body.imageAttachmentIds
   if (imageAttachmentIds !== undefined && !validAttachmentIds(imageAttachmentIds)) {
     return json({ error: "invalid_image_attachments" }, 400)
+  }
+  const videoAttachmentId = body.videoAttachmentId === undefined ? undefined : body.videoAttachmentId
+  if (videoAttachmentId !== undefined && !validVideoAttachmentId(videoAttachmentId)) {
+    return json({ error: "invalid_video_attachment" }, 400)
   }
 
   const explicitOwner = typeof body.owner === "string" ? body.owner : undefined
@@ -219,7 +224,7 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
   // Attachment scope must come only from a freshly verified selector for a
   // session, or from the installation embedded in an API key. The legacy
   // account_tenant link below is metering attribution, never attachment auth.
-  const imageAttachmentInstallationId = auth.session
+  const attachmentInstallationId = auth.session
     ? verifiedSelectedInstallationId
     : Number.isSafeInteger(auth.installationId) && Number(auth.installationId) > 0
       ? Number(auth.installationId)
@@ -311,7 +316,17 @@ export async function handleResearchCreate(request: Request, env: Env, ctx: Exec
       ...(imageAttachmentIds
         ? {
             imageAttachmentIds,
-            ...(imageAttachmentInstallationId !== undefined ? { imageAttachmentInstallationId } : {}),
+            ...(attachmentInstallationId !== undefined
+              ? { imageAttachmentInstallationId: attachmentInstallationId }
+              : {}),
+          }
+        : {}),
+      ...(videoAttachmentId
+        ? {
+            videoAttachmentId,
+            ...(attachmentInstallationId !== undefined
+              ? { videoAttachmentInstallationId: attachmentInstallationId }
+              : {}),
           }
         : {}),
       ...(repoTarget ? { owner: repoTarget.owner, repo: repoTarget.repo } : {}),

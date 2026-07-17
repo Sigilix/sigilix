@@ -4,6 +4,7 @@ import {
   handleGetChatImageAttachment,
   handleUploadChatImageAttachment,
   loadVerifiedChatImages,
+  loadVerifiedChatVideo,
 } from "@/src/lib/chat-image-attachment-route"
 import type { Env } from "@/src/shared/types/env"
 
@@ -84,6 +85,39 @@ function pngBytes(): Uint8Array {
   return Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0)
 }
 
+function mp4Bytes(): Uint8Array {
+  return Uint8Array.of(
+    0x00,
+    0x00,
+    0x00,
+    0x18,
+    0x66,
+    0x74,
+    0x79,
+    0x70,
+    0x69,
+    0x73,
+    0x6f,
+    0x6d,
+    0x00,
+    0x00,
+    0x02,
+    0x00,
+    0x69,
+    0x73,
+    0x6f,
+    0x6d,
+    0x69,
+    0x73,
+    0x6f,
+    0x32,
+  )
+}
+
+function webmBytes(): Uint8Array {
+  return Uint8Array.of(0x1a, 0x45, 0xdf, 0xa3, 0x42, 0x82, 0x84, 0x77, 0x65, 0x62, 0x6d, 0x00)
+}
+
 function request(
   method: "POST" | "GET" | "DELETE",
   path = "/v1/chat/attachments",
@@ -147,6 +181,91 @@ describe("chat image attachment route", () => {
     )
     expect(hidden.status).toBe(404)
     await expect(hidden.json()).resolves.toEqual({ error: "attachment_unavailable" })
+  })
+
+  it("uses the same private attachment policy for one verified MP4 video", async () => {
+    const r2 = makeR2()
+    const env = { SIGILIX_CHAT_ATTACHMENTS: r2.bucket } as unknown as Env
+    const uploaded = await handleUploadChatImageAttachment(
+      request("POST", "/v1/chat/attachments?filename=walkthrough.mp4", mp4Bytes(), "video/mp4"),
+      env,
+      ctx,
+    )
+
+    expect(uploaded.status).toBe(201)
+    const descriptor = (await uploaded.json()) as { id: string; filename: string; mimeType: string }
+    expect(descriptor).toMatchObject({ filename: "walkthrough.mp4", mimeType: "video/mp4" })
+    await expect(
+      loadVerifiedChatVideo(env, {
+        id: descriptor.id,
+        creator: "tenant:99",
+        installationId: 99,
+        nowMs: Date.now(),
+      }),
+    ).resolves.toMatchObject({ id: descriptor.id, mimeType: "video/mp4", bytes: mp4Bytes() })
+
+    const fetched = await handleGetChatImageAttachment(
+      request("GET", `/v1/chat/attachments/${descriptor.id}`),
+      env,
+      ctx,
+      descriptor.id,
+    )
+    expect(fetched.status).toBe(200)
+    expect(fetched.headers.get("content-type")).toBe("video/mp4")
+    expect(fetched.headers.get("cache-control")).toBe("private, no-store")
+    expect(new Uint8Array(await fetched.arrayBuffer())).toEqual(mp4Bytes())
+
+    await expect(
+      loadVerifiedChatVideo(env, {
+        id: descriptor.id,
+        creator: "tenant:100",
+        installationId: 100,
+        nowMs: Date.now(),
+      }),
+    ).rejects.toMatchObject({ code: "attachment_unavailable" })
+  })
+
+  it("accepts verified WebM and rejects oversized or signature-mismatched video", async () => {
+    const r2 = makeR2()
+    const env = { SIGILIX_CHAT_ATTACHMENTS: r2.bucket } as unknown as Env
+    const webm = await handleUploadChatImageAttachment(
+      request("POST", "/v1/chat/attachments?filename=demo.webm", webmBytes(), "video/webm"),
+      env,
+      ctx,
+    )
+    expect(webm.status).toBe(201)
+
+    const oversized = new Request("https://api.sigilix.ai/v1/chat/attachments?filename=large.mp4", {
+      method: "POST",
+      headers: { "content-type": "video/mp4", "content-length": String(6 * 1024 * 1024 + 1) },
+      body: mp4Bytes().slice().buffer,
+    })
+    expect((await handleUploadChatImageAttachment(oversized, env, ctx)).status).toBe(413)
+
+    const mismatch = await handleUploadChatImageAttachment(
+      request("POST", "/v1/chat/attachments?filename=fake.mp4", pngBytes(), "video/mp4"),
+      env,
+      ctx,
+    )
+    expect(mismatch.status).toBe(415)
+    expect(r2.objects.size).toBe(1)
+  })
+
+  it("fails closed when verified video bytes are changed after upload", async () => {
+    const r2 = makeR2()
+    const env = { SIGILIX_CHAT_ATTACHMENTS: r2.bucket } as unknown as Env
+    const uploaded = await handleUploadChatImageAttachment(
+      request("POST", "/v1/chat/attachments?filename=proof.mp4", mp4Bytes(), "video/mp4"),
+      env,
+      ctx,
+    )
+    const { id } = (await uploaded.json()) as { id: string }
+    const stored = r2.objects.get(`chat/v1/${id}`)!
+    stored.bytes[stored.bytes.length - 1] = stored.bytes[stored.bytes.length - 1]! ^ 0xff
+
+    await expect(
+      loadVerifiedChatVideo(env, { id, creator: "tenant:99", installationId: 99, nowMs: Date.now() }),
+    ).rejects.toMatchObject({ code: "attachment_unavailable" })
   })
 
   it("rejects an oversized or signature-mismatched upload before writing", async () => {

@@ -31,17 +31,24 @@ import { resolveRuntimeApp, type RuntimeAppId } from "@/src/shared/domain/runtim
 import { resolveRuntimeSkill, type ResolvedSkillContext } from "@/src/features/skills"
 import {
   loadVerifiedChatImages,
+  loadVerifiedChatVideo,
   validAttachmentIds,
+  validVideoAttachmentId,
   type ChatImageAttachmentDescriptor,
+  type ChatVideoAttachmentDescriptor,
 } from "@/src/lib/chat-image-attachment-route"
 import { analyzeChatImages, type AnalyzeChatImagesFn } from "./image-model"
 import type { ResearchImageEvidence } from "./image-evidence"
+import { analyzeChatVideo, type AnalyzeChatVideoFn } from "./video-model"
+import type { ResearchVideoEvidence } from "./video-evidence"
 
 const META_KEY = "meta"
 const EVENT_PREFIX = "evt:"
 const SEQ_PAD = 12
 const MAX_IMAGE_EVIDENCE_CHARS = 32_000
 const MAX_IMAGE_EVIDENCE_CITATIONS = 64
+const MAX_VIDEO_EVIDENCE_CHARS = 32_000
+const MAX_VIDEO_EVIDENCE_CITATIONS = 64
 /** Header the route uses to bind a run to its creator (tenant/session subject). */
 export const CREATOR_HEADER = "x-research-creator"
 
@@ -71,6 +78,10 @@ interface RunMeta {
   imageAttachmentInstallationId?: number
   /** Safe immutable provenance copied only after verified R2 load. */
   imageAttachments?: ChatImageAttachmentDescriptor[]
+  videoAttachmentId?: string
+  videoAttachmentInstallationId?: number
+  /** Safe immutable provenance copied only after verified R2 load. */
+  videoAttachment?: ChatVideoAttachmentDescriptor
 }
 
 /** Test seam: lets DO-level tests drive the loop with fake IO. Never set in
@@ -79,6 +90,7 @@ interface RunMeta {
 export type ResearchTestHooks = Partial<Pick<EngineDeps, "model" | "search" | "fetchPage" | "now">> & {
   gatherGrounding?: (args: GatherRepoGroundingArgs) => Promise<RepoGrounding | null>
   analyzeImages?: AnalyzeChatImagesFn
+  analyzeVideo?: AnalyzeChatVideoFn
 }
 
 export class DeepResearchDO extends DurableObject<Env> {
@@ -103,6 +115,8 @@ export class DeepResearchDO extends DurableObject<Env> {
   private hasIndexedRepo = false
   private imageAttachmentIds: string[] = []
   private imageAttachmentInstallationId: number | undefined
+  private videoAttachmentId: string | undefined
+  private videoAttachmentInstallationId: number | undefined
   private readonly encoder = new TextEncoder()
 
   // sig-worker-debrand-openclaw: resolve SIGILIX_ (preferred) / OPENCLAW_ (fallback)
@@ -140,6 +154,8 @@ export class DeepResearchDO extends DurableObject<Env> {
       hasIndexedRepo?: unknown
       imageAttachmentIds?: unknown
       imageAttachmentInstallationId?: unknown
+      videoAttachmentId?: unknown
+      videoAttachmentInstallationId?: unknown
     }
     try {
       body = (await request.json()) as typeof body
@@ -177,6 +193,14 @@ export class DeepResearchDO extends DurableObject<Env> {
       Number.isSafeInteger(body.imageAttachmentInstallationId) && Number(body.imageAttachmentInstallationId) > 0
         ? Number(body.imageAttachmentInstallationId)
         : undefined
+    if (body.videoAttachmentId !== undefined && !validVideoAttachmentId(body.videoAttachmentId)) {
+      return json({ error: "invalid_video_attachment" }, 400)
+    }
+    this.videoAttachmentId = body.videoAttachmentId
+    this.videoAttachmentInstallationId =
+      Number.isSafeInteger(body.videoAttachmentInstallationId) && Number(body.videoAttachmentInstallationId) > 0
+        ? Number(body.videoAttachmentInstallationId)
+        : undefined
 
     this.started = true
     const meta: RunMeta = {
@@ -197,6 +221,10 @@ export class DeepResearchDO extends DurableObject<Env> {
       ...(this.imageAttachmentIds.length ? { imageAttachmentIds: this.imageAttachmentIds } : {}),
       ...(this.imageAttachmentInstallationId !== undefined
         ? { imageAttachmentInstallationId: this.imageAttachmentInstallationId }
+        : {}),
+      ...(this.videoAttachmentId ? { videoAttachmentId: this.videoAttachmentId } : {}),
+      ...(this.videoAttachmentInstallationId !== undefined
+        ? { videoAttachmentInstallationId: this.videoAttachmentInstallationId }
         : {}),
     }
     await this.ctx.storage.put(META_KEY, meta)
@@ -257,6 +285,50 @@ export class DeepResearchDO extends DurableObject<Env> {
       }
     }
 
+    let videoEvidence: ResearchVideoEvidence | undefined
+    let videoTokens = 0
+    let videoCostUsd = 0
+    if (this.videoAttachmentId) {
+      let video: Awaited<ReturnType<typeof loadVerifiedChatVideo>>
+      try {
+        video = await loadVerifiedChatVideo(this.env, {
+          id: this.videoAttachmentId,
+          creator: this.creator,
+          ...(this.videoAttachmentInstallationId !== undefined
+            ? { installationId: this.videoAttachmentInstallationId }
+            : {}),
+          nowMs: Date.now(),
+        })
+      } catch {
+        await this.emit({ type: "error", message: "video_attachment_unavailable" })
+        await this.emit({ type: "done" })
+        return
+      }
+      try {
+        const analyze =
+          this.hooks?.analyzeVideo ??
+          ((args) => analyzeChatVideo(this.env, this.ctx as unknown as ExecutionContext, args))
+        videoEvidence = await analyze({ question, video })
+        if (!validVideoEvidence(videoEvidence, video.id)) throw new Error("invalid video evidence")
+        videoTokens = videoEvidence.tokens
+        // This is product budget burn, not provider billing. Use the same
+        // representative economical visual-model rate as image analysis while
+        // preserving Vertex's measured token count.
+        videoCostUsd =
+          videoEvidence.costUsd ?? (videoEvidence.tokens / 1_000_000) * (SIGILIX_MODEL_BURN_USD_PER_MTOK.pyroeis ?? 0)
+        const meta = await this.ctx.storage.get<RunMeta>(META_KEY)
+        if (meta) {
+          const { bytes: _bytes, ...descriptor } = video
+          meta.videoAttachment = descriptor
+          await this.ctx.storage.put(META_KEY, meta)
+        }
+      } catch {
+        await this.emit({ type: "error", message: "video_analysis_failed" })
+        await this.emit({ type: "done" })
+        return
+      }
+    }
+
     // Resolve policy at the final-answer boundary, not at run start. A deep
     // research run can spend minutes gathering sources; deferring this read
     // ensures an admin revoke that lands during research takes effect before
@@ -299,7 +371,8 @@ export class DeepResearchDO extends DurableObject<Env> {
     // can stamp the chatbot's real token spend + estimated cost onto its usage_events
     // row after the run — the CLI/chat surfaces previously recorded ZERO token/cost
     // data. Engine untouched; the wrapper only sums (pure aside from the counter).
-    let tokensAccum = imageTokens
+    const attachmentTokens = imageTokens + videoTokens
+    let tokensAccum = attachmentTokens
     const baseModel: ResearchModelFn = this.hooks?.model ?? buildModelFn(this.env, config)
     const meteredModel: ResearchModelFn = async (role, messages, tools) => {
       const r = await baseModel(role, messages, tools)
@@ -325,6 +398,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       emit: (event) => this.emit(event),
       model: meteredModel,
       ...(imageEvidence ? { imageEvidence } : {}),
+      ...(videoEvidence ? { videoEvidence } : {}),
       ...(mcp ? { mcp } : {}),
       ...(this.appId ? { appId: this.appId } : {}),
       ...(resolveSkillContext ? { resolveSkillContext } : {}),
@@ -345,8 +419,9 @@ export class DeepResearchDO extends DurableObject<Env> {
     // In the pathological case where it isn't, the UPDATE matches 0 rows (harmless
     // no-op) and the row keeps cost 0 — an under-count, never a wrong block.
     try {
-      const textTokens = Math.max(0, tokensAccum - imageTokens)
-      const costUsd = imageCostUsd + (textTokens / 1_000_000) * (SIGILIX_MODEL_BURN_USD_PER_MTOK[this.model] ?? 0)
+      const textTokens = Math.max(0, tokensAccum - attachmentTokens)
+      const costUsd =
+        imageCostUsd + videoCostUsd + (textTokens / 1_000_000) * (SIGILIX_MODEL_BURN_USD_PER_MTOK[this.model] ?? 0)
       await updateUsageEventCost(this.env, { meter: "chatbot", eventId: runId, tokens: tokensAccum, costUsd })
     } catch (err) {
       console.warn(
@@ -530,6 +605,26 @@ function validImageEvidence(evidence: ResearchImageEvidence, expectedIds: string
     citedIds.length <= MAX_IMAGE_EVIDENCE_CITATIONS &&
     citedIds.every((id) => expected.has(id)) &&
     expectedIds.every((id) => actualIds.has(id) && evidence.text.includes(`[attachment:${id}]`))
+  )
+}
+
+function validVideoEvidence(evidence: ResearchVideoEvidence, expectedId: string): boolean {
+  if (
+    !evidence.text.trim() ||
+    evidence.text.length > MAX_VIDEO_EVIDENCE_CHARS ||
+    !Number.isFinite(evidence.tokens) ||
+    evidence.tokens < 0 ||
+    (evidence.costUsd !== undefined && (!Number.isFinite(evidence.costUsd) || evidence.costUsd < 0)) ||
+    evidence.attachment.id !== expectedId
+  ) {
+    return false
+  }
+  const citedIds = [...evidence.text.matchAll(/\[video:([0-9a-f-]{36})\]/g)].map((match) => match[1]!)
+  return (
+    citedIds.length > 0 &&
+    citedIds.length <= MAX_VIDEO_EVIDENCE_CITATIONS &&
+    citedIds.every((id) => validVideoAttachmentId(id) && id === expectedId) &&
+    evidence.text.includes("model-estimated")
   )
 }
 

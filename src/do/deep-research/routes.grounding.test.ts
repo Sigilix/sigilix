@@ -389,6 +389,79 @@ describe("handleResearchCreate — session org repo grounding", () => {
     expect(githubFetch).toHaveBeenCalledTimes(1)
   })
 
+  it("pins one video attachment to the same freshly verified installation selector", async () => {
+    const kv = makeKv()
+    await createSession({
+      kv,
+      sessionId: "session-1",
+      login: "founder",
+      githubUserId: 42,
+      accessToken: "github-user-token",
+      encryptionKeyB64url: ENC_KEY,
+    })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ installations: [{ id: 134811639 }] }))),
+    )
+    let startBody: Record<string, unknown> | null = null
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      DEEP_RESEARCH: deepResearchNamespace((body) => {
+        startBody = body
+      }),
+    } as unknown as Env
+    const videoAttachmentId = "11111111-1111-4111-8111-111111111111"
+
+    const response = await handleResearchCreate(
+      request({
+        question: "what happens in this recording?",
+        mode: "chat",
+        installationId: 134811639,
+        videoAttachmentId,
+      }),
+      env,
+      ctx,
+    )
+
+    expect(response.status).toBe(200)
+    expect(startBody).toMatchObject({
+      creator: "session:42",
+      videoAttachmentId,
+      videoAttachmentInstallationId: 134811639,
+    })
+  })
+
+  it("rejects a malformed video attachment id before creating a run", async () => {
+    const kv = makeKv()
+    await createSession({
+      kv,
+      sessionId: "session-1",
+      login: "founder",
+      githubUserId: 42,
+      accessToken: "github-user-token",
+      encryptionKeyB64url: ENC_KEY,
+    })
+    let created = false
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      DEEP_RESEARCH: deepResearchNamespace(() => {
+        created = true
+      }),
+    } as unknown as Env
+
+    const response = await handleResearchCreate(
+      request({ question: "what happens?", mode: "chat", videoAttachmentId: "../forged" }),
+      env,
+      ctx,
+    )
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: "invalid_video_attachment" })
+    expect(created).toBe(false)
+  })
+
   it("pins repository grounding to the same verified installation as MCP", async () => {
     const kv = makeKv({
       "repo-index-manifest:org-a/repo-a": "{}",

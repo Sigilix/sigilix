@@ -5,12 +5,15 @@ import type { Env } from "@/src/shared/types/env"
 
 const OBJECT_PREFIX = "chat/v1/"
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+const MAX_VIDEO_BYTES = 6 * 1024 * 1024
 const LOGICAL_RETENTION_MS = 23 * 60 * 60 * 1000
 const MAX_FILENAME_CHARS = 128
 const MAX_ATTACHMENTS_PER_RUN = 4
 const SAFE_ATTACHMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
-type VerifiedMimeType = "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+type VerifiedImageMimeType = "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+type VerifiedVideoMimeType = "video/mp4" | "video/webm"
+type VerifiedMimeType = VerifiedImageMimeType | VerifiedVideoMimeType
 
 interface StoredMetadata {
   creator: string
@@ -26,7 +29,7 @@ interface StoredMetadata {
 export interface ChatImageAttachmentDescriptor {
   id: string
   filename: string
-  mimeType: VerifiedMimeType
+  mimeType: VerifiedImageMimeType
   size: number
   createdAt: string
   expiresAt: string
@@ -36,6 +39,23 @@ export interface ChatImageAttachmentDescriptor {
 export interface VerifiedChatImage extends ChatImageAttachmentDescriptor {
   bytes: Uint8Array
 }
+
+export interface ChatVideoAttachmentDescriptor {
+  id: string
+  filename: string
+  mimeType: VerifiedVideoMimeType
+  size: number
+  createdAt: string
+  expiresAt: string
+  installationId?: number
+}
+
+export interface VerifiedChatVideo extends ChatVideoAttachmentDescriptor {
+  bytes: Uint8Array
+}
+
+type ChatAttachmentDescriptor = ChatImageAttachmentDescriptor | ChatVideoAttachmentDescriptor
+type VerifiedChatAttachment = VerifiedChatImage | VerifiedChatVideo
 
 export class ChatImageAttachmentError extends Error {
   readonly code = "attachment_unavailable"
@@ -82,13 +102,13 @@ export async function handleUploadChatImageAttachment(
   if (scope instanceof Response) return scope
 
   const declaredMimeType = normalizeDeclaredMimeType(request.headers.get("content-type"))
-  if (!declaredMimeType) return json({ error: "unsupported_image_type" }, 415)
-  const bytes = await readBytesCapped(request, MAX_IMAGE_BYTES)
+  if (!declaredMimeType) return json({ error: "unsupported_attachment_type" }, 415)
+  const bytes = await readBytesCapped(request, maximumBytesForMimeType(declaredMimeType))
   if (bytes === null) return json({ error: "attachment_too_large" }, 413)
   if (bytes.byteLength === 0) return json({ error: "empty_attachment" }, 400)
-  const verifiedMimeType = detectImageMimeType(bytes)
+  const verifiedMimeType = detectAttachmentMimeType(bytes)
   if (!verifiedMimeType || verifiedMimeType !== declaredMimeType) {
-    return json({ error: "image_signature_mismatch" }, 415)
+    return json({ error: "attachment_signature_mismatch" }, 415)
   }
 
   const nowMs = Date.now()
@@ -112,7 +132,7 @@ export async function handleUploadChatImageAttachment(
       customMetadata: encodeMetadata(metadata),
     })
   } catch (error) {
-    emitFailure("chat-image-attachment-upload-failed", error)
+    emitFailure("chat-attachment-upload-failed", error)
     return json({ error: "attachment_service_unavailable" }, 503)
   }
   return json(publicDescriptor(id, metadata), 201)
@@ -129,19 +149,19 @@ export async function handleGetChatImageAttachment(
   const auth = await requireRuntimePrincipal(request, env, ctx)
   if ("response" in auth) return auth.response
 
-  let image: VerifiedChatImage
+  let attachment: VerifiedChatAttachment
   try {
-    image = await loadOneVerifiedImage(env.SIGILIX_CHAT_ATTACHMENTS, id, auth.principal.scope, Date.now())
-    if (!(await principalMayUseInstallation(auth.principal, env, image.installationId))) return unavailable()
+    attachment = await loadOneVerifiedAttachment(env.SIGILIX_CHAT_ATTACHMENTS, id, auth.principal.scope, Date.now())
+    if (!(await principalMayUseInstallation(auth.principal, env, attachment.installationId))) return unavailable()
   } catch {
     return unavailable()
   }
-  return new Response(Uint8Array.from(image.bytes).buffer, {
+  return new Response(Uint8Array.from(attachment.bytes).buffer, {
     status: 200,
     headers: {
-      "content-type": image.mimeType,
-      "content-length": String(image.size),
-      "content-disposition": `inline; filename="${asciiDownloadFilename(image.filename)}"`,
+      "content-type": attachment.mimeType,
+      "content-length": String(attachment.size),
+      "content-disposition": `inline; filename="${asciiDownloadFilename(attachment.filename)}"`,
       "cache-control": "private, no-store",
       "content-security-policy": "sandbox",
       "x-content-type-options": "nosniff",
@@ -160,17 +180,17 @@ export async function handleDeleteChatImageAttachment(
   const auth = await requireRuntimePrincipal(request, env, ctx)
   if ("response" in auth) return auth.response
 
-  let image: VerifiedChatImage
+  let attachment: VerifiedChatAttachment
   try {
-    image = await loadOneVerifiedImage(env.SIGILIX_CHAT_ATTACHMENTS, id, auth.principal.scope, Date.now())
-    if (!(await principalMayUseInstallation(auth.principal, env, image.installationId))) return unavailable()
+    attachment = await loadOneVerifiedAttachment(env.SIGILIX_CHAT_ATTACHMENTS, id, auth.principal.scope, Date.now())
+    if (!(await principalMayUseInstallation(auth.principal, env, attachment.installationId))) return unavailable()
   } catch {
     return unavailable()
   }
   try {
     await env.SIGILIX_CHAT_ATTACHMENTS.delete(objectKey(id))
   } catch (error) {
-    emitFailure("chat-image-attachment-delete-failed", error)
+    emitFailure("chat-attachment-delete-failed", error)
     return json({ error: "attachment_service_unavailable" }, 503)
   }
   return json({ ok: true, deleted: true })
@@ -189,7 +209,8 @@ export async function loadVerifiedChatImages(
   const images: VerifiedChatImage[] = []
   let totalBytes = 0
   for (const id of args.ids) {
-    const image = await loadOneVerifiedImage(env.SIGILIX_CHAT_ATTACHMENTS, id, args.creator, args.nowMs)
+    const image = await loadOneVerifiedAttachment(env.SIGILIX_CHAT_ATTACHMENTS, id, args.creator, args.nowMs)
+    if (!isVerifiedChatImage(image)) throw new ChatImageAttachmentError()
     if (image.installationId !== undefined && image.installationId !== args.installationId) {
       throw new ChatImageAttachmentError()
     }
@@ -198,6 +219,20 @@ export async function loadVerifiedChatImages(
     images.push(image)
   }
   return images
+}
+
+/** Load one creator-bound, installation-pinned video for a research run. */
+export async function loadVerifiedChatVideo(
+  env: Pick<Env, "SIGILIX_CHAT_ATTACHMENTS">,
+  args: { id: string; creator: string; installationId?: number; nowMs: number },
+): Promise<VerifiedChatVideo> {
+  if (!env.SIGILIX_CHAT_ATTACHMENTS || !SAFE_ATTACHMENT_ID.test(args.id)) throw new ChatImageAttachmentError()
+  const video = await loadOneVerifiedAttachment(env.SIGILIX_CHAT_ATTACHMENTS, args.id, args.creator, args.nowMs)
+  if (!isVerifiedChatVideo(video)) throw new ChatImageAttachmentError()
+  if (video.installationId !== undefined && video.installationId !== args.installationId) {
+    throw new ChatImageAttachmentError()
+  }
+  return video
 }
 
 export function validAttachmentIds(value: unknown): value is string[] {
@@ -210,12 +245,16 @@ export function validAttachmentIds(value: unknown): value is string[] {
   )
 }
 
-async function loadOneVerifiedImage(
+export function validVideoAttachmentId(value: unknown): value is string {
+  return typeof value === "string" && SAFE_ATTACHMENT_ID.test(value)
+}
+
+async function loadOneVerifiedAttachment(
   bucket: R2Bucket,
   id: string,
   creator: string,
   nowMs: number,
-): Promise<VerifiedChatImage> {
+): Promise<VerifiedChatAttachment> {
   if (!SAFE_ATTACHMENT_ID.test(id)) throw new ChatImageAttachmentError()
   let object: R2ObjectBody | null
   try {
@@ -228,7 +267,9 @@ async function loadOneVerifiedImage(
   if (!metadata || metadata.creator !== creator || metadata.expiresAtMs <= nowMs || object.size !== metadata.size) {
     throw new ChatImageAttachmentError()
   }
-  if (metadata.size <= 0 || metadata.size > MAX_IMAGE_BYTES) throw new ChatImageAttachmentError()
+  if (metadata.size <= 0 || metadata.size > maximumBytesForMimeType(metadata.mimeType)) {
+    throw new ChatImageAttachmentError()
+  }
   let bytes: Uint8Array
   try {
     bytes = new Uint8Array(await object.arrayBuffer())
@@ -237,12 +278,13 @@ async function loadOneVerifiedImage(
   }
   if (
     bytes.byteLength !== metadata.size ||
-    detectImageMimeType(bytes) !== metadata.mimeType ||
+    detectAttachmentMimeType(bytes) !== metadata.mimeType ||
     (await sha256Hex(bytes)) !== metadata.sha256
   ) {
     throw new ChatImageAttachmentError()
   }
-  return { ...publicDescriptor(id, metadata), bytes }
+  const descriptor = publicDescriptor(id, metadata)
+  return isVideoMimeType(descriptor.mimeType) ? { ...descriptor, bytes } : { ...descriptor, bytes }
 }
 
 async function resolveUploadScope(
@@ -315,12 +357,17 @@ async function readBytesCapped(request: Request, maximum: number): Promise<Uint8
 
 function normalizeDeclaredMimeType(raw: string | null): VerifiedMimeType | null {
   const value = raw?.split(";", 1)[0]?.trim().toLowerCase()
-  return value === "image/jpeg" || value === "image/png" || value === "image/gif" || value === "image/webp"
+  return value === "image/jpeg" ||
+    value === "image/png" ||
+    value === "image/gif" ||
+    value === "image/webp" ||
+    value === "video/mp4" ||
+    value === "video/webm"
     ? value
     : null
 }
 
-function detectImageMimeType(bytes: Uint8Array): VerifiedMimeType | null {
+function detectAttachmentMimeType(bytes: Uint8Array): VerifiedMimeType | null {
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg"
   if (
     bytes.length >= 8 &&
@@ -346,11 +393,16 @@ function detectImageMimeType(bytes: Uint8Array): VerifiedMimeType | null {
   ) {
     return "image/webp"
   }
+  if (isIsoBmffMp4(bytes)) return "video/mp4"
+  if (isWebm(bytes)) return "video/webm"
   return null
 }
 
 function safeFilename(raw: string | null, mimeType: VerifiedMimeType): string {
-  const fallback = `image.${mimeType === "image/jpeg" ? "jpg" : mimeType.slice("image/".length)}`
+  const fallback =
+    mimeType === "image/jpeg"
+      ? "image.jpg"
+      : `${mimeType.startsWith("video/") ? "video" : "image"}.${mimeType.split("/")[1]}`
   const normalized = (raw ?? "")
     .replace(/[\\/]/g, "_")
     .replace(/[\u0000-\u001f\u007f]/g, "_")
@@ -399,7 +451,7 @@ function decodeMetadata(raw: Record<string, string> | undefined): StoredMetadata
     !mimeType ||
     !Number.isSafeInteger(size) ||
     size <= 0 ||
-    size > MAX_IMAGE_BYTES ||
+    size > maximumBytesForMimeType(mimeType) ||
     typeof sha256 !== "string" ||
     !/^[0-9a-f]{64}$/.test(sha256) ||
     !Number.isSafeInteger(createdAtMs) ||
@@ -427,16 +479,68 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
-function publicDescriptor(id: string, metadata: StoredMetadata): ChatImageAttachmentDescriptor {
-  return {
+function publicDescriptor(id: string, metadata: StoredMetadata): ChatAttachmentDescriptor {
+  const common = {
     id,
     filename: metadata.filename,
-    mimeType: metadata.mimeType,
     size: metadata.size,
     createdAt: new Date(metadata.createdAtMs).toISOString(),
     expiresAt: new Date(metadata.expiresAtMs).toISOString(),
     ...(metadata.installationId !== undefined ? { installationId: metadata.installationId } : {}),
   }
+  return isVideoMimeType(metadata.mimeType)
+    ? { ...common, mimeType: metadata.mimeType }
+    : { ...common, mimeType: metadata.mimeType }
+}
+
+function maximumBytesForMimeType(mimeType: VerifiedMimeType): number {
+  return mimeType.startsWith("video/") ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES
+}
+
+function isVerifiedChatImage(attachment: VerifiedChatAttachment): attachment is VerifiedChatImage {
+  return attachment.mimeType.startsWith("image/")
+}
+
+function isVerifiedChatVideo(attachment: VerifiedChatAttachment): attachment is VerifiedChatVideo {
+  return isVideoMimeType(attachment.mimeType)
+}
+
+function isVideoMimeType(mimeType: VerifiedMimeType): mimeType is VerifiedVideoMimeType {
+  return mimeType === "video/mp4" || mimeType === "video/webm"
+}
+
+function isIsoBmffMp4(bytes: Uint8Array): boolean {
+  if (bytes.length < 20 || ascii(bytes, 4, 8) !== "ftyp") return false
+  const boxSize = ((bytes[0]! << 24) | (bytes[1]! << 16) | (bytes[2]! << 8) | bytes[3]!) >>> 0
+  if (boxSize < 20 || boxSize > bytes.length || boxSize % 4 !== 0) return false
+  const mp4Brands = new Set(["isom", "iso2", "iso3", "iso4", "iso5", "iso6", "mp41", "mp42", "avc1", "dash", "M4V "])
+  if (mp4Brands.has(ascii(bytes, 8, 12))) return true
+  for (let offset = 16; offset + 4 <= boxSize; offset += 4) {
+    if (mp4Brands.has(ascii(bytes, offset, offset + 4))) return true
+  }
+  return false
+}
+
+function isWebm(bytes: Uint8Array): boolean {
+  if (bytes.length < 12 || bytes[0] !== 0x1a || bytes[1] !== 0x45 || bytes[2] !== 0xdf || bytes[3] !== 0xa3) {
+    return false
+  }
+  const limit = Math.min(bytes.length - 6, 4 * 1024)
+  for (let offset = 4; offset <= limit; offset += 1) {
+    if (
+      bytes[offset] === 0x42 &&
+      bytes[offset + 1] === 0x82 &&
+      bytes[offset + 2] === 0x84 &&
+      ascii(bytes, offset + 3, offset + 7).toLowerCase() === "webm"
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+function ascii(bytes: Uint8Array, start: number, end: number): string {
+  return String.fromCharCode(...bytes.slice(start, end))
 }
 
 function objectKey(id: string): string {

@@ -479,6 +479,14 @@ new_sqlite_classes = ["AgentMcpCapabilityDO"]
 # put` instead — `[vars]` is for values that are safe to commit and
 # need a default at deploy time.
 [vars]
+# Managed organization roles. The exact "on" value makes the active
+# org_workspace_access row authoritative after fresh exact-installation
+# visibility; unset/anything else preserves the legacy live-GitHub role path.
+# Production activation requires every tenant to pass the operator backfill
+# readiness check first. Emergency rollback reactivates the retained pre-flip
+# Worker version: `npx wrangler rollback <version-id> --name sigilix --yes`.
+OPENCLAW_ORG_MEMBERSHIP_MODE = "on"
+
 # Gardener consolidation pass mode (#938). off (code default) | shadow (compute +
 # log would-merge to the `memory-gardener-digest`, NO memory mutation) | enforce
 # (write the canonical rule + tombstone the originals). Read raw off env like its

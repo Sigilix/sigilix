@@ -173,6 +173,13 @@ migrations_dir = "migrations"
 # binding = "SIGILIX_TRAINING_DATA"
 # bucket_name = "sigilix-training-data"
 
+# Private transient image context for portal chat/research. The Worker enforces
+# a server-set 23h logical expiry; the bucket lifecycle is configured at 24h so
+# delayed physical cleanup can never extend application access.
+[[r2_buckets]]
+binding = "SIGILIX_CHAT_ATTACHMENTS"
+bucket_name = "sigilix-chat-attachments"
+
 # Cloudflare Workers AI binding — used for embedding the issue/comment
 # body at query time. Keeps the embedding model identical between
 # index time (CLI/CI script also calls @cf/baai/bge-base-en-v1.5 via

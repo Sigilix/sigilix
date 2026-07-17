@@ -29,10 +29,19 @@ import { buildResearchMcpRuntime } from "./mcp-runtime"
 import { isTenantRuntimeScope } from "@/src/lib/runtime-principal"
 import { resolveRuntimeApp, type RuntimeAppId } from "@/src/shared/domain/runtime-app-registry"
 import { resolveRuntimeSkill, type ResolvedSkillContext } from "@/src/features/skills"
+import {
+  loadVerifiedChatImages,
+  validAttachmentIds,
+  type ChatImageAttachmentDescriptor,
+} from "@/src/lib/chat-image-attachment-route"
+import { analyzeChatImages, type AnalyzeChatImagesFn } from "./image-model"
+import type { ResearchImageEvidence } from "./image-evidence"
 
 const META_KEY = "meta"
 const EVENT_PREFIX = "evt:"
 const SEQ_PAD = 12
+const MAX_IMAGE_EVIDENCE_CHARS = 32_000
+const MAX_IMAGE_EVIDENCE_CITATIONS = 64
 /** Header the route uses to bind a run to its creator (tenant/session subject). */
 export const CREATOR_HEADER = "x-research-creator"
 
@@ -58,6 +67,10 @@ interface RunMeta {
   owner?: string
   repo?: string
   hasIndexedRepo?: boolean
+  imageAttachmentIds?: string[]
+  imageAttachmentInstallationId?: number
+  /** Safe immutable provenance copied only after verified R2 load. */
+  imageAttachments?: ChatImageAttachmentDescriptor[]
 }
 
 /** Test seam: lets DO-level tests drive the loop with fake IO. Never set in
@@ -65,6 +78,7 @@ interface RunMeta {
  *  lets a test inject codebase grounding without hitting real retrieval. */
 export type ResearchTestHooks = Partial<Pick<EngineDeps, "model" | "search" | "fetchPage" | "now">> & {
   gatherGrounding?: (args: GatherRepoGroundingArgs) => Promise<RepoGrounding | null>
+  analyzeImages?: AnalyzeChatImagesFn
 }
 
 export class DeepResearchDO extends DurableObject<Env> {
@@ -87,6 +101,8 @@ export class DeepResearchDO extends DurableObject<Env> {
   private owner = ""
   private repo = ""
   private hasIndexedRepo = false
+  private imageAttachmentIds: string[] = []
+  private imageAttachmentInstallationId: number | undefined
   private readonly encoder = new TextEncoder()
 
   // sig-worker-debrand-openclaw: resolve SIGILIX_ (preferred) / OPENCLAW_ (fallback)
@@ -122,6 +138,8 @@ export class DeepResearchDO extends DurableObject<Env> {
       owner?: unknown
       repo?: unknown
       hasIndexedRepo?: unknown
+      imageAttachmentIds?: unknown
+      imageAttachmentInstallationId?: unknown
     }
     try {
       body = (await request.json()) as typeof body
@@ -151,6 +169,14 @@ export class DeepResearchDO extends DurableObject<Env> {
     this.owner = typeof body.owner === "string" ? body.owner.trim() : ""
     this.repo = typeof body.repo === "string" ? body.repo.trim() : ""
     this.hasIndexedRepo = body.hasIndexedRepo === true
+    if (body.imageAttachmentIds !== undefined && !validAttachmentIds(body.imageAttachmentIds)) {
+      return json({ error: "invalid_image_attachments" }, 400)
+    }
+    this.imageAttachmentIds = body.imageAttachmentIds ? [...body.imageAttachmentIds] : []
+    this.imageAttachmentInstallationId =
+      Number.isSafeInteger(body.imageAttachmentInstallationId) && Number(body.imageAttachmentInstallationId) > 0
+        ? Number(body.imageAttachmentInstallationId)
+        : undefined
 
     this.started = true
     const meta: RunMeta = {
@@ -168,6 +194,10 @@ export class DeepResearchDO extends DurableObject<Env> {
       ...(this.owner ? { owner: this.owner } : {}),
       ...(this.repo ? { repo: this.repo } : {}),
       hasIndexedRepo: this.hasIndexedRepo,
+      ...(this.imageAttachmentIds.length ? { imageAttachmentIds: this.imageAttachmentIds } : {}),
+      ...(this.imageAttachmentInstallationId !== undefined
+        ? { imageAttachmentInstallationId: this.imageAttachmentInstallationId }
+        : {}),
     }
     await this.ctx.storage.put(META_KEY, meta)
     await this.armCleanupAlarm()
@@ -182,6 +212,50 @@ export class DeepResearchDO extends DurableObject<Env> {
     const config = resolveResearchConfig(this.env, { model: this.model, effort: this.effort })
     const runId = this.ctx.id.toString()
     const tenant = this.creator || "anonymous"
+    let imageEvidence: ResearchImageEvidence | undefined
+    let imageTokens = 0
+    let imageCostUsd = 0
+    if (this.imageAttachmentIds.length) {
+      let images: Awaited<ReturnType<typeof loadVerifiedChatImages>>
+      try {
+        images = await loadVerifiedChatImages(this.env, {
+          ids: this.imageAttachmentIds,
+          creator: this.creator,
+          ...(this.imageAttachmentInstallationId !== undefined
+            ? { installationId: this.imageAttachmentInstallationId }
+            : {}),
+          nowMs: Date.now(),
+        })
+      } catch {
+        await this.emit({ type: "error", message: "attachment_unavailable" })
+        await this.emit({ type: "done" })
+        return
+      }
+      try {
+        const analyze = this.hooks?.analyzeImages ?? ((args) => analyzeChatImages(this.env, args))
+        imageEvidence = await analyze({ question, images })
+        if (
+          !validImageEvidence(
+            imageEvidence,
+            images.map((image) => image.id),
+          )
+        ) {
+          throw new Error("invalid image evidence")
+        }
+        imageTokens = imageEvidence.tokens
+        imageCostUsd =
+          imageEvidence.costUsd ?? (imageEvidence.tokens / 1_000_000) * (SIGILIX_MODEL_BURN_USD_PER_MTOK.pyroeis ?? 0)
+        const meta = await this.ctx.storage.get<RunMeta>(META_KEY)
+        if (meta) {
+          meta.imageAttachments = images.map(({ bytes: _bytes, ...descriptor }) => descriptor)
+          await this.ctx.storage.put(META_KEY, meta)
+        }
+      } catch {
+        await this.emit({ type: "error", message: "attachment_analysis_failed" })
+        await this.emit({ type: "done" })
+        return
+      }
+    }
 
     // Resolve policy at the final-answer boundary, not at run start. A deep
     // research run can spend minutes gathering sources; deferring this read
@@ -225,7 +299,7 @@ export class DeepResearchDO extends DurableObject<Env> {
     // can stamp the chatbot's real token spend + estimated cost onto its usage_events
     // row after the run — the CLI/chat surfaces previously recorded ZERO token/cost
     // data. Engine untouched; the wrapper only sums (pure aside from the counter).
-    let tokensAccum = 0
+    let tokensAccum = imageTokens
     const baseModel: ResearchModelFn = this.hooks?.model ?? buildModelFn(this.env, config)
     const meteredModel: ResearchModelFn = async (role, messages, tools) => {
       const r = await baseModel(role, messages, tools)
@@ -250,6 +324,7 @@ export class DeepResearchDO extends DurableObject<Env> {
       mode: this.mode,
       emit: (event) => this.emit(event),
       model: meteredModel,
+      ...(imageEvidence ? { imageEvidence } : {}),
       ...(mcp ? { mcp } : {}),
       ...(this.appId ? { appId: this.appId } : {}),
       ...(resolveSkillContext ? { resolveSkillContext } : {}),
@@ -270,7 +345,8 @@ export class DeepResearchDO extends DurableObject<Env> {
     // In the pathological case where it isn't, the UPDATE matches 0 rows (harmless
     // no-op) and the row keeps cost 0 — an under-count, never a wrong block.
     try {
-      const costUsd = (tokensAccum / 1_000_000) * (SIGILIX_MODEL_BURN_USD_PER_MTOK[this.model] ?? 0)
+      const textTokens = Math.max(0, tokensAccum - imageTokens)
+      const costUsd = imageCostUsd + (textTokens / 1_000_000) * (SIGILIX_MODEL_BURN_USD_PER_MTOK[this.model] ?? 0)
       await updateUsageEventCost(this.env, { meter: "chatbot", eventId: runId, tokens: tokensAccum, costUsd })
     } catch (err) {
       console.warn(
@@ -433,6 +509,28 @@ function json(body: unknown, status = 200): Response {
 function installationIdFromTenantScope(scope: string): number {
   if (!isTenantRuntimeScope(scope)) return 0
   return Number(scope.slice("tenant:".length))
+}
+
+function validImageEvidence(evidence: ResearchImageEvidence, expectedIds: string[]): boolean {
+  if (
+    !evidence.text.trim() ||
+    evidence.text.length > MAX_IMAGE_EVIDENCE_CHARS ||
+    !Number.isFinite(evidence.tokens) ||
+    evidence.tokens < 0 ||
+    (evidence.costUsd !== undefined && (!Number.isFinite(evidence.costUsd) || evidence.costUsd < 0)) ||
+    evidence.attachments.length !== expectedIds.length
+  ) {
+    return false
+  }
+  const actualIds = new Set(evidence.attachments.map((attachment) => attachment.id))
+  const expected = new Set(expectedIds)
+  const citedIds = [...evidence.text.matchAll(/\[attachment:([0-9a-f-]{36})\]/g)].map((match) => match[1]!)
+  return (
+    citedIds.length > 0 &&
+    citedIds.length <= MAX_IMAGE_EVIDENCE_CITATIONS &&
+    citedIds.every((id) => expected.has(id)) &&
+    expectedIds.every((id) => actualIds.has(id) && evidence.text.includes(`[attachment:${id}]`))
+  )
 }
 
 /** Parse the `type` out of a persisted `data: {json}\n\n` frame, or null. */

@@ -27,6 +27,12 @@ export const OVERVIEW_MARKER = "<!-- sigilix:pr-overview -->"
 // edits them in place instead of creating duplicates. Drop the legacy
 // half once all pre-2026-05-18 PRs close.
 export const LEGACY_OVERVIEW_MARKER = "<!-- openclaw:pr-overview -->"
+export const REVIEW_STATUS_BLOCK_START = "<!-- sigilix:review-run-status:start -->"
+export const REVIEW_STATUS_BLOCK_END = "<!-- sigilix:review-run-status:end -->"
+
+function isOwnedStatusComment(body: string): boolean {
+  return body.includes(REVIEW_STATUS_BLOCK_START) && body.includes(REVIEW_STATUS_BLOCK_END)
+}
 
 /**
  * Single pass over PR comments looking for BOTH the overview sticky
@@ -47,6 +53,7 @@ export async function scanComments(
 ): Promise<{ overviewId: number | null; legacyWarmupId: number | null }> {
   const items = await client.listIssueComments(owner, repo, prNumber)
   let overviewId: number | null = null
+  let statusOnlyId: number | null = null
   let legacyWarmupId: number | null = null
   for (const c of items) {
     if (typeof c.body !== "string") continue
@@ -57,12 +64,15 @@ export async function scanComments(
     if (overviewId === null && (c.body.includes(OVERVIEW_MARKER) || c.body.includes(LEGACY_OVERVIEW_MARKER))) {
       overviewId = c.id
     }
+    if (statusOnlyId === null && isOwnedStatusComment(c.body)) {
+      statusOnlyId = c.id
+    }
     if (legacyWarmupId === null && c.body.includes(LEGACY_WARMUP_MARKER)) {
       legacyWarmupId = c.id
     }
     if (overviewId !== null && legacyWarmupId !== null) break
   }
-  return { overviewId, legacyWarmupId }
+  return { overviewId: overviewId ?? statusOnlyId, legacyWarmupId }
 }
 
 /**
@@ -99,6 +109,7 @@ export async function findExistingOverviewCommentId(
   repo: string,
   prNumber: number,
 ): Promise<number | null> {
+  let statusOnlyId: number | null = null
   for (let page = 1; page <= MAX_COMMENT_SCAN_PAGES; page += 1) {
     const items = await client.listIssueCommentsPage(owner, repo, prNumber, page)
     // SIG-216 CR fix-up: terminate on the empty page rather than
@@ -109,7 +120,7 @@ export async function findExistingOverviewCommentId(
     // universally safe signal; the cost is at most one extra
     // empty-page fetch when the comment count is an exact multiple
     // of per_page, which is bounded by MAX_COMMENT_SCAN_PAGES anyway.
-    if (items.length === 0) return null
+    if (items.length === 0) return statusOnlyId
     for (const c of items) {
       if (typeof c.body !== "string") continue
       // Bilingual matcher — matches both `<!-- sigilix:pr-overview -->`
@@ -117,6 +128,9 @@ export async function findExistingOverviewCommentId(
       // the SIG-85 rebrand. First hit wins (short-circuit).
       if (c.body.includes(OVERVIEW_MARKER) || c.body.includes(LEGACY_OVERVIEW_MARKER)) {
         return c.id
+      }
+      if (statusOnlyId === null && isOwnedStatusComment(c.body)) {
+        statusOnlyId = c.id
       }
     }
   }
@@ -133,7 +147,7 @@ export async function findExistingOverviewCommentId(
       max_pages: MAX_COMMENT_SCAN_PAGES,
     }),
   )
-  return null
+  return statusOnlyId
 }
 
 /**
@@ -153,15 +167,19 @@ export async function findExistingOverviewComment(
   repo: string,
   prNumber: number,
 ): Promise<{ id: number; body: string } | null> {
+  let statusOnly: { id: number; body: string } | null = null
   for (let page = 1; page <= MAX_COMMENT_SCAN_PAGES; page += 1) {
     const items = await client.listIssueCommentsPage(owner, repo, prNumber, page)
     // SIG-216 CR fix-up: same empty-page termination as
     // `findExistingOverviewCommentId` — decouples from per_page=100.
-    if (items.length === 0) return null
+    if (items.length === 0) return statusOnly
     for (const c of items) {
       if (typeof c.body !== "string") continue
       if (c.body.includes(OVERVIEW_MARKER) || c.body.includes(LEGACY_OVERVIEW_MARKER)) {
         return { id: c.id, body: c.body }
+      }
+      if (statusOnly === null && isOwnedStatusComment(c.body)) {
+        statusOnly = { id: c.id, body: c.body }
       }
     }
   }
@@ -175,7 +193,7 @@ export async function findExistingOverviewComment(
       helper: "findExistingOverviewComment",
     }),
   )
-  return null
+  return statusOnly
 }
 
 /**

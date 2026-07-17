@@ -19,6 +19,7 @@ import { excludePrAuthor } from "./triage-pr-overview-reviewers"
 import { formatOverviewComment, renderReviewContextBlock, truncate } from "./triage-pr-overview-format"
 import { deleteLegacyWarmupSticky, findExistingOverviewComment, scanComments } from "./triage-pr-overview-scan"
 import { graftReviewStatusBlock } from "./pr-review-status-render"
+import { graftExistingStatusBlock } from "./triage-pr-overview-write"
 import { buildClient } from "./triage-pr-overview-client"
 import type { PrReviewAppEvidence } from "@/src/features/pr-review-app-evidence"
 import type { MemoryProvenance } from "@/src/features/learnings"
@@ -151,11 +152,32 @@ export interface PrOverviewArgs {
   githubClient?: GitHubClient
   /** SIG-304 CLI seam: compute + return the verdict, post nothing (webhook callers omit → prod unchanged). */
   dryRun?: boolean
+  /** Serialized writer used by the in-review path so overview and status PATCHes
+   * share one ordered queue. Standalone overview jobs omit it. */
+  overviewWriter?: (body: string) => Promise<{ kind: "updated" | "created"; commentId: number }>
 }
+
+export type PrOverviewWriteOutcome =
+  | { kind: "written"; commentId: number }
+  | {
+      kind: "skipped"
+      reason:
+        | "dedupe-active"
+        | "stale-head-before-model"
+        | "verdict-parse-failed"
+        | "stale-head-before-write"
+        | "stale-head-recheck-failed"
+        | "status-graft-fetch-failed"
+    }
 
 const DEDUPE_PREFIX = "pr-overview:"
 const DEDUPE_TTL_SECONDS = 300
-export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverviewVerdict | void> {
+export function handlePrOverview(args: PrOverviewArgs & { dryRun: true }): Promise<PrOverviewVerdict | void>
+export function handlePrOverview(args: PrOverviewArgs & { dryRun?: false }): Promise<PrOverviewWriteOutcome>
+export function handlePrOverview(args: PrOverviewArgs): Promise<PrOverviewVerdict | PrOverviewWriteOutcome | void>
+export async function handlePrOverview(
+  args: PrOverviewArgs,
+): Promise<PrOverviewVerdict | PrOverviewWriteOutcome | void> {
   const {
     owner,
     repo,
@@ -171,6 +193,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
     abortSignal,
     githubClient,
     dryRun,
+    overviewWriter,
   } = args
   // SIG-216 fix-up: `force` historically bypassed BOTH the KV dedupe
   // lock AND the in-handler stale-head guards. We've split those
@@ -217,7 +240,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
         headSha: headSha.slice(0, 7),
       }),
     )
-    return
+    return { kind: "skipped", reason: "dedupe-active" }
   }
   if (!bypassDedupe) {
     await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {
@@ -367,7 +390,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
           current_head_sha: meta.head.sha.slice(0, 7),
         }),
       )
-      return
+      return { kind: "skipped", reason: "stale-head-before-model" }
     }
 
     const codeownersRef = meta.base?.sha
@@ -521,7 +544,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
           responseLength: response.length,
         }),
       )
-      return
+      return dryRun ? undefined : { kind: "skipped", reason: "verdict-parse-failed" }
     }
     const modelReviewers = excludePrAuthor(verdict.suggestedReviewers, meta.user?.login ?? null)
     const suggestedReviewers = mergeSuggestedReviewers(codeownersReviewers, modelReviewers)
@@ -664,7 +687,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
               headSha: headSha.slice(0, 7),
             }),
           )
-          return
+          return { kind: "skipped", reason: "stale-head-before-write" }
         }
       } catch (err) {
         // CodeRabbit #1 (PR #104, Major): fail CLOSED on a re-check
@@ -699,11 +722,16 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
             err: err instanceof Error ? err.message : String(err),
           }),
         )
-        return
+        return { kind: "skipped", reason: "stale-head-recheck-failed" }
       }
     }
 
-    if (existingForWrite != null) {
+    let writtenCommentId: number
+    if (overviewWriter !== undefined) {
+      const outcome = await overviewWriter(body)
+      writtenCommentId = outcome.commentId
+      since(outcome.kind === "created" ? "comment-created" : "comment-updated")
+    } else if (existingForWrite != null) {
       // SIG-472: the overview write must PRESERVE an existing review-run-status
       // block. `formatOverviewComment` builds `body` from scratch (no status
       // block), so a re-run / latest-push write would otherwise CLOBBER the
@@ -734,8 +762,10 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
             commentId: existingForWrite,
           }),
         )
+        return { kind: "skipped", reason: "status-graft-fetch-failed" }
       } else {
         await client.updateIssueComment(owner, repo, existingForWrite, bodyToWrite)
+        writtenCommentId = existingForWrite
         since("comment-updated")
         console.log(
           `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`,
@@ -769,12 +799,14 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
         // SIG-472: graft the existing status block (the rescan already carries
         // the body, so no extra fetch) so the overview write doesn't clobber it.
         await client.updateIssueComment(owner, repo, finalRescan.id, graftReviewStatusBlock(body, finalRescan.body))
+        writtenCommentId = finalRescan.id
         since("comment-updated")
         console.log(
           `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup}, via=final-rescan)`,
         )
       } else {
         const created = await client.createIssueComment(owner, repo, prNumber, body)
+        writtenCommentId = created.id
         since("comment-created")
         console.log(
           `pr-overview created on ${owner}/${repo}#${prNumber} as comment ${created.id} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`,
@@ -825,6 +857,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<PrOverview
     if (legacyWarmupId !== null) {
       await deleteLegacyWarmupSticky(client, owner, repo, prNumber, legacyWarmupId)
     }
+    return { kind: "written", commentId: writtenCommentId }
   } finally {
     // Always release the dedupe lock — even on failure — so the queue's
     // retry can attempt again. Without this, the first failure leaves
@@ -909,44 +942,6 @@ async function resolveCodeownersSuggestedReviewers(args: {
   }
 
   return []
-}
-
-/**
- * SIG-472: fetch the existing overview comment body and graft its
- * review-run-status block onto the freshly-rendered overview `body`, so an
- * overview re-write preserves the status block written by the status reporter
- * (the writers must be symmetric). The PATCH-by-id path only has the comment id
- * from the marker scan, so one targeted `getIssueComment` resolves the body.
- *
- * Returns the body to PATCH, or `null` when the fetch FAILED — in which case the
- * caller must SKIP the write (fail-closed): writing the known-statusless `body`
- * would reproduce the clobber this fixes, so it is safer to leave the last-good
- * comment intact and let the next push / re-run re-render. A 404 (comment gone)
- * returns the plain `body` — there is nothing to clobber.
- */
-async function graftExistingStatusBlock(
-  client: GitHubClient,
-  owner: string,
-  repo: string,
-  commentId: number,
-  body: string,
-): Promise<string | null> {
-  try {
-    const existing = await client.getIssueComment(owner, repo, commentId)
-    if (existing === null) return body
-    return graftReviewStatusBlock(body, existing.body)
-  } catch (err) {
-    console.warn(
-      JSON.stringify({
-        event: "pr-overview-status-graft-fetch-failed",
-        owner,
-        repo,
-        commentId,
-        err: err instanceof Error ? err.message : String(err),
-      }),
-    )
-    return null
-  }
 }
 
 export interface PromptCtx {

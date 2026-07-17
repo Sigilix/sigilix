@@ -54,6 +54,8 @@ export type JobMessage =
        * this flag and keep the dedupe semantics intact.
        */
       force?: boolean
+      /** Repair runs bypass only the advisory KV lock; stale-head guards remain active. */
+      skipDedupe?: boolean
     }
   | {
       // ARC-265: auto-label picker. Fires per `pull_request` webhook

@@ -11,10 +11,14 @@
 // Dependency rule: a leaf — it imports `handlePrOverview` from the overview leaf and
 // `severityTier` from the verdict domain (laterals), never the orchestrator.
 
-import { handlePrOverview, type PrOverviewArgs } from "@/src/lib/triage-pr-overview"
+import { handlePrOverview, type PrOverviewArgs, type PrOverviewWriteOutcome } from "@/src/lib/triage-pr-overview"
 import { severityTier } from "@/src/lib/ensemble/domain/verdict"
+import type { Env } from "@/src/shared/types/env"
 
-export async function runInlineOverviewWithRetry(args: PrOverviewArgs, totalBudgetMs: number): Promise<void> {
+export async function runInlineOverviewWithRetry(
+  args: PrOverviewArgs & { dryRun?: false },
+  totalBudgetMs: number,
+): Promise<Extract<PrOverviewWriteOutcome, { kind: "written" }>> {
   // SIG-216 fix-up: ONE shared deadline across both attempts (was: a
   // fresh per-attempt budget that could allow overlapping attempts on
   // retry and let the wall-clock blow past the budget). Each attempt
@@ -25,7 +29,7 @@ export async function runInlineOverviewWithRetry(args: PrOverviewArgs, totalBudg
   const deadline = Date.now() + totalBudgetMs
   const computeRemaining = (): number => Math.max(0, deadline - Date.now())
 
-  const attempt = async (): Promise<void> => {
+  const attempt = async (): Promise<Extract<PrOverviewWriteOutcome, { kind: "written" }>> => {
     const remainingMs = computeRemaining()
     if (remainingMs <= 0) {
       throw new Error("inline-overview-budget-exceeded")
@@ -35,15 +39,19 @@ export async function runInlineOverviewWithRetry(args: PrOverviewArgs, totalBudg
       ctl.abort(new Error("inline-overview-budget-exceeded"))
     }, remainingMs)
     try {
-      await handlePrOverview({ ...args, abortSignal: ctl.signal })
+      const outcome = await handlePrOverview({ ...args, abortSignal: ctl.signal })
+      if ("kind" in outcome && outcome.kind === "written") return outcome
+      if ("kind" in outcome) {
+        throw new Error(`inline-overview-skipped:${outcome.reason}`)
+      }
+      throw new Error("inline-overview-unexpected-dry-run-result")
     } finally {
       clearTimeout(timeoutId)
     }
   }
 
   try {
-    await attempt()
-    return
+    return await attempt()
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     const transient = /budget-exceeded|timeout|abort|503|502|504|fetch failed|ECONNRESET|ETIMEDOUT/i.test(msg)
@@ -59,7 +67,58 @@ export async function runInlineOverviewWithRetry(args: PrOverviewArgs, totalBudg
         err: msg.slice(0, 200),
       }),
     )
-    await attempt()
+    return await attempt()
+  }
+}
+
+export async function enqueuePrOverviewRepair(args: {
+  env: Env
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+  installationId: number
+  reason: string
+}): Promise<boolean> {
+  // Repair jobs dispatch straight to handlePrOverview; only this review-publish
+  // path calls the helper, so a failed repair cannot recursively enqueue itself.
+  try {
+    await args.env.OPENCLAW_JOBS.send(
+      {
+        type: "pr-overview",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        headSha: args.headSha,
+        installationId: args.installationId,
+        skipDedupe: true,
+      },
+      { delaySeconds: 60 },
+    )
+    console.log(
+      JSON.stringify({
+        event: "pr-review-overview-repair-enqueued",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        head_sha: args.headSha.slice(0, 7),
+        reason: args.reason,
+      }),
+    )
+    return true
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "pr-review-overview-repair-enqueue-failed",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        head_sha: args.headSha.slice(0, 7),
+        reason: args.reason,
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    return false
   }
 }
 

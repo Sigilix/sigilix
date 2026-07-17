@@ -149,6 +149,7 @@ export async function dispatchJob(
         installationId: job.installationId,
         env,
         ...(job.force ? { force: true } : {}),
+        ...(job.skipDedupe ? { skipDedupe: true } : {}),
       }).then(() => {})
     case "pr-labels":
       // ARC-265/SIG-135: auto-label picker. Short-circuits only when

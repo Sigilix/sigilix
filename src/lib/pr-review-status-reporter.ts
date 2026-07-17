@@ -2,7 +2,12 @@ import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import type { Env } from "@/src/shared/types/env"
 import { findExistingOverviewComment } from "./triage-pr-overview-scan"
-import { type ReviewStatusPhase, type ReviewStatusSnapshot, upsertReviewStatusBlock } from "./pr-review-status-render"
+import {
+  graftReviewStatusBlock,
+  type ReviewStatusPhase,
+  type ReviewStatusSnapshot,
+  upsertReviewStatusBlock,
+} from "./pr-review-status-render"
 
 const DO_BASE_URL = "https://do.internal"
 
@@ -15,9 +20,16 @@ export type StatusProgressOutcome =
   | { accepted: false; phase?: ReviewStatusPhase; reason: string }
 
 export type StatusCommentPatchOutcome = { kind: "updated"; commentId: number } | { kind: "missing-overview" }
+export type OverviewCommentWriteOutcome =
+  | { kind: "updated"; commentId: number }
+  | { kind: "created"; commentId: number }
 
 export interface ReviewStatusReporter {
   report(update: ReviewStatusUpdate): void
+  /** Queue the rich overview after all prior phase writes. The review flow awaits
+   * this before it can return and emit its terminal status. Bounded retries may
+   * call it again; the concrete writer rescans and updates the same sticky. */
+  publishOverview(body: string): Promise<OverviewCommentWriteOutcome>
   flush(): Promise<void>
 }
 
@@ -26,6 +38,7 @@ export interface CreateReviewStatusReporterArgs {
   headSha: string
   postStatusProgress: (snapshot: ReviewStatusSnapshot) => Promise<StatusProgressOutcome>
   patchOverviewComment: (snapshot: ReviewStatusSnapshot) => Promise<StatusCommentPatchOutcome>
+  publishOverviewComment: (body: string) => Promise<OverviewCommentWriteOutcome>
   waitUntil?: (promise: Promise<void>) => void
 }
 
@@ -63,8 +76,29 @@ export function createReviewStatusReporter(args: CreateReviewStatusReporterArgs)
     args.waitUntil?.(chain)
   }
 
+  const publishOverview = (body: string): Promise<OverviewCommentWriteOutcome> => {
+    const work = chain.then(() => args.publishOverviewComment(body))
+    chain = work.then(
+      () => undefined,
+      (err) => {
+        // Keep the queue usable so the terminal status can land after the
+        // caller logs/enqueues repair, but never make the failure invisible.
+        console.warn(
+          JSON.stringify({
+            event: "pr-review-overview-comment-update-failed",
+            runId: args.runId,
+            err: err instanceof Error ? err.message : String(err),
+          }),
+        )
+      },
+    )
+    args.waitUntil?.(chain)
+    return work
+  }
+
   return {
     report,
+    publishOverview,
     flush: () => chain,
   }
 }
@@ -100,7 +134,36 @@ export function createPrReviewStatusReporter(args: CreatePrReviewStatusReporterA
         prNumber: args.prNumber,
         snapshot,
       }),
+    publishOverviewComment: async (body) =>
+      publishOverviewStatusComment({
+        client: await client(),
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        body,
+      }),
   })
+}
+
+export async function publishOverviewStatusComment(args: {
+  client: GitHubClient
+  owner: string
+  repo: string
+  prNumber: number
+  body: string
+}): Promise<OverviewCommentWriteOutcome> {
+  const existing = await findExistingOverviewComment(args.client, args.owner, args.repo, args.prNumber)
+  if (existing !== null) {
+    await args.client.updateIssueComment(
+      args.owner,
+      args.repo,
+      existing.id,
+      graftReviewStatusBlock(args.body, existing.body),
+    )
+    return { kind: "updated", commentId: existing.id }
+  }
+  const created = await args.client.createIssueComment(args.owner, args.repo, args.prNumber, args.body)
+  return { kind: "created", commentId: created.id }
 }
 
 export async function patchExistingOverviewStatusComment(args: {

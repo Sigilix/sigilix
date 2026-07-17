@@ -930,6 +930,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
         maybePostAstAutoInline,
         deterministicCheckAnnotationMeta,
         deterministicErroredReviewMeta,
+        ...(statusReporter !== undefined ? { statusReporter } : {}),
         ...(connectedAppEvidence !== undefined ? { connectedAppEvidence } : {}),
         ...(appliedMemoryProvenance !== undefined ? { appliedMemoryProvenance } : {}),
       }),
@@ -991,7 +992,6 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
 // OPTIONAL) moved to `./orchestrator-helpers`; re-exported above so the public
 // surface is byte-identical.
 // ─── telemetry / result binding ──────────────────────────────────────────
-
 // SIG-318 (PR 12h): the orchestrator-private `EnsembleTelemetry` run-record interface
 // lives in `./orchestrator-types` (split out for the 1k cap). The generic `EnsembleResult`,
 // `EnsembleResultStatus`, `ReviewMeta`, and `finalize` choke point live in ensemble/app/session.

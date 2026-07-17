@@ -65,8 +65,14 @@ import { ORCHESTRATOR_TIMEOUT_MS } from "@/src/lib/ensemble/domain/budget"
 import { emitPhaseCompleted, type EnsembleRunCtx } from "@/src/lib/ensemble-perf-telemetry"
 import { withSubmissionAffordance, buildSuggestionEmissionLogEvents, type SubmissionAffordance } from "./affordances"
 import { finalize, type EnsembleResult, type FinalizeTelemetry, type ReviewMeta } from "./session"
-import { runInlineOverviewWithRetry, countBySeverity, countByCategory } from "./publish-helpers"
+import {
+  runInlineOverviewWithRetry,
+  enqueuePrOverviewRepair,
+  countBySeverity,
+  countByCategory,
+} from "./publish-helpers"
 import { computeProofCounts, formatManageLine } from "@/src/lib/pr-review-status-render"
+import type { ReviewStatusReporter } from "@/src/lib/pr-review-status-reporter"
 import type { MemoryProvenance } from "@/src/features/learnings"
 import type { PrReviewAppEvidence } from "@/src/features/pr-review-app-evidence"
 import type { ScmProviderKind } from "@/src/lib/ensemble/ports"
@@ -160,6 +166,8 @@ export interface PublishArgs<Tel extends PublishTelemetry> {
    * never enters a model prompt and never affects findings/verdict. Undefined
    * unless SIGILIX_MEMORY_PROVENANCE is "on". */
   appliedMemoryProvenance?: MemoryProvenance
+  /** GitHub review status/overview single-writer queue for this invocation. */
+  statusReporter?: ReviewStatusReporter
 }
 
 export async function publishReviewSubmission<Tel extends PublishTelemetry>(
@@ -210,6 +218,7 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
     deterministicErroredReviewMeta,
     connectedAppEvidence,
     appliedMemoryProvenance,
+    statusReporter,
   } = a
   // SIG-318/SIG-507: shared deps for the post-submit persistence tail (persistSubmittedReview),
   // invoked by BOTH the primary inline-anchored and the anchorless-422-fallback success paths.
@@ -279,6 +288,15 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
           threshold_ms: INLINE_OVERVIEW_MIN_BUDGET_MS,
         }),
       )
+      await enqueuePrOverviewRepair({
+        env,
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        installationId,
+        reason: "inline-overview-budget-exhausted",
+      })
     } else {
       try {
         await runInlineOverviewWithRetry(
@@ -289,7 +307,9 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
             headSha,
             installationId,
             env,
+            githubClient: client,
             skipDedupe: true,
+            ...(statusReporter !== undefined ? { overviewWriter: statusReporter.publishOverview } : {}),
             reviewContext: overviewReviewContext,
             connectedAppEvidence: resolvedConnectedAppEvidence,
             ...(appliedMemoryProvenance !== undefined ? { memoryProvenance: appliedMemoryProvenance } : {}),
@@ -329,6 +349,15 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
             err: err instanceof Error ? err.message : String(err),
           }),
         )
+        await enqueuePrOverviewRepair({
+          env,
+          owner,
+          repo,
+          prNumber,
+          headSha,
+          installationId,
+          reason: err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200),
+        })
       }
     }
 

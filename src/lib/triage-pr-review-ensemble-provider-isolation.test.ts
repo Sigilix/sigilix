@@ -405,7 +405,11 @@ describe("GitLab review provider isolation", () => {
 
   it("never reads colliding GitHub context while preserving the GitLab review path", async () => {
     const { client, submitReview } = makeGitLabClient()
-    const statusReporter = { report: vi.fn(), flush: vi.fn(async () => undefined) }
+    const statusReporter = {
+      report: vi.fn(),
+      publishOverview: vi.fn(async () => ({ kind: "updated" as const, commentId: 1 })),
+      flush: vi.fn(async () => undefined),
+    }
     const repositoryContextPrepare = vi.fn(() => {
       throw new Error("GitLab must never read GitHub repository context")
     })

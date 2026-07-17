@@ -287,7 +287,11 @@ describe("handlePrReviewEnsemble — empty-router skip path (SIG-224 Phase 0)", 
     mockGetPullRequestDiff.mockResolvedValueOnce(DOCS_ONLY_DIFF)
     mockListOpenPullRequests.mockResolvedValueOnce([])
     mockGetFileContent.mockResolvedValueOnce(null)
-    const statusReporter = { report: vi.fn(), flush: vi.fn(async () => undefined) }
+    const statusReporter = {
+      report: vi.fn(),
+      publishOverview: vi.fn(async () => ({ kind: "updated" as const, commentId: 1 })),
+      flush: vi.fn(async () => undefined),
+    }
 
     await handlePrReviewEnsemble({
       scmProvider: "github",

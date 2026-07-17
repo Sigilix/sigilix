@@ -1,8 +1,7 @@
-import { OVERVIEW_MARKER } from "./triage-pr-overview-scan"
+import { OVERVIEW_MARKER, REVIEW_STATUS_BLOCK_END, REVIEW_STATUS_BLOCK_START } from "./triage-pr-overview-scan"
 import { ALL_DISMISS_REASONS } from "./dismiss-reasons"
 
-export const REVIEW_STATUS_BLOCK_START = "<!-- sigilix:review-run-status:start -->"
-export const REVIEW_STATUS_BLOCK_END = "<!-- sigilix:review-run-status:end -->"
+export { REVIEW_STATUS_BLOCK_END, REVIEW_STATUS_BLOCK_START }
 const OVERVIEW_HEADING = "## Sigilix Overview"
 
 export type ReviewStatusPhase =

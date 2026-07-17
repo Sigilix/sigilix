@@ -217,12 +217,12 @@ describe("handlePrOverview — dryRun seam (SIG-304)", () => {
     expect(mockCreateIssueComment).not.toHaveBeenCalled()
   })
 
-  it("default path (dryRun absent) still posts — prod path unchanged", async () => {
+  it("default path posts and reports the written comment", async () => {
     const { kv } = makeKvStub()
 
     const result = await handlePrOverview({ ...args, env: makeEnv(kv) })
 
-    expect(result).toBeUndefined()
+    expect(result).toEqual({ kind: "written", commentId: 12345 })
     expect(mockCreateIssueComment).toHaveBeenCalledOnce()
     // Parity: the same diagram dryRun returns is rendered into the posted body.
     const body = mockCreateIssueComment.mock.calls[0]?.[3] as string

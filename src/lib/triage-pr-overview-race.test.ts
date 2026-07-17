@@ -69,6 +69,7 @@ vi.mock("@/src/shared/adapters/model/ollama", () => ({
 }))
 
 import { handlePrOverview } from "@/src/lib/triage-pr-overview"
+import { buildReviewStatusBlock } from "@/src/lib/pr-review-status-render"
 import type { Env } from "@/src/shared/types/env"
 
 function makeKvStub() {
@@ -338,6 +339,42 @@ describe("handlePrOverview — CODEOWNERS suggested reviewers (SIG-150)", () => 
       [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"].includes(call[2] as string),
     )
     expect(codeownersCalls).toEqual([])
+  })
+})
+
+describe("handlePrOverview — status-only sticky recovery", () => {
+  it("morphs the owned status comment in place instead of creating a second overview", async () => {
+    const { kv } = makeKvStub()
+    const statusOnly = buildReviewStatusBlock({
+      phase: "posted",
+      headSha: args.headSha,
+      sequence: 5,
+      final: { status: "posted", findingsCount: 6 },
+    })
+    mockListIssueComments.mockResolvedValue([{ id: 44, body: statusOnly }])
+    mockListIssueCommentsPage.mockResolvedValue([{ id: 44, body: statusOnly }])
+    mockGetIssueComment.mockResolvedValue({ id: 44, body: statusOnly })
+
+    const outcome = await handlePrOverview({ ...args, env: makeEnv(kv), skipDedupe: true })
+
+    expect(outcome).toEqual({ kind: "written", commentId: 44 })
+    expect(mockCreateIssueComment).not.toHaveBeenCalled()
+    expect(mockUpdateIssueComment).toHaveBeenCalledOnce()
+    const updatedBody = mockUpdateIssueComment.mock.calls[0]![3] as string
+    expect(updatedBody).toContain("## Sigilix Overview")
+    expect(updatedBody).toContain("<!-- sigilix:review-run-status:start -->")
+  })
+
+  it("returns an explicit non-write outcome when the overview model response cannot be parsed", async () => {
+    const { kv } = makeKvStub()
+    mockListIssueComments.mockResolvedValue([])
+    mockGenerate.mockResolvedValue("not-json")
+
+    const outcome = await handlePrOverview({ ...args, env: makeEnv(kv), skipDedupe: true })
+
+    expect(outcome).toEqual({ kind: "skipped", reason: "verdict-parse-failed" })
+    expect(mockCreateIssueComment).not.toHaveBeenCalled()
+    expect(mockUpdateIssueComment).not.toHaveBeenCalled()
   })
 })
 

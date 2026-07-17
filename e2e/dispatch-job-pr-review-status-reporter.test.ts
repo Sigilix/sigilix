@@ -71,7 +71,11 @@ describe("dispatchJob — PR review status reporter", () => {
   })
 
   it("threads the DO status reporter into the ensemble and posts a final status update", async () => {
-    const statusReporter: ReviewStatusReporter = { report: vi.fn(), flush: vi.fn(async () => undefined) }
+    const statusReporter: ReviewStatusReporter = {
+      report: vi.fn(),
+      publishOverview: vi.fn(async () => ({ kind: "updated" as const, commentId: 1 })),
+      flush: vi.fn(async () => undefined),
+    }
     runPrReviewWithDoCallbackMock.mockImplementation(async (_job, _env, runEnsemble) => {
       await runEnsemble(statusReporter)
     })
@@ -99,7 +103,11 @@ describe("dispatchJob — PR review status reporter", () => {
   })
 
   it("reports failed final status when post-review work blocks the check", async () => {
-    const statusReporter: ReviewStatusReporter = { report: vi.fn(), flush: vi.fn(async () => undefined) }
+    const statusReporter: ReviewStatusReporter = {
+      report: vi.fn(),
+      publishOverview: vi.fn(async () => ({ kind: "updated" as const, commentId: 1 })),
+      flush: vi.fn(async () => undefined),
+    }
     runPrReviewWithDoCallbackMock.mockImplementation(async (_job, _env, runEnsemble) => {
       await runEnsemble(statusReporter)
     })

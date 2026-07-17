@@ -558,6 +558,51 @@ export async function acquireOrgSeatBillingLease(
   }
 }
 
+export async function renewOrgSeatBillingLease(
+  env: DbEnv,
+  args: { installationId: number; token: string; acquiredAtMs: number; nowMs: number; ttlMs: number },
+): Promise<
+  | { kind: "renewed"; expiresAtMs: number }
+  | { kind: "not_owner" }
+  | { kind: "error"; reason: "invalid_input" | "invalid_row" | "unavailable" }
+> {
+  const proposedExpiresAtMs = args.nowMs + args.ttlMs
+  if (
+    !validInstallationId(args.installationId) ||
+    args.token.length === 0 ||
+    !Number.isSafeInteger(args.acquiredAtMs) ||
+    args.acquiredAtMs < 0 ||
+    !Number.isSafeInteger(args.nowMs) ||
+    args.nowMs < 0 ||
+    !Number.isSafeInteger(args.ttlMs) ||
+    args.ttlMs <= 0 ||
+    !Number.isSafeInteger(proposedExpiresAtMs)
+  ) {
+    return { kind: "error", reason: "invalid_input" }
+  }
+  if (!env.SIGILIX_PLATFORM_DB) return { kind: "error", reason: "unavailable" }
+  const db = env.SIGILIX_PLATFORM_DB
+  try {
+    const row = await db
+      .prepare(
+        `UPDATE org_seat_billing_lease
+            SET expires_at_ms = MAX(expires_at_ms, ?)
+          WHERE installation_id = ? AND lease_token = ? AND acquired_at_ms = ?
+            AND expires_at_ms > ?
+          RETURNING expires_at_ms`,
+      )
+      .bind(proposedExpiresAtMs, args.installationId, args.token, args.acquiredAtMs, args.nowMs)
+      .first<{ expires_at_ms: unknown }>()
+    if (row === null) return { kind: "not_owner" }
+    if (!Number.isSafeInteger(row.expires_at_ms) || Number(row.expires_at_ms) <= args.nowMs) {
+      return { kind: "error", reason: "invalid_row" }
+    }
+    return { kind: "renewed", expiresAtMs: Number(row.expires_at_ms) }
+  } catch {
+    return { kind: "error", reason: "unavailable" }
+  }
+}
+
 export async function releaseOrgSeatBillingLease(
   env: DbEnv,
   args: { installationId: number; token: string; acquiredAtMs: number },

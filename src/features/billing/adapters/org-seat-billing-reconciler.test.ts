@@ -299,6 +299,91 @@ describe("organization seat billing reconciliation", () => {
     ).resolves.toEqual({ observed_quantity: 5, derived_quantity: 5 })
   })
 
+  it("does not call Stripe when the exact billing lease expires before provider work", async () => {
+    const db = await makeDb()
+    await seedPendingOperation(db)
+    const fetchMock = vi.fn(() => Promise.reject(new Error("Stripe must not be called")))
+    vi.stubGlobal("fetch", fetchMock)
+    vi.mocked(Date.now)
+      .mockImplementationOnce(() => NOW_MS)
+      .mockImplementation(() => NOW_MS + 60_000)
+
+    await expect(
+      recoverOrgSeatBillingOperation(env(db), {
+        type: "org-seat-billing-reconcile",
+        installationId: INSTALLATION_ID,
+        operationId: "op-expand-charlie",
+      }),
+    ).rejects.toThrow("seat reconciliation lease expired")
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    await expect(readOperationState(db)).resolves.toEqual({ state: "pending", error_code: null })
+  })
+
+  it("does not commit a provider result received after the billing lease expires", async () => {
+    const db = await makeDb()
+    await seedPendingOperation(db)
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toContain("/v1/subscription_items?")
+      expect(init?.method).toBe("GET")
+      vi.mocked(Date.now).mockReturnValue(NOW_MS + 60_001)
+      return new Response(JSON.stringify({ data: [stripeItem(5)], has_more: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      recoverOrgSeatBillingOperation(env(db), {
+        type: "org-seat-billing-reconcile",
+        installationId: INSTALLATION_ID,
+        operationId: "op-expand-charlie",
+      }),
+    ).rejects.toThrow("seat reconciliation commit failed")
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await expect(readOperationState(db)).resolves.toEqual({ state: "pending", error_code: null })
+  })
+
+  it("does not update Stripe when the billing lease expires after the live read", async () => {
+    const db = await makeDb()
+    await seedPendingOperation(db)
+    let nowMs = NOW_MS
+    vi.mocked(Date.now).mockImplementation(() => nowMs)
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "https://api.stripe.com/v1/subscription_items?subscription=sub_42&limit=100") {
+        expect(init?.method).toBe("GET")
+        nowMs = NOW_MS + 60_000
+        return new Response(JSON.stringify({ data: [stripeItem(2)], has_more: false }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      if (url === "https://api.stripe.com/v1/subscription_items/si_42") {
+        return new Response(JSON.stringify({ id: "si_42", quantity: 3 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      recoverOrgSeatBillingOperation(env(db), {
+        type: "org-seat-billing-reconcile",
+        installationId: INSTALLATION_ID,
+        operationId: "op-expand-charlie",
+      }),
+    ).rejects.toThrow("seat reconciliation lease expired")
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/v1/subscription_items?")
+    await expect(readOperationState(db)).resolves.toEqual({ state: "pending", error_code: null })
+  })
+
   it("uses provider capacity already ahead of the snapshot without issuing an update", async () => {
     const db = await makeDb()
     const fetchMock = stubLiveStripe(3)

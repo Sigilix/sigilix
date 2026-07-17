@@ -11,6 +11,7 @@ import {
   readStripeSeatSubscription,
   readTenantBillingState,
   releaseOrgSeatBillingLease,
+  renewOrgSeatBillingLease,
   writeLocalOrgSeatAssignment,
   type LocalSeatCapacityGuard,
 } from "./d1-seat-reconciliation-store"
@@ -36,6 +37,7 @@ import type { JobMessage } from "@/src/shared/types/job"
 
 const LEASE_TTL_MS = 60_000
 const PROVIDER_TIMEOUT_MS = 20_000
+const PROVIDER_COMMIT_MARGIN_MS = 10_000
 const RETRY_DELAY_MS = 30_000
 const DUE_OPERATION_LIMIT = 20
 
@@ -59,13 +61,19 @@ export type OrgSeatAssignmentReconcileResult =
   | { kind: "invalid"; error: string }
   | { kind: "unavailable"; error: string }
 
-interface LeaseFence {
+interface LeaseOwnership {
   leaseToken: string
   leaseAcquiredAtMs: number
+}
+
+interface LeaseFence extends LeaseOwnership {
   nowMs: number
 }
 
-type LiveTargetResult = { kind: "ready"; target: StripeSeatTarget } | { kind: "unavailable"; error: string }
+type LiveTargetResult =
+  | { kind: "ready"; target: StripeSeatTarget }
+  | { kind: "lease_expired" }
+  | { kind: "unavailable"; error: string }
 
 function validInstallationId(value: number): boolean {
   return Number.isSafeInteger(value) && value > 0
@@ -105,7 +113,29 @@ function providerSignal(): AbortSignal {
   return AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
 }
 
-async function readLiveTarget(env: Env, snapshot: StripeSeatSubscriptionSnapshot): Promise<LiveTargetResult> {
+function freshFence(lease: LeaseOwnership): LeaseFence {
+  return { ...lease, nowMs: Date.now() }
+}
+
+async function renewLeaseForProvider(env: Env, installationId: number, lease: LeaseOwnership): Promise<boolean> {
+  const nowMs = Date.now()
+  const renewed = await renewOrgSeatBillingLease(env, {
+    installationId,
+    token: lease.leaseToken,
+    acquiredAtMs: lease.leaseAcquiredAtMs,
+    nowMs,
+    ttlMs: LEASE_TTL_MS,
+  })
+  if (renewed.kind !== "renewed") return false
+  const providerStartMs = Date.now()
+  return providerStartMs + PROVIDER_TIMEOUT_MS + PROVIDER_COMMIT_MARGIN_MS < renewed.expiresAtMs
+}
+
+async function readLiveTarget(
+  env: Env,
+  snapshot: StripeSeatSubscriptionSnapshot,
+  lease: LeaseOwnership,
+): Promise<LiveTargetResult> {
   if (
     !env.SIGILIX_STRIPE_SECRET_KEY ||
     snapshot.snapshotState !== "ready" ||
@@ -116,6 +146,7 @@ async function readLiveTarget(env: Env, snapshot: StripeSeatSubscriptionSnapshot
   ) {
     return { kind: "unavailable", error: "seat_billing_snapshot_unavailable" }
   }
+  if (!(await renewLeaseForProvider(env, snapshot.installationId, lease))) return { kind: "lease_expired" }
   const listed = await listSubscriptionItems(
     env.SIGILIX_STRIPE_SECRET_KEY,
     snapshot.stripeSubscriptionId,
@@ -172,9 +203,10 @@ async function enqueueRecovery(
 async function deferOperation(
   env: Env,
   operation: OrgSeatBillingOperation,
-  fence: LeaseFence,
+  lease: LeaseOwnership,
   errorCode: string,
 ): Promise<boolean> {
+  const fence = freshFence(lease)
   const deferred = await deferOrgSeatBillingOperation(env, {
     installationId: operation.installationId,
     operationId: operation.operationId,
@@ -199,7 +231,13 @@ async function deferOperation(
   return true
 }
 
-async function readEffectiveSeat(env: Env, installationId: number, target: OrgSeatReconcileTarget, fence: LeaseFence) {
+async function readEffectiveSeat(
+  env: Env,
+  installationId: number,
+  target: OrgSeatReconcileTarget,
+  lease: LeaseOwnership,
+) {
+  const fence = freshFence(lease)
   return target.kind === "managed_github"
     ? readManagedOrgSeatAssignment(env, { installationId, githubUserId: target.githubUserId, ...fence })
     : readEffectiveOrgSeatAssignment(env, { installationId, login: target.login, ...fence })
@@ -214,9 +252,10 @@ async function writeLocalSeat(
     actorLogin: string
     nowIso: string
     capacity: LocalSeatCapacityGuard
-    fence: LeaseFence
+    lease: LeaseOwnership
   },
 ) {
+  const fence = freshFence(args.lease)
   return args.target.kind === "managed_github"
     ? writeLocalManagedOrgSeatAssignment(env, {
         installationId: args.installationId,
@@ -226,7 +265,7 @@ async function writeLocalSeat(
         actorLogin: args.actorLogin,
         nowIso: args.nowIso,
         capacity: args.capacity,
-        ...args.fence,
+        ...fence,
       })
     : writeLocalOrgSeatAssignment(env, {
         installationId: args.installationId,
@@ -236,7 +275,7 @@ async function writeLocalSeat(
         actorLogin: args.actorLogin,
         nowIso: args.nowIso,
         capacity: args.capacity,
-        ...args.fence,
+        ...fence,
       })
 }
 
@@ -253,11 +292,12 @@ function resultFromLocalWrite(
 async function commitAppliedOperation(
   env: Env,
   operation: OrgSeatBillingOperation,
-  fence: LeaseFence,
+  lease: LeaseOwnership,
   observedQuantity: number,
 ): Promise<"committed" | "pending"> {
   if (observedQuantity < operation.desiredQuantity) return "pending"
   if (operation.state === "pending") {
+    const fence = freshFence(lease)
     const marked = await markOrgSeatExpansionStripeApplied(env, {
       installationId: operation.installationId,
       operationId: operation.operationId,
@@ -284,6 +324,7 @@ async function commitAppliedOperation(
     default:
       return assertNever(operation.targetIdentityKind)
   }
+  const fence = freshFence(lease)
   const committed = await commit(env, {
     installationId: operation.installationId,
     operationId: operation.operationId,
@@ -299,7 +340,7 @@ async function settleActiveForUnassign(
   env: Env,
   active: OrgSeatBillingOperation,
   actorLogin: string,
-  fence: LeaseFence,
+  lease: LeaseOwnership,
 ): Promise<boolean> {
   let cancel: typeof cancelActiveOrgSeatBillingOperation
   switch (active.targetIdentityKind) {
@@ -314,6 +355,7 @@ async function settleActiveForUnassign(
     default:
       return assertNever(active.targetIdentityKind)
   }
+  const fence = freshFence(lease)
   const settled = await cancel(env, {
     installationId: active.installationId,
     operationId: active.operationId,
@@ -347,7 +389,7 @@ export async function reconcileOrgSeatAssignment(
   })
   if (lease.kind === "busy") return { kind: "busy" }
   if (lease.kind !== "acquired") return { kind: "unavailable", error: "seat_billing_unavailable" }
-  const fence: LeaseFence = { leaseToken, leaseAcquiredAtMs: nowMs, nowMs }
+  const ownership: LeaseOwnership = { leaseToken, leaseAcquiredAtMs: nowMs }
   const updatedAt = new Date(nowMs).toISOString()
 
   try {
@@ -355,12 +397,12 @@ export async function reconcileOrgSeatAssignment(
     if (active.kind === "error") return { kind: "unavailable", error: "seat_billing_unavailable" }
     if (active.kind === "ok") {
       if (args.requestedAssigned || !operationMatchesTarget(active.operation, target)) return { kind: "busy" }
-      if (!(await settleActiveForUnassign(env, active.operation, args.actorLogin, fence))) {
+      if (!(await settleActiveForUnassign(env, active.operation, args.actorLogin, ownership))) {
         return { kind: "unavailable", error: "seat_billing_unavailable" }
       }
     }
 
-    const effective = await readEffectiveSeat(env, args.installationId, target, fence)
+    const effective = await readEffectiveSeat(env, args.installationId, target, ownership)
     if (effective.kind !== "ok") return { kind: "unavailable", error: "seat_billing_unavailable" }
     const currentQuantity = effective.assignment.assignedQuantity
     const prospectiveQuantity =
@@ -379,7 +421,7 @@ export async function reconcileOrgSeatAssignment(
         actorLogin: args.actorLogin,
         nowIso: updatedAt,
         capacity: { kind: "local-only" },
-        fence,
+        lease: ownership,
       })
       return resultFromLocalWrite(written, args.requestedAssigned, updatedAt)
     }
@@ -396,7 +438,7 @@ export async function reconcileOrgSeatAssignment(
         actorLogin: args.actorLogin,
         nowIso: updatedAt,
         capacity: { kind: "local-only" },
-        fence,
+        lease: ownership,
       })
       return resultFromLocalWrite(written, true, updatedAt)
     }
@@ -435,12 +477,15 @@ export async function reconcileOrgSeatAssignment(
           subscriptionItemId: snapshot.stripeSubscriptionItemId,
           minimumQuantity: prospectiveQuantity,
         },
-        fence,
+        lease: ownership,
       })
       return resultFromLocalWrite(written, true, updatedAt)
     }
 
-    const live = await readLiveTarget(env, snapshot)
+    const live = await readLiveTarget(env, snapshot, ownership)
+    if (live.kind === "lease_expired") {
+      return { kind: "unavailable", error: "seat_billing_lease_expired" }
+    }
     if (live.kind !== "ready") return live
     if (decision.quantity > SEAT_BOUNDS[live.target.tier].max) {
       return { kind: "invalid", error: "seat_capacity_limit" }
@@ -460,12 +505,13 @@ export async function reconcileOrgSeatAssignment(
           minimumQuantity: decision.quantity,
           liveQuantity: live.target.quantity,
         },
-        fence,
+        lease: ownership,
       })
       return resultFromLocalWrite(written, true, updatedAt)
     }
 
     const operationId = crypto.randomUUID()
+    const createFence = freshFence(ownership)
     const commonExpansion = {
       installationId: args.installationId,
       operationId,
@@ -475,8 +521,8 @@ export async function reconcileOrgSeatAssignment(
       expectedSnapshotRevision: snapshot.revision,
       subscriptionId: snapshot.stripeSubscriptionId,
       subscriptionItemId: snapshot.stripeSubscriptionItemId,
-      nextAttemptAtMs: retryAt(nowMs),
-      ...fence,
+      nextAttemptAtMs: retryAt(createFence.nowMs),
+      ...createFence,
     }
     const created =
       target.kind === "managed_github"
@@ -496,6 +542,14 @@ export async function reconcileOrgSeatAssignment(
       return { kind: "unavailable", error: "seat_billing_unavailable" }
     }
     const operation = created.operation
+    if (!(await renewLeaseForProvider(env, args.installationId, ownership))) {
+      await enqueueRecovery(env, {
+        installationId: args.installationId,
+        operationId,
+        ...(args.ctx ? { ctx: args.ctx } : {}),
+      })
+      return { kind: "pending", assigned: false, updatedAt, operationId }
+    }
     const updated = await updateSubscriptionItemQuantity(env.SIGILIX_STRIPE_SECRET_KEY!, {
       subscriptionItemId: operation.stripeSubscriptionItemId,
       quantity: operation.desiredQuantity,
@@ -503,7 +557,7 @@ export async function reconcileOrgSeatAssignment(
       signal: providerSignal(),
     })
     if (!updated.ok) {
-      const deferred = await deferOperation(env, operation, fence, `stripe_update_${updated.status}`)
+      const deferred = await deferOperation(env, operation, ownership, `stripe_update_${updated.status}`)
       await enqueueRecovery(env, {
         installationId: args.installationId,
         operationId,
@@ -514,7 +568,7 @@ export async function reconcileOrgSeatAssignment(
       }
       return { kind: "pending", assigned: false, updatedAt, operationId }
     }
-    const committed = await commitAppliedOperation(env, operation, fence, updated.quantity)
+    const committed = await commitAppliedOperation(env, operation, ownership, updated.quantity)
     if (committed === "committed") return { kind: "applied", assigned: true, updatedAt }
 
     await enqueueRecovery(env, {
@@ -551,7 +605,7 @@ export async function recoverOrgSeatBillingOperation(
   })
   if (lease.kind === "busy") throw new Error("seat reconciliation busy")
   if (lease.kind !== "acquired") throw new Error("seat reconciliation unavailable")
-  const fence: LeaseFence = { leaseToken, leaseAcquiredAtMs: nowMs, nowMs }
+  const ownership: LeaseOwnership = { leaseToken, leaseAcquiredAtMs: nowMs }
   try {
     const active = await readActiveOrgSeatBillingOperation(env, job.installationId)
     if (active.kind === "missing") return
@@ -562,14 +616,15 @@ export async function recoverOrgSeatBillingOperation(
     const billing = await readTenantBillingState(env, job.installationId)
     const snapshot = await readStripeSeatSubscription(env, job.installationId)
     if (billing.kind !== "stripe-active" || snapshot.kind !== "ok" || snapshot.snapshot.snapshotState !== "ready") {
-      if (!(await deferOperation(env, operation, fence, "stripe_snapshot_unavailable"))) {
+      if (!(await deferOperation(env, operation, ownership, "stripe_snapshot_unavailable"))) {
         throw new Error("seat reconciliation defer failed")
       }
       throw new Error("seat reconciliation snapshot unavailable")
     }
-    const live = await readLiveTarget(env, snapshot.snapshot)
+    const live = await readLiveTarget(env, snapshot.snapshot, ownership)
+    if (live.kind === "lease_expired") throw new Error("seat reconciliation lease expired")
     if (live.kind !== "ready") {
-      if (!(await deferOperation(env, operation, fence, live.error))) {
+      if (!(await deferOperation(env, operation, ownership, live.error))) {
         throw new Error("seat reconciliation defer failed")
       }
       throw new Error(live.error)
@@ -577,6 +632,9 @@ export async function recoverOrgSeatBillingOperation(
 
     let observedQuantity = live.target.quantity
     if (operation.state === "pending" && observedQuantity < operation.desiredQuantity) {
+      if (!(await renewLeaseForProvider(env, job.installationId, ownership))) {
+        throw new Error("seat reconciliation lease expired")
+      }
       const updated = await updateSubscriptionItemQuantity(env.SIGILIX_STRIPE_SECRET_KEY!, {
         subscriptionItemId: operation.stripeSubscriptionItemId,
         quantity: operation.desiredQuantity,
@@ -584,7 +642,7 @@ export async function recoverOrgSeatBillingOperation(
         signal: providerSignal(),
       })
       if (!updated.ok) {
-        if (!(await deferOperation(env, operation, fence, `stripe_update_${updated.status}`))) {
+        if (!(await deferOperation(env, operation, ownership, `stripe_update_${updated.status}`))) {
           throw new Error("seat reconciliation defer failed")
         }
         throw new Error("seat reconciliation provider update failed")
@@ -592,12 +650,12 @@ export async function recoverOrgSeatBillingOperation(
       observedQuantity = updated.quantity
     }
     if (observedQuantity < operation.desiredQuantity) {
-      if (!(await deferOperation(env, operation, fence, "provider_quantity_regressed"))) {
+      if (!(await deferOperation(env, operation, ownership, "provider_quantity_regressed"))) {
         throw new Error("seat reconciliation defer failed")
       }
       throw new Error("seat reconciliation provider quantity regressed")
     }
-    if ((await commitAppliedOperation(env, operation, fence, observedQuantity)) !== "committed") {
+    if ((await commitAppliedOperation(env, operation, ownership, observedQuantity)) !== "committed") {
       throw new Error("seat reconciliation commit failed")
     }
   } finally {

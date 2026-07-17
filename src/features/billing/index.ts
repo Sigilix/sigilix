@@ -61,6 +61,7 @@ export {
   readStripeSeatSubscription,
   readTenantBillingState,
   releaseOrgSeatBillingLease,
+  renewOrgSeatBillingLease,
   writeLocalOrgSeatAssignment,
   writeStripeSeatSubscriptionSnapshot,
   type StripeSeatSubscriptionSnapshotWrite,

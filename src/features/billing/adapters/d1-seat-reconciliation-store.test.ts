@@ -20,6 +20,7 @@ import {
   readStripeSeatSubscription,
   readTenantBillingState,
   releaseOrgSeatBillingLease,
+  renewOrgSeatBillingLease,
   writeLocalOrgSeatAssignment,
   writeStripeSeatSubscriptionSnapshot,
 } from "./d1-seat-reconciliation-store"
@@ -513,6 +514,83 @@ describe("D1 seat reconciliation store", () => {
     await expect(
       releaseOrgSeatBillingLease(env(db), { installationId: 42, token: "lease-b", acquiredAtMs: 30 }),
     ).resolves.toEqual({ kind: "released" })
+  })
+
+  it("renews only the exact live lease without shortening its expiry", async () => {
+    await expect(
+      acquireOrgSeatBillingLease(env(db), { installationId: 42, token: "lease-a", nowMs: 10, ttlMs: 100 }),
+    ).resolves.toEqual({ kind: "acquired", expiresAtMs: 110 })
+
+    await expect(
+      renewOrgSeatBillingLease(env(db), {
+        installationId: 42,
+        token: "lease-a",
+        acquiredAtMs: 10,
+        nowMs: 20,
+        ttlMs: 20,
+      }),
+    ).resolves.toEqual({ kind: "renewed", expiresAtMs: 110 })
+    await expect(
+      renewOrgSeatBillingLease(env(db), {
+        installationId: 42,
+        token: "lease-a",
+        acquiredAtMs: 10,
+        nowMs: 100,
+        ttlMs: 60,
+      }),
+    ).resolves.toEqual({ kind: "renewed", expiresAtMs: 160 })
+    await expect(
+      renewOrgSeatBillingLease(env(db), {
+        installationId: 42,
+        token: "wrong-token",
+        acquiredAtMs: 10,
+        nowMs: 100,
+        ttlMs: 60,
+      }),
+    ).resolves.toEqual({ kind: "not_owner" })
+    await expect(
+      renewOrgSeatBillingLease(env(db), {
+        installationId: 42,
+        token: "lease-a",
+        acquiredAtMs: 10,
+        nowMs: 160,
+        ttlMs: 60,
+      }),
+    ).resolves.toEqual({ kind: "not_owner" })
+  })
+
+  it("preserves the longest expiry across concurrent exact-owner renewals", async () => {
+    await expect(
+      acquireOrgSeatBillingLease(env(db), { installationId: 42, token: "lease-a", nowMs: 10, ttlMs: 100 }),
+    ).resolves.toEqual({ kind: "acquired", expiresAtMs: 110 })
+
+    const renewed = await Promise.all([
+      renewOrgSeatBillingLease(env(db), {
+        installationId: 42,
+        token: "lease-a",
+        acquiredAtMs: 10,
+        nowMs: 20,
+        ttlMs: 100,
+      }),
+      renewOrgSeatBillingLease(env(db), {
+        installationId: 42,
+        token: "lease-a",
+        acquiredAtMs: 10,
+        nowMs: 30,
+        ttlMs: 200,
+      }),
+    ])
+
+    expect(renewed.every((result) => result.kind === "renewed")).toBe(true)
+    await expect(
+      renewOrgSeatBillingLease(env(db), {
+        installationId: 42,
+        token: "lease-a",
+        acquiredAtMs: 10,
+        nowMs: 40,
+        ttlMs: 1,
+      }),
+    ).resolves.toEqual({ kind: "renewed", expiresAtMs: 230 })
   })
 
   it("atomically grants only one of concurrent lease attempts", async () => {

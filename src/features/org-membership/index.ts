@@ -1,5 +1,6 @@
 export {
   addOrgWorkspaceMember,
+  backfillOrgWorkspaceAccess,
   bootstrapFirstOrgAdmin,
   hasActiveOrgAdmin,
   listOrgWorkspaceAccess,

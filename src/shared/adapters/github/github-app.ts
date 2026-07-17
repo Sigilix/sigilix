@@ -430,6 +430,70 @@ export async function getAppInstallation(
 }
 
 /**
+ * Resolve one roster member's exact organization role with an installation
+ * token. Mutable path names are bound back to immutable user/organization IDs
+ * in the response before the role is trusted.
+ */
+export async function getExactOrgMembershipRole(args: {
+  kv: KVNamespace
+  appId: string
+  privateKey: string
+  installationId: number
+  orgLogin: string
+  expectedOrgId: number
+  userLogin: string
+  expectedGithubUserId: string
+}): Promise<"admin" | "member"> {
+  if (
+    !Number.isSafeInteger(args.installationId) ||
+    args.installationId <= 0 ||
+    !Number.isSafeInteger(args.expectedOrgId) ||
+    args.expectedOrgId <= 0 ||
+    !/^[1-9]\d*$/.test(args.expectedGithubUserId) ||
+    args.orgLogin.trim() === "" ||
+    args.userLogin.trim() === ""
+  ) {
+    throw new Error("invalid exact organization membership request")
+  }
+  const token = await getInstallationToken({
+    kv: args.kv,
+    appId: args.appId,
+    privateKey: args.privateKey,
+    installationId: args.installationId,
+  })
+  const res = await fetch(
+    `https://api.github.com/orgs/${encodeURIComponent(args.orgLogin)}/memberships/${encodeURIComponent(args.userLogin)}`,
+    { headers: GH_API_HEADERS(`token ${token}`) },
+  )
+  if (!res.ok) throw new Error(`GitHub exact organization membership fetch failed: HTTP ${res.status}`)
+  const value: unknown = await res.json()
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("GitHub exact organization membership response was malformed")
+  }
+  const row = value as Record<string, unknown>
+  const user =
+    typeof row.user === "object" && row.user !== null && !Array.isArray(row.user)
+      ? (row.user as Record<string, unknown>)
+      : null
+  const organization =
+    typeof row.organization === "object" && row.organization !== null && !Array.isArray(row.organization)
+      ? (row.organization as Record<string, unknown>)
+      : null
+  if (
+    row.state !== "active" ||
+    (row.role !== "admin" && row.role !== "member") ||
+    user === null ||
+    organization === null ||
+    !Number.isSafeInteger(user.id) ||
+    String(user.id) !== args.expectedGithubUserId ||
+    organization.id !== args.expectedOrgId
+  ) {
+    throw new Error("GitHub exact organization membership response was malformed")
+  }
+  return row.role
+}
+
+/**
  * sig-cli-login-org: list every App installation WITH its account (id + login +
  * type) via the App JWT (`GET /app/installations`, paginated). Same server-to-
  * server credential + fail-soft `complete` contract as {@link listAppInstallationIds}

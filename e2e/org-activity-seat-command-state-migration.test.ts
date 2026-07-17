@@ -159,6 +159,7 @@ async function seedBefore0035(fixture: WranglerFixture): Promise<void> {
 }
 
 describe("organization activity command state through real Wrangler migrations", () => {
+  // Cloudflare shared builds exceed 120s here because this case intentionally uses many isolated Wrangler writes.
   it("backfills and owns exact-scope command handoff without changing immutable evidence", async () => {
     const fixture = await makeFixture()
     try {
@@ -963,7 +964,7 @@ describe("organization activity command state through real Wrangler migrations",
     } finally {
       await rm(fixture.root, { recursive: true, force: true })
     }
-  }, 120_000)
+  }, 300_000)
 
   it("rolls back a partial state migration and succeeds on retry", async () => {
     const fixture = await makeFixture()

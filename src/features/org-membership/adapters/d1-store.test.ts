@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import {
   addOrgWorkspaceMember,
+  backfillOrgWorkspaceAccess,
   bootstrapFirstOrgAdmin,
   hasActiveOrgAdmin,
   listOrgWorkspaceAccess,
@@ -130,6 +131,124 @@ describe("D1 organization workspace access store", () => {
       (row) => row.role === "admin" && row.revokedAt === null,
     )
     expect(active).toHaveLength(1)
+  })
+
+  it("atomically backfills current linked identities with one reachable admin", async () => {
+    await db
+      .prepare(
+        "INSERT INTO account_tenant (github_user_id, installation_id, role, created_at)" +
+          " VALUES ('111', 42, 'legacy-owner', ?), ('222', 42, 'legacy-member', ?)",
+      )
+      .bind(now(1), now(1))
+      .run()
+
+    await backfillOrgWorkspaceAccess(db, {
+      installationId: 42,
+      currentLinkedGithubUserIds: ["111", "222"],
+      adminGithubUserId: "111",
+      nowIso: now(2),
+      updatedBy: "system:org-access-backfill",
+      rosterSnapshot: TEST_ROSTER,
+    })
+
+    await expect(listOrgWorkspaceAccess(db, 42)).resolves.toMatchObject([
+      { githubUserId: "111", role: "admin", revokedAt: null },
+      { githubUserId: "222", role: "member", revokedAt: null },
+    ])
+    await expect(
+      db.prepare("SELECT COUNT(*) AS n FROM org_workspace_access_audit").first<{ n: number }>(),
+    ).resolves.toEqual({ n: 2 })
+  })
+
+  it("keeps backfill insert-only for tombstones and idempotent under concurrent retries", async () => {
+    await db
+      .prepare(
+        "INSERT INTO account_tenant (github_user_id, installation_id, role, created_at)" +
+          " VALUES ('111', 42, 'legacy-owner', ?), ('222', 42, 'legacy-member', ?)",
+      )
+      .bind(now(1), now(1))
+      .run()
+    await addOrgWorkspaceMember(db, {
+      installationId: 42,
+      githubUserId: "222",
+      nowIso: now(1),
+      updatedBy: "old-admin",
+    })
+    await removeOrgWorkspaceAccess(db, {
+      installationId: 42,
+      githubUserId: "222",
+      nowIso: now(2),
+      updatedBy: "old-admin",
+      rosterSnapshot: TEST_ROSTER,
+    })
+
+    const args = {
+      installationId: 42,
+      currentLinkedGithubUserIds: ["111", "222"],
+      adminGithubUserId: "111",
+      nowIso: now(3),
+      updatedBy: "system:org-access-backfill",
+      rosterSnapshot: TEST_ROSTER,
+    } as const
+    await Promise.all([backfillOrgWorkspaceAccess(db, args), backfillOrgWorkspaceAccess(db, args)])
+
+    await expect(readOrgWorkspaceAccess(db, 42, "111")).resolves.toMatchObject({ role: "admin", revokedAt: null })
+    await expect(readOrgWorkspaceAccess(db, 42, "222")).resolves.toMatchObject({
+      role: "member",
+      revokedAt: now(2),
+    })
+    await expect(
+      db.prepare("SELECT COUNT(*) AS n FROM org_workspace_access_audit").first<{ n: number }>(),
+    ).resolves.toEqual({ n: 3 })
+  })
+
+  it("rolls the whole backfill batch back when no roster-reachable admin exists", async () => {
+    await db
+      .prepare(
+        "INSERT INTO account_tenant (github_user_id, installation_id, role, created_at) VALUES ('222', 42, 'member', ?)",
+      )
+      .bind(now(1))
+      .run()
+
+    await expect(
+      backfillOrgWorkspaceAccess(db, {
+        installationId: 42,
+        currentLinkedGithubUserIds: ["222"],
+        adminGithubUserId: null,
+        nowIso: now(2),
+        updatedBy: "system:org-access-backfill",
+        rosterSnapshot: TEST_ROSTER,
+      }),
+    ).rejects.toThrow()
+    await expect(listOrgWorkspaceAccess(db, 42)).resolves.toEqual([])
+    await expect(
+      db.prepare("SELECT COUNT(*) AS n FROM org_workspace_access_audit").first<{ n: number }>(),
+    ).resolves.toEqual({ n: 0 })
+  })
+
+  it("rolls back when the requested subset omits another roster-current linked identity", async () => {
+    await db
+      .prepare(
+        "INSERT INTO account_tenant (github_user_id, installation_id, role, created_at)" +
+          " VALUES ('111', 42, 'legacy-owner', ?), ('222', 42, 'legacy-member', ?)",
+      )
+      .bind(now(1), now(1))
+      .run()
+
+    await expect(
+      backfillOrgWorkspaceAccess(db, {
+        installationId: 42,
+        currentLinkedGithubUserIds: ["111"],
+        adminGithubUserId: "111",
+        nowIso: now(2),
+        updatedBy: "system:org-access-backfill",
+        rosterSnapshot: TEST_ROSTER,
+      }),
+    ).rejects.toThrow()
+    await expect(listOrgWorkspaceAccess(db, 42)).resolves.toEqual([])
+    await expect(
+      db.prepare("SELECT COUNT(*) AS n FROM org_workspace_access_audit").first<{ n: number }>(),
+    ).resolves.toEqual({ n: 0 })
   })
 
   it("allows divergent complete rosters to seed multiple roster-proven reachable admins", async () => {

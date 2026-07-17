@@ -22,7 +22,7 @@
 // nothing under /v1/org/ matches, so index.ts falls through to its own routing.
 
 import { handleGetDataConsent, handleSetDataConsent } from "@/src/lib/data-consent-route"
-import { handleAdminOrgAccessRecoveryRoute } from "@/src/lib/admin-org-access-route"
+import { handleAdminOrgAccessBackfillRoute, handleAdminOrgAccessRecoveryRoute } from "@/src/lib/admin-org-access-route"
 import { handleCreateAppMemory, handleDeleteAppMemory, handleListAppMemories } from "@/src/lib/app-memory-route"
 import { handleCreateOrgLearning, handleDeleteOrgLearning, handleListOrgLearnings } from "@/src/lib/org-learnings-route"
 import {
@@ -87,6 +87,9 @@ export async function handleOrgRoutes(request: Request, env: Env, ctx: Execution
   // Operator-only, bearer-gated recovery intentionally bypasses portal CORS.
   if (request.method === "POST" && url.pathname === "/admin/org-access/recover") {
     return handleAdminOrgAccessRecoveryRoute(request, env)
+  }
+  if (request.method === "POST" && url.pathname === "/admin/org-access/backfill") {
+    return handleAdminOrgAccessBackfillRoute(request, env)
   }
   if (request.method === "OPTIONS" && isOrgPath(url.pathname)) {
     return handlePortalPreflight(request, env)

@@ -33,6 +33,15 @@ interface RoleMutationArgs extends RosterMutationArgs {
   role: OrgWorkspaceRole
 }
 
+interface BackfillArgs {
+  installationId: number
+  currentLinkedGithubUserIds: readonly string[]
+  adminGithubUserId: string | null
+  nowIso: string
+  updatedBy: string
+  rosterSnapshot: CompleteInstallationRosterSnapshot
+}
+
 interface RemoveArgs extends RosterMutationArgs {
   /** Current roster login, when still available; used solely to clear the
    * legacy login-keyed seat row. Access/key revocation never depends on it. */
@@ -182,6 +191,137 @@ export async function addOrgWorkspaceMember(db: D1Database, args: MutationArgs):
     .bind(args.installationId, args.githubUserId, args.nowIso, args.nowIso, args.updatedBy, auditKey())
     .run()
   return requireAccess(await readOrgWorkspaceAccess(db, args.installationId, args.githubUserId))
+}
+
+/**
+ * One-shot rollout backfill for roster-current legacy account links. The whole
+ * operation is insert-only except for the existing first-admin promotion path;
+ * revoked rows are never revived. A final constraint guard keeps coverage and
+ * the reachable-admin invariant in the same D1 transaction as every write.
+ */
+export async function backfillOrgWorkspaceAccess(db: D1Database, args: BackfillArgs): Promise<void> {
+  validateBackfill(args)
+  const memberStatements = args.currentLinkedGithubUserIds.map((githubUserId) =>
+    db
+      .prepare(
+        `INSERT INTO org_workspace_access
+          (installation_id, github_user_id, role, revoked_at, created_at, updated_at,
+           updated_by, last_audit_id, last_action)
+         SELECT ?, ?, 'member', NULL, ?, ?, ?, ?, 'member_added_or_regranted'
+          WHERE EXISTS (
+            SELECT 1 FROM account_tenant
+             WHERE installation_id = ? AND github_user_id = ?
+          )
+            AND instr(?, '|' || ? || '|') > 0
+         ON CONFLICT(installation_id, github_user_id) DO NOTHING`,
+      )
+      .bind(
+        args.installationId,
+        githubUserId,
+        args.nowIso,
+        args.nowIso,
+        args.updatedBy,
+        auditKey(),
+        args.installationId,
+        githubUserId,
+        args.rosterSnapshot.sqlTokenSet,
+        githubUserId,
+      ),
+  )
+  const statements: D1PreparedStatement[] = []
+  if (args.adminGithubUserId !== null) {
+    statements.push(backfillAdminStatement(db, args, args.adminGithubUserId))
+  }
+  statements.push(...memberStatements, backfillReadinessGuard(db, args))
+  await db.batch(statements)
+}
+
+function backfillAdminStatement(db: D1Database, args: BackfillArgs, githubUserId: string): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO org_workspace_access
+        (installation_id, github_user_id, role, revoked_at, created_at, updated_at,
+         updated_by, last_audit_id, last_action)
+       SELECT ?, ?, 'admin', NULL, ?, ?, ?, ?, 'bootstrap_admin'
+        WHERE EXISTS (
+          SELECT 1 FROM account_tenant
+           WHERE installation_id = ? AND github_user_id = ?
+        )
+          AND instr(?, '|' || ? || '|') > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM org_workspace_access
+             WHERE installation_id = ? AND role = 'admin' AND revoked_at IS NULL
+               AND instr(?, '|' || github_user_id || '|') > 0
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM org_workspace_access
+             WHERE installation_id = ? AND github_user_id = ? AND revoked_at IS NOT NULL
+          )
+       ON CONFLICT(installation_id, github_user_id) DO UPDATE SET
+         role = 'admin', updated_at = excluded.updated_at, updated_by = excluded.updated_by,
+         last_audit_id = excluded.last_audit_id, last_action = excluded.last_action
+       WHERE org_workspace_access.revoked_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM org_workspace_access AS other
+            WHERE other.installation_id = excluded.installation_id
+              AND other.role = 'admin' AND other.revoked_at IS NULL
+              AND instr(?, '|' || other.github_user_id || '|') > 0
+         )`,
+    )
+    .bind(
+      args.installationId,
+      githubUserId,
+      args.nowIso,
+      args.nowIso,
+      args.updatedBy,
+      auditKey(),
+      args.installationId,
+      githubUserId,
+      args.rosterSnapshot.sqlTokenSet,
+      githubUserId,
+      args.installationId,
+      args.rosterSnapshot.sqlTokenSet,
+      args.installationId,
+      githubUserId,
+      args.rosterSnapshot.sqlTokenSet,
+    )
+}
+
+function backfillReadinessGuard(db: D1Database, args: BackfillArgs): D1PreparedStatement {
+  // If either invariant is false, this deliberately attempts an installation
+  // id of zero. The schema CHECK aborts the whole transactional D1 batch.
+  return db
+    .prepare(
+      `INSERT INTO org_workspace_access
+        (installation_id, github_user_id, role, revoked_at, created_at, updated_at,
+         updated_by, last_audit_id, last_action)
+       SELECT 0, '1', 'member', NULL, ?, ?, ?, ?, 'member_added_or_regranted'
+        WHERE EXISTS (
+          SELECT 1 FROM account_tenant AS linked
+           WHERE linked.installation_id = ?
+             AND instr(?, '|' || linked.github_user_id || '|') > 0
+             AND NOT EXISTS (
+               SELECT 1 FROM org_workspace_access AS access
+                WHERE access.installation_id = linked.installation_id
+                  AND access.github_user_id = linked.github_user_id
+             )
+        )
+           OR NOT EXISTS (
+             SELECT 1 FROM org_workspace_access
+              WHERE installation_id = ? AND role = 'admin' AND revoked_at IS NULL
+                AND instr(?, '|' || github_user_id || '|') > 0
+           )`,
+    )
+    .bind(
+      args.nowIso,
+      args.nowIso,
+      args.updatedBy,
+      auditKey(),
+      args.installationId,
+      args.rosterSnapshot.sqlTokenSet,
+      args.installationId,
+      args.rosterSnapshot.sqlTokenSet,
+    )
 }
 
 /** Change a stored role while atomically preserving at least one active admin. */
@@ -643,6 +783,27 @@ function validateMutation(args: MutationArgs): void {
 function validateRosterMutation(args: RosterMutationArgs): void {
   validateMutation(args)
   validateRosterSnapshot(args.rosterSnapshot)
+}
+
+function validateBackfill(args: BackfillArgs): void {
+  if (!validInstallationId(args.installationId)) throw new Error("invalid installation id")
+  if (typeof args.nowIso !== "string" || args.nowIso.length === 0) throw new Error("invalid mutation time")
+  if (typeof args.updatedBy !== "string" || args.updatedBy.length === 0) throw new Error("invalid mutation actor")
+  validateRosterSnapshot(args.rosterSnapshot)
+  if (args.currentLinkedGithubUserIds.length === 0 || args.currentLinkedGithubUserIds.length > 100) {
+    throw new Error("invalid linked identity set")
+  }
+  const unique = new Set<string>()
+  for (const githubUserId of args.currentLinkedGithubUserIds) {
+    if (!isOrgWorkspaceGithubUserId(githubUserId) || !args.rosterSnapshot.memberIds.includes(githubUserId)) {
+      throw new Error("invalid linked identity")
+    }
+    if (unique.has(githubUserId)) throw new Error("duplicate linked identity")
+    unique.add(githubUserId)
+  }
+  if (args.adminGithubUserId !== null && !unique.has(args.adminGithubUserId)) {
+    throw new Error("invalid backfill admin")
+  }
 }
 
 function validateRosterSnapshot(snapshot: CompleteInstallationRosterSnapshot): void {

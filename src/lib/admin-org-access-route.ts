@@ -5,6 +5,7 @@
 
 import { recoverOrgWorkspaceAdmin } from "@/src/features/org-membership"
 import { requireBearerToken } from "@/src/lib/auth-bearer"
+import { OrgAccessBackfillError, runOrgAccessBackfill } from "@/src/lib/org-access-backfill"
 import { fetchInstallationRoster } from "@/src/lib/org-members-roster"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import { getAppInstallation } from "@/src/shared/adapters/github/github-app"
@@ -16,6 +17,11 @@ const MAX_BODY_BYTES = 4 * 1024
 interface RecoveryBody {
   installationId: number
   githubUserId: string
+}
+
+interface BackfillBody {
+  installationId: number
+  apply: boolean
 }
 
 interface TenantInstallationRow {
@@ -93,6 +99,27 @@ export async function handleAdminOrgAccessRecoveryRoute(request: Request, env: E
   }
 }
 
+export async function handleAdminOrgAccessBackfillRoute(request: Request, env: Env): Promise<Response> {
+  const token = env.OPENCLAW_ADMIN_TOKEN
+  if (!token) return json({ error: "admin_endpoint_not_configured" }, 503)
+  if (!(await requireBearerToken(request, token))) return json({ error: "unauthorized" }, 401)
+  if (env.OPENCLAW_ORG_MEMBERSHIP_MODE === "on") {
+    return json({ error: "org_membership_already_enabled" }, 409)
+  }
+  if (!hasJsonContentType(request)) return json({ error: "content-type must be application/json" }, 415)
+  const body = await parseBackfillBody(request)
+  if (body instanceof Response) return body
+
+  try {
+    return json(await runOrgAccessBackfill(env, body))
+  } catch (error) {
+    const status = error instanceof OrgAccessBackfillError ? error.status : 503
+    const code = error instanceof OrgAccessBackfillError ? error.code : "org_access_unavailable"
+    emitFailure("org-access-backfill-failed", error, body.installationId)
+    return json({ error: code }, status)
+  }
+}
+
 async function parseBody(request: Request): Promise<RecoveryBody | Response> {
   const raw = await readBodyCapped(request, MAX_BODY_BYTES)
   if (raw === null) return json({ error: "payload_too_large" }, 413)
@@ -116,6 +143,29 @@ async function parseBody(request: Request): Promise<RecoveryBody | Response> {
     return json({ error: "invalid_github_user_id" }, 400)
   }
   return { installationId: Number(record.installationId), githubUserId: record.githubUserId }
+}
+
+async function parseBackfillBody(request: Request): Promise<BackfillBody | Response> {
+  const raw = await readBodyCapped(request, MAX_BODY_BYTES)
+  if (raw === null) return json({ error: "payload_too_large" }, 413)
+  let value: unknown
+  try {
+    value = JSON.parse(raw)
+  } catch {
+    return json({ error: "invalid_json" }, 400)
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return json({ error: "invalid_request" }, 400)
+  }
+  const record = value as Record<string, unknown>
+  if (Object.keys(record).sort().join(",") !== "apply,installationId") {
+    return json({ error: "invalid_request" }, 400)
+  }
+  if (!Number.isSafeInteger(record.installationId) || Number(record.installationId) <= 0) {
+    return json({ error: "invalid_installation_id" }, 400)
+  }
+  if (typeof record.apply !== "boolean") return json({ error: "invalid_apply" }, 400)
+  return { installationId: Number(record.installationId), apply: record.apply }
 }
 
 function json(body: unknown, status = 200): Response {

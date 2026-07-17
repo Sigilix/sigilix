@@ -31,6 +31,7 @@ import type { FetchPageResult } from "./fetch-guard"
 import { resolveRuntimeApp, type RuntimeAppId } from "@/src/shared/domain/runtime-app-registry"
 import { applySkillGuidance, renderSkillProvenanceNote, type ResolvedSkillContext } from "@/src/features/skills"
 import { describeImageEvidence, withImageEvidence, type ResearchImageEvidence } from "./image-evidence"
+import { describeVideoEvidence, withVideoEvidence, type ResearchVideoEvidence } from "./video-evidence"
 import type {
   QuestionCategory,
   RepoGrounding,
@@ -67,6 +68,9 @@ export interface EngineDeps {
   /** Verified images are reduced to cited, untrusted text by a dedicated
    * image-capable model before the normal text-only research pipeline. */
   imageEvidence?: ResearchImageEvidence
+  /** Verified video is reduced to cited, delimited text before the normal
+   * research pipeline. Timeline labels remain explicitly approximate. */
+  videoEvidence?: ResearchVideoEvidence
   /** Verified installation-scoped read-only MCP runtime. Omitted when the
    *  caller has no positively authorized tenant selector. */
   mcp?: ResearchMcpRuntime
@@ -223,6 +227,7 @@ async function runDirectAnswer(
   const { config } = deps
   await deps.emit({ type: "status", phase: "planning", round: 0, model: config.tier, effort: config.effort })
   if (deps.imageEvidence) await deps.emit({ type: "note", text: describeImageEvidence(deps.imageEvidence) })
+  if (deps.videoEvidence) await deps.emit({ type: "note", text: describeVideoEvidence() })
   if (mcpEvidence) await deps.emit({ type: "note", text: describeMcpEvidence(mcpEvidence) })
   if (note) await deps.emit({ type: "note", text: note })
   if (deps.isCancelled()) return cancel(deps)
@@ -232,7 +237,7 @@ async function runDirectAnswer(
     "finalReport",
     toMessages(
       applySkillGuidance(
-        withImageEvidence(withMcpEvidence(buildDirectAnswerPrompt(deps.question), mcpEvidence), deps.imageEvidence),
+        withMediaEvidence(withMcpEvidence(buildDirectAnswerPrompt(deps.question), mcpEvidence), deps),
         skillContext,
       ),
     ),
@@ -259,6 +264,7 @@ async function runRepoGrounded(
   const { config } = deps
   await deps.emit({ type: "status", phase: "planning", round: 0, model: config.tier, effort: config.effort })
   if (deps.imageEvidence) await deps.emit({ type: "note", text: describeImageEvidence(deps.imageEvidence) })
+  if (deps.videoEvidence) await deps.emit({ type: "note", text: describeVideoEvidence() })
   if (mcpEvidence) await deps.emit({ type: "note", text: describeMcpEvidence(mcpEvidence) })
   await deps.emit({
     type: "note",
@@ -277,9 +283,7 @@ async function runRepoGrounded(
   const skillContext = await loadSkillContext(deps)
   const answer = await deps.model(
     "finalReport",
-    toMessages(
-      applySkillGuidance(withImageEvidence(withMcpEvidence(prompt, mcpEvidence), deps.imageEvidence), skillContext),
-    ),
+    toMessages(applySkillGuidance(withMediaEvidence(withMcpEvidence(prompt, mcpEvidence), deps), skillContext)),
   )
   if (skillContext) await deps.emit({ type: "note", text: renderSkillProvenanceNote(skillContext) })
   // Re-check after the awaited model call so a mid-answer /cancel wins the race.
@@ -313,8 +317,9 @@ async function runInner(deps: EngineDeps, mcpEvidence?: ResearchMcpEvidence | nu
   // every other status event omits them (the original contract shape).
   await deps.emit({ type: "status", phase: "planning", round: 0, model: config.tier, effort: config.effort })
   if (deps.imageEvidence) await deps.emit({ type: "note", text: describeImageEvidence(deps.imageEvidence) })
+  if (deps.videoEvidence) await deps.emit({ type: "note", text: describeVideoEvidence() })
   if (mcpEvidence) await deps.emit({ type: "note", text: describeMcpEvidence(mcpEvidence) })
-  const planPrompt = withImageEvidence(withMcpEvidence(buildPlanPrompt(deps.question), mcpEvidence), deps.imageEvidence)
+  const planPrompt = withMediaEvidence(withMcpEvidence(buildPlanPrompt(deps.question), mcpEvidence), deps)
   const plan = await deps.model("planner", toMessages(planPrompt))
   track(plan.tokens)
   await deps.emit({ type: "plan", text: plan.text })
@@ -349,7 +354,7 @@ async function runInner(deps: EngineDeps, mcpEvidence?: ResearchMcpEvidence | nu
 
     // ── generate queries ────────────────────────────────────────────
     await deps.emit({ type: "status", phase: "searching", round })
-    const queryPrompt = withImageEvidence(
+    const queryPrompt = withMediaEvidence(
       buildQueryPrompt({
         question: deps.question,
         category,
@@ -358,7 +363,7 @@ async function runInner(deps: EngineDeps, mcpEvidence?: ResearchMcpEvidence | nu
         maxQueries: config.maxQueriesPerRound,
         round,
       }),
-      deps.imageEvidence,
+      deps,
     )
     const queryResp = await deps.model("planner", toMessages(queryPrompt))
     track(queryResp.tokens)
@@ -427,12 +432,7 @@ async function runInner(deps: EngineDeps, mcpEvidence?: ResearchMcpEvidence | nu
   const skillContext = await loadSkillContext(deps)
   const report = await deps.model(
     "finalReport",
-    toMessages(
-      applySkillGuidance(
-        withImageEvidence(withMcpEvidence(reportPrompt, mcpEvidence), deps.imageEvidence),
-        skillContext,
-      ),
-    ),
+    toMessages(applySkillGuidance(withMediaEvidence(withMcpEvidence(reportPrompt, mcpEvidence), deps), skillContext)),
   )
   track(report.tokens)
   if (skillContext) await deps.emit({ type: "note", text: renderSkillProvenanceNote(skillContext) })
@@ -543,6 +543,13 @@ async function extractPages(
 }
 
 // ── pure helpers ──────────────────────────────────────────────────────
+
+function withMediaEvidence(
+  prompt: { system: string; user: string },
+  deps: EngineDeps,
+): { system: string; user: string } {
+  return withVideoEvidence(withImageEvidence(prompt, deps.imageEvidence), deps.videoEvidence)
+}
 
 function toMessages(p: { system: string; user: string }) {
   return [

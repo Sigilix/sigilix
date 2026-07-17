@@ -127,7 +127,7 @@ import {
 // re-exported below so no importer or test path changes.
 import { handleGitHubWebhook } from "@/src/index-github-webhook"
 import { handleGitLabWebhook } from "@/src/index-gitlab-webhook"
-import { enqueueDueOrgSeatBillingOperations, handleStripeWebhookRoute } from "@/src/features/billing"
+import { enqueueDueSeatWork, handleStripeWebhookRoute } from "@/src/features/billing"
 import { tryHandleBillingRoute } from "@/src/lib/billing-checkout-route"
 import { handleLinearWebhook, handleManualTrigger } from "@/src/index-webhooks"
 import { dispatchJob } from "@/src/index-dispatch"
@@ -830,7 +830,7 @@ export default {
     // the reconciliation tick.
     ctx.waitUntil(runMemoryDecayPass(env).catch((err) => logTickError("memory-decay-tick-error", err)))
     ctx.waitUntil(runMemoryConsolidatePass(env).catch((err) => logTickError("memory-consolidate-tick-error", err)))
-    ctx.waitUntil(enqueueDueOrgSeatBillingOperations(env)) // independent of the indexer gate
+    ctx.waitUntil(enqueueDueSeatWork(env)) // independent of the indexer gate
     if (env.SIGILIX_PLATFORM_DB)
       ctx.waitUntil(
         sweepExpiredRepoActiveIndexRuns({ db: env.SIGILIX_PLATFORM_DB }).catch((err) =>

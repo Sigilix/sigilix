@@ -10,7 +10,11 @@ import type { Env } from "@/src/shared/types/env"
 import type { EnqueueRequest } from "./types"
 import { buildPausedKey, buildIgnoredKey } from "@/src/lib/pr-lifecycle-commands"
 import { upsertTenantAndRepo } from "@/src/features/tenancy"
-import { persistActivitySeatCommand, type ActivitySeatEvidence } from "@/src/features/billing"
+import {
+  enqueueActivitySeatCommand,
+  persistActivitySeatCommand,
+  type ActivitySeatEvidence,
+} from "@/src/features/billing"
 
 const DO_BASE_URL = "https://do.internal"
 
@@ -214,6 +218,7 @@ export async function enqueuePrReviewJob(
         status: invalid ? 409 : 503,
       }
     }
+    await enqueueActivitySeatCommand(env, evidence.deliveryId, ctx)
   }
 
   const body: EnqueueRequest = {

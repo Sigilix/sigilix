@@ -29,6 +29,7 @@ interface MakeEnvArgs {
   /** SIG-343: optional platform DB binding for lazy tenant+repo registration tests. */
   platformDb?: D1Database
   onDoFetch?: () => void | Promise<void>
+  queueRejects?: boolean
 }
 
 function makeEnv(args: MakeEnvArgs = {}): {
@@ -68,7 +69,9 @@ function makeEnv(args: MakeEnvArgs = {}): {
   const stub = { fetch: fetchMock } as unknown as DurableObjectStub
   const idFromName = vi.fn((name: string) => ({ name }) as unknown as DurableObjectId)
   const get = vi.fn(() => stub) as unknown as DurableObjectNamespace["get"]
-  const queueSend = vi.fn(async (_message: unknown) => {})
+  const queueSend = args.queueRejects
+    ? vi.fn(async (_message: unknown) => Promise.reject(new Error("queue unavailable")))
+    : vi.fn(async (_message: unknown) => {})
   const kv = new Map<string, string>(Object.entries(args.kvState ?? {}))
   const env = {
     PR_REVIEW_RUN: { idFromName, get } as unknown as DurableObjectNamespace,
@@ -305,7 +308,7 @@ describe("enqueuePrReviewJob — immutable activity event", () => {
   it("persists exact event evidence before invoking the review DO", async () => {
     const db = await makeActivityDb()
     let rowsAtDoCall = -1
-    const { env, doCalls } = makeEnv({
+    const { env, doCalls, queueSend } = makeEnv({
       platformDb: db,
       onDoFetch: async () => {
         const row = await db.prepare("SELECT COUNT(*) AS count FROM org_activity_seat_command").first<{
@@ -324,6 +327,30 @@ describe("enqueuePrReviewJob — immutable activity event", () => {
     expect(result).toEqual({ ok: true, route: "do" })
     expect(rowsAtDoCall).toBe(1)
     expect(doCalls).toHaveLength(1)
+    expect(queueSend).toHaveBeenCalledOnce()
+    expect(queueSend).toHaveBeenCalledWith({
+      type: "org-activity-seat-command",
+      deliveryId: activitySeatEvidence.deliveryId,
+    })
+  })
+
+  it("keeps review dispatch independent when immediate activity pickup fails", async () => {
+    const db = await makeActivityDb()
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const { env, doCalls, queueSend } = makeEnv({ platformDb: db, queueRejects: true })
+
+    await expect(enqueuePrReviewJob(env, { ...baseArgs, repoId: 42, activitySeatEvidence })).resolves.toEqual({
+      ok: true,
+      route: "do",
+    })
+
+    expect(queueSend).toHaveBeenCalledOnce()
+    expect(doCalls).toHaveLength(1)
+    await expect(db.prepare("SELECT COUNT(*) AS count FROM org_activity_seat_command").first()).resolves.toEqual({
+      count: 1,
+    })
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("activity-seat-command-enqueue-failed"))
+    errSpy.mockRestore()
   })
 
   it("keeps identical replay idempotent while retrying the review DO", async () => {

@@ -20,6 +20,7 @@ import {
   listAppInstallationIds,
   listAppInstallations,
   listInstallationRepoFullNames,
+  listInstallationRepoIds,
   listOrgMembers,
   listOrgMemberIds,
   listInstallationCollaborators,
@@ -562,6 +563,50 @@ describe("listInstallationRepoFullNames", () => {
     const r = await listInstallationRepoFullNames(kv, "123", PKCS8_PEM, 999)
     expect(r.complete).toBe(true)
     expect(r.items).toHaveLength(101)
+  })
+
+  it("returns immutable ids only after one exact installation listing completes", async () => {
+    const authorization: string[] = []
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: { headers?: Record<string, string> }) => {
+        if (url.includes("/access_tokens")) return okToken()
+        if (init?.headers?.authorization) authorization.push(init.headers.authorization)
+        return new Response(
+          JSON.stringify({
+            total_count: 2,
+            repositories: [
+              { id: 101, full_name: "Acme/api" },
+              { id: 202, full_name: "Acme/worker" },
+            ],
+          }),
+          { status: 200 },
+        )
+      }),
+    )
+
+    await expect(listInstallationRepoIds(kv, "123", PKCS8_PEM, 999)).resolves.toEqual({
+      items: [101, 202],
+      complete: true,
+    })
+    expect(authorization).toEqual(["token tkn"])
+  })
+
+  it("fails closed when GitHub's total does not prove the returned id set complete", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/access_tokens")) return okToken()
+        return new Response(JSON.stringify({ total_count: 2, repositories: [{ id: 101, full_name: "Acme/api" }] }), {
+          status: 200,
+        })
+      }),
+    )
+
+    await expect(listInstallationRepoIds(kv, "123", PKCS8_PEM, 999)).resolves.toEqual({
+      items: [101],
+      complete: false,
+    })
   })
 })
 

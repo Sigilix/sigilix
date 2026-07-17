@@ -814,3 +814,90 @@ export async function listInstallationRepoFullNames(
     return { items, complete: false }
   }
 }
+
+/** Complete, fail-closed immutable repository ids for one exact installation. */
+export async function listInstallationRepoIds(
+  kv: KVNamespace,
+  appId: string,
+  privateKey: string,
+  installationId: number,
+): Promise<ListingResult<number>> {
+  const items: number[] = []
+  const namesById = new Map<number, string>()
+  const idsByName = new Map<string, number>()
+  let expectedTotalCount: number | null = null
+  try {
+    const token = await getInstallationToken({ kv, appId, privateKey, installationId })
+    for (let page = 1; page <= MAX_PAGES + 1; page++) {
+      const res = await fetch(`https://api.github.com/installation/repositories?per_page=100&page=${page}`, {
+        headers: GH_API_HEADERS(`token ${token}`),
+      })
+      if (!res.ok) {
+        console.warn(
+          JSON.stringify({
+            event: "list-installation-repo-ids-failed",
+            installation_id: installationId,
+            page,
+            status: res.status,
+          }),
+        )
+        return { items, complete: false }
+      }
+      const body = (await res.json()) as unknown
+      const record =
+        typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : null
+      const totalCount = record?.total_count
+      const repositories = record?.repositories
+      if (
+        !Number.isSafeInteger(totalCount) ||
+        Number(totalCount) < 0 ||
+        !Array.isArray(repositories) ||
+        repositories.length > 100
+      ) {
+        return { items, complete: false }
+      }
+      if (expectedTotalCount === null) expectedTotalCount = Number(totalCount)
+      else if (expectedTotalCount !== Number(totalCount)) return { items, complete: false }
+      if (page > MAX_PAGES) {
+        return repositories.length === 0 && items.length === expectedTotalCount
+          ? { items, complete: true }
+          : { items, complete: false }
+      }
+      for (const repository of repositories) {
+        const repo =
+          typeof repository === "object" && repository !== null && !Array.isArray(repository)
+            ? (repository as Record<string, unknown>)
+            : null
+        const repoId = repo?.id
+        const fullName = repo?.full_name
+        if (
+          !Number.isSafeInteger(repoId) ||
+          Number(repoId) <= 0 ||
+          typeof fullName !== "string" ||
+          !/^[^/?#\s]+\/[^/?#\s]+$/u.test(fullName)
+        ) {
+          return { items, complete: false }
+        }
+        const numericId = Number(repoId)
+        const normalizedName = fullName.toLowerCase()
+        if (namesById.has(numericId) || idsByName.has(normalizedName)) return { items, complete: false }
+        namesById.set(numericId, normalizedName)
+        idsByName.set(normalizedName, numericId)
+        items.push(numericId)
+      }
+      if (repositories.length < 100) {
+        return items.length === expectedTotalCount ? { items, complete: true } : { items, complete: false }
+      }
+    }
+    return { items, complete: false }
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "list-installation-repo-ids-error",
+        installation_id: installationId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+    return { items, complete: false }
+  }
+}

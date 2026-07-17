@@ -78,6 +78,12 @@ export {
   type PersistActivitySeatCommandResult,
 } from "./adapters/activity-seat-command-store"
 export {
+  consumeActivitySeatCommand,
+  enqueueActivitySeatCommand,
+  enqueueDueActivitySeatCommands,
+  enqueueDueSeatWork,
+} from "./adapters/activity-seat-command-consumer"
+export {
   decodeStripeSeatSubscriptionRow,
   decodeOrgSeatBillingOperationRow,
   type OrgSeatBillingOperation,

@@ -504,6 +504,11 @@ export type JobMessage =
   // comment ack; absent (the assignee path) → the legacy comment ack.
   | ({ type: "linear-agent-run"; issueId: string; sessionId?: string } & LinearJobTenantContext)
   | {
+      /** Durable consumption of one immutable GitHub activity-seat command. */
+      type: "org-activity-seat-command"
+      deliveryId: string
+    }
+  | {
       /** Durable retry for one installation-scoped Stripe seat expansion. */
       type: "org-seat-billing-reconcile"
       installationId: number

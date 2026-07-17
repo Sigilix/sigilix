@@ -60,7 +60,7 @@ import { postReviewWorkBlocked } from "@/src/index-dispatch-post-review-work"
 import { runRateLimitGate } from "@/src/index-dispatch-rate-limit-gate"
 import { handleMcpMemoryExpireJob } from "@/src/do/mcp/mcp-memory-jobs"
 import { handleConsolidateClusterJob } from "@/src/lib/memory-consolidate-cluster"
-import { recoverOrgSeatBillingOperation } from "@/src/features/billing"
+import { consumeActivitySeatCommand, recoverOrgSeatBillingOperation } from "@/src/features/billing"
 import { makeGitHubRepositoryContextReviewIdentity } from "@/src/features/repository-context"
 /**
  * Post the slash-command ack comment for `cmd` on the given PR.
@@ -879,6 +879,8 @@ export async function dispatchJob(
       })
     case "mcp-memory-expire":
       return handleMcpMemoryExpireJob(job, env)
+    case "org-activity-seat-command":
+      return consumeActivitySeatCommand(env, job)
     case "org-seat-billing-reconcile":
       return recoverOrgSeatBillingOperation(env, job)
     case "index-repo":

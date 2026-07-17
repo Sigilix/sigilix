@@ -4,12 +4,12 @@ import type { Env } from "@/src/shared/types/env"
 import { stageRepoActiveIndexSlice } from "@/src/lib/repo-active-index"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 
-const { enqueueDueOrgSeatBillingOperations } = vi.hoisted(() => ({
-  enqueueDueOrgSeatBillingOperations: vi.fn(async () => 0),
+const { enqueueDueSeatWork } = vi.hoisted(() => ({
+  enqueueDueSeatWork: vi.fn(async () => undefined),
 }))
 
 vi.mock("@/src/features/billing", () => ({
-  enqueueDueOrgSeatBillingOperations,
+  enqueueDueSeatWork,
   handleStripeWebhookRoute: vi.fn(),
 }))
 
@@ -26,7 +26,7 @@ function emptyKv(): KVNamespace {
 
 describe("scheduled — Stripe seat recovery", () => {
   beforeEach(() => {
-    enqueueDueOrgSeatBillingOperations.mockClear()
+    enqueueDueSeatWork.mockClear()
   })
 
   it("runs even when automatic repository indexing is disabled", async () => {
@@ -42,10 +42,8 @@ describe("scheduled — Stripe seat recovery", () => {
     await worker.scheduled({} as ScheduledEvent, env, ctx)
     await Promise.all(waits)
 
-    expect(enqueueDueOrgSeatBillingOperations).toHaveBeenCalledOnce()
-    expect(enqueueDueOrgSeatBillingOperations).toHaveBeenCalledWith(
-      expect.objectContaining({ OPENCLAW_STATE: env.OPENCLAW_STATE }),
-    )
+    expect(enqueueDueSeatWork).toHaveBeenCalledOnce()
+    expect(enqueueDueSeatWork).toHaveBeenCalledWith(expect.objectContaining({ OPENCLAW_STATE: env.OPENCLAW_STATE }))
   })
 
   it("sweeps expired active-index staging even when automatic indexing is disabled", async () => {

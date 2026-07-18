@@ -182,12 +182,19 @@ const reconcileSummary = (dryRun: boolean) => ({
   reposChecked: 2,
   reposMissingManifest: 1,
   reposMissingGraph: 0,
+  reposMissingCitationMetadata: 0,
+  reposMissingActiveIndex: 0,
+  reposReady: 1,
   graphReadErrors: 0,
+  activeIndexReadErrors: 0,
+  activeIndexMode: "off" as const,
+  activeIndexAvailable: true,
   enqueued: 1,
   sensitiveSkipped: 0,
   perRepoFailed: 0,
   dryRun,
   enumerationIncomplete: false,
+  ready: false,
 })
 
 describe("handleAdminReconcileRoute", () => {

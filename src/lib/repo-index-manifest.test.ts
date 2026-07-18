@@ -17,6 +17,7 @@ import {
   writeRepoIndexManifest,
   type RepoIndexManifestV1,
 } from "@/src/lib/repo-index-manifest"
+import { CITATION_CHUNK_VERSION } from "@/src/lib/chunk-core"
 import type { Env } from "@/src/shared/types/env"
 
 function makeKvStub(): {
@@ -55,6 +56,7 @@ const SAMPLE_MANIFEST: RepoIndexManifestV1 = {
   modelId: "@cf/baai/bge-base-en-v1.5",
   embeddingDim: 768,
   chunkerVersion: 1,
+  citationChunkVersion: CITATION_CHUNK_VERSION,
   windowLines: 30,
   overlapLines: 10,
 }
@@ -432,6 +434,7 @@ describe("isManifestFresh", () => {
     currentModelId: SAMPLE_MANIFEST.modelId,
     currentEmbeddingDim: SAMPLE_MANIFEST.embeddingDim,
     currentChunkerVersion: SAMPLE_MANIFEST.chunkerVersion,
+    currentCitationChunkVersion: CITATION_CHUNK_VERSION,
   }
 
   it("returns true when every freshness field matches", () => {
@@ -448,6 +451,12 @@ describe("isManifestFresh", () => {
 
   it("returns false when chunkerVersion differs (chunker code bump)", () => {
     expect(isManifestFresh({ ...base, currentChunkerVersion: 2 })).toBe(false)
+  })
+
+  it("returns false when citation metadata predates the current splitter identity", () => {
+    const legacy = { ...SAMPLE_MANIFEST }
+    delete legacy.citationChunkVersion
+    expect(isManifestFresh({ ...base, manifest: legacy })).toBe(false)
   })
 
   it("returns false when embeddingDim differs", () => {

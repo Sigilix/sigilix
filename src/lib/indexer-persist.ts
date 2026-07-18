@@ -33,7 +33,7 @@ import {
 } from "@/src/lib/repo-active-index"
 import { computeMerge, readRepoIndexVectors, writeRepoIndexVectors } from "@/src/lib/repo-index-vectors"
 import { readActiveRunId } from "@/src/lib/repo-index-active-run"
-import { CHUNK_LINES, CHUNK_OVERLAP } from "@/src/lib/chunk-core"
+import { CHUNK_LINES, CHUNK_OVERLAP, CITATION_CHUNK_VERSION } from "@/src/lib/chunk-core"
 import { walkScopedRuleFiles } from "@/src/lib/scoped-rules"
 import { writeScopedRulesManifest } from "@/src/lib/scoped-rules-kv"
 import { type TreeEntry, leaseAllows, repoRoleClassifyEnabled } from "@/src/lib/indexer-internals"
@@ -258,6 +258,7 @@ export async function persistManifest(args: PersistManifestArgs): Promise<void> 
     modelId: EMBEDDING_MODEL,
     embeddingDim: EMBEDDING_DIMENSIONS,
     chunkerVersion: args.chunkerVersion,
+    citationChunkVersion: CITATION_CHUNK_VERSION,
     windowLines: CHUNK_LINES,
     overlapLines: CHUNK_OVERLAP,
   }

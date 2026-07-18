@@ -367,9 +367,8 @@ export default {
       return handleAdminBackfillRoute(request, env)
     }
 
-    // SIG-156 PR3: authenticated manual trigger for the reconciliation cron
-    // (same routine `scheduled` runs). Reads each repo's manifest and only
-    // enqueues repos with no manifest in KV.
+    // SIG-156 PR3: manual trigger for the reconciliation cron. Repairs each
+    // repo's persisted index contract and reports fail-closed readiness.
     if (request.method === "POST" && url.pathname === "/admin/index-reconcile") {
       return handleAdminReconcileRoute(request, env)
     }
@@ -796,9 +795,10 @@ export default {
    * SIG-156 PR3: Cloudflare Workers Cron — index reconciliation tick.
    * Schedule lives in wrangler.toml `[triggers].crons`. Each tick walks
    * every installation + every repo and enqueues an index-repo job for
-   * any repo whose manifest is missing from KV. Self-heals dropped
-   * install / repos-added webhooks. Idempotent (consumer freshness-skips
-   * if the manifest landed between the cron's read and pickup).
+   * any repo whose manifest, citation metadata, active-index snapshot, or
+   * graph version is incomplete. Self-heals dropped webhooks and rollout
+   * gaps. Idempotent (consumer freshness-skips if the repair landed between
+   * the cron's read and pickup).
    *
    * Failures are swallowed — a transient GitHub/API error must not poison
    * the cron; the next tick retries.

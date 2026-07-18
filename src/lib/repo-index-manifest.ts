@@ -18,6 +18,7 @@
 //   manifest.headSha === currentHeadSha &&
 //   manifest.modelId === EMBEDDING_MODEL &&
 //   manifest.chunkerVersion === CHUNKER_VERSION &&
+//   manifest.citationChunkVersion === CITATION_CHUNK_VERSION &&
 //   manifest.embeddingDim === EMBEDDING_DIMENSIONS &&
 //   manifest.owner === owner
 //
@@ -138,6 +139,12 @@ export interface RepoIndexManifestV1 {
   embeddingDim: number
   /** Chunker config version. Mismatch → re-index. */
   chunkerVersion: number
+  /**
+   * Exact splitter identity stamped on Vectorize metadata for citation
+   * verification. Optional only so pre-citation manifests remain readable;
+   * freshness requires the current value and rebuilds legacy rows.
+   */
+  citationChunkVersion?: number
   /** Chunker window line count. Captured for forensics. */
   windowLines: number
   /** Chunker overlap line count. Captured for forensics. */
@@ -223,6 +230,13 @@ function isRepoIndexManifestV1(value: unknown): value is RepoIndexManifestV1 {
   if (typeof o.modelId !== "string" || o.modelId.length === 0) return false
   if (typeof o.embeddingDim !== "number") return false
   if (typeof o.chunkerVersion !== "number") return false
+  if (
+    o.citationChunkVersion !== undefined &&
+    (typeof o.citationChunkVersion !== "number" ||
+      !Number.isSafeInteger(o.citationChunkVersion) ||
+      o.citationChunkVersion <= 0)
+  )
+    return false
   if (typeof o.windowLines !== "number") return false
   if (typeof o.overlapLines !== "number") return false
   // Additive optional field: absent is valid (legacy records), present must be
@@ -369,6 +383,7 @@ export function isManifestFresh(args: {
   currentModelId: string
   currentEmbeddingDim: number
   currentChunkerVersion: number
+  currentCitationChunkVersion: number
 }): boolean {
   const m = args.manifest
   return (
@@ -376,6 +391,7 @@ export function isManifestFresh(args: {
     m.owner === args.currentOwner &&
     m.modelId === args.currentModelId &&
     m.embeddingDim === args.currentEmbeddingDim &&
-    m.chunkerVersion === args.currentChunkerVersion
+    m.chunkerVersion === args.currentChunkerVersion &&
+    m.citationChunkVersion === args.currentCitationChunkVersion
   )
 }

@@ -19,7 +19,7 @@ import {
   walkIndexableFiles,
 } from "@/src/lib/indexer-internals"
 import { readRepoIndexVectors, writeRepoIndexVectors, type RepoIndexVectorsV1 } from "@/src/lib/repo-index-vectors"
-import { chunkFile, type Chunk } from "@/src/lib/chunk-core"
+import { CITATION_CHUNK_VERSION, chunkFile, type Chunk } from "@/src/lib/chunk-core"
 import { chunkFileAst, jsTsExtOf } from "@/src/lib/ast-chunker"
 import { classifyRuleFilePath } from "@/src/lib/scoped-rules"
 import { mapWithConcurrency } from "@/src/shared/util/bounded-concurrency"
@@ -642,7 +642,8 @@ function canIncrementFromManifest(manifest: RepoIndexManifestV1, owner: string, 
     manifest.owner === owner &&
     manifest.modelId === EMBEDDING_MODEL &&
     manifest.embeddingDim === EMBEDDING_DIMENSIONS &&
-    manifest.chunkerVersion === chunkerVersion
+    manifest.chunkerVersion === chunkerVersion &&
+    manifest.citationChunkVersion === CITATION_CHUNK_VERSION
   )
 }
 

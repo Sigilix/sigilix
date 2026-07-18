@@ -11,6 +11,7 @@ import type { RepoActiveIndexBuiltMode, RepoActiveIndexSnapshotV1 } from "@/src/
 import { repoIndexManifestKey, type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
 import { repoIndexVectorsKey, type RepoIndexVectorsV1 } from "@/src/lib/repo-index-vectors"
 import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from "@/src/shared/adapters/model"
+import { CITATION_CHUNK_VERSION } from "@/src/lib/chunk-core"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
 
@@ -92,6 +93,7 @@ export function seedIndexedRepo(kv: Map<string, string>, manifestOver: Partial<R
     modelId: EMBEDDING_MODEL,
     embeddingDim: EMBEDDING_DIMENSIONS,
     chunkerVersion: 2,
+    citationChunkVersion: CITATION_CHUNK_VERSION,
     windowLines: 30,
     overlapLines: 10,
     // SIG-422: callers can override e.g. `headSha` to seed a manifest that is

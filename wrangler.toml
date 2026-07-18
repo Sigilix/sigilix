@@ -661,7 +661,7 @@ SIGILIX_REPOSITORY_CONTEXT_API = "on"
 
 # Build immutable repository-ID active-vector snapshots alongside the legacy
 # index. Shadow never changes retrieval and falls back to legacy publication.
-SIGILIX_REPO_ACTIVE_INDEX_MODE = "shadow"
+SIGILIX_REPO_ACTIVE_INDEX_MODE = "on"
 
 # SIG-138 code/dependency graph (Greptile-parity). Both default OFF.
 #   SIGILIX_GRAPH_INDEX     "off" | "shadow" | "on"  — graph WRITER in the

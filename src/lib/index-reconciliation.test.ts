@@ -28,6 +28,7 @@ import { listAppInstallationIds, listInstallationRepoFullNames } from "@/src/sha
 import { enqueueIndexJobsForRepos } from "@/src/lib/index-producer"
 import { readRepoIndexManifest } from "@/src/lib/repo-index-manifest"
 import { debugActiveGraphVersion } from "@/src/lib/repo-graph-client"
+import { CITATION_CHUNK_VERSION } from "@/src/lib/chunk-core"
 import type { Env } from "@/src/shared/types/env"
 
 const mockListInstalls = vi.mocked(listAppInstallationIds)
@@ -40,7 +41,7 @@ const env = { GITHUB_APP_ID: "1", GITHUB_PRIVATE_KEY: "k", OPENCLAW_STATE: {} } 
 const ok = <T>(items: T[]) => ({ items, complete: true })
 
 // Minimal manifest shape — the reconciler only cares about kind:"ok" vs not.
-const okManifest = () => ({
+const okManifest = (overrides: Record<string, unknown> = {}) => ({
   kind: "ok" as const,
   manifest: {
     v: 1 as const,
@@ -55,8 +56,10 @@ const okManifest = () => ({
     modelId: "m",
     embeddingDim: 768,
     chunkerVersion: 1,
+    citationChunkVersion: CITATION_CHUNK_VERSION,
     windowLines: 80,
     overlapLines: 16,
+    ...overrides,
   },
 })
 
@@ -165,6 +168,87 @@ describe("runIndexReconciliation", () => {
     expect(mockEnqueue).not.toHaveBeenCalled()
   })
 
+  it("reports and enqueues manifests that predate citation-safe chunk metadata", async () => {
+    mockListInstalls.mockResolvedValue(ok([111]))
+    mockListRepos.mockResolvedValueOnce(ok(["o/a"]))
+    mockReadManifest.mockResolvedValueOnce(okManifest({ citationChunkVersion: undefined }))
+    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+
+    const out = await runIndexReconciliation(env, { dryRun: false })
+
+    expect(out).toMatchObject({
+      reposMissingCitationMetadata: 1,
+      reposMissingActiveIndex: 0,
+      reposReady: 0,
+      ready: false,
+      enqueued: 1,
+    })
+    expect(mockEnqueue).toHaveBeenCalledWith(expect.objectContaining({ repositories: [{ full_name: "o/a" }] }))
+  })
+
+  it("requires an exact on-built active index and tenant copy when writer mode is on", async () => {
+    const githubRepoId = 42
+    const manifest = okManifest({
+      githubRepoId,
+      activeIndex: { version: 1, githubRepoId, builtMode: "shadow", byPath: {} },
+    })
+    const raw = JSON.stringify(manifest.manifest)
+    const activeEnv = {
+      ...env,
+      OPENCLAW_REPO_ACTIVE_INDEX_MODE: "on",
+      SIGILIX_PLATFORM_DB: {},
+      OPENCLAW_STATE: { get: vi.fn(async () => raw) },
+    } as unknown as Env
+    mockListInstalls.mockResolvedValue(ok([111]))
+    mockListRepos.mockResolvedValueOnce(ok(["o/a"]))
+    mockReadManifest.mockResolvedValueOnce(manifest)
+    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+
+    const out = await runIndexReconciliation(activeEnv, { dryRun: false })
+
+    expect(out).toMatchObject({
+      activeIndexMode: "on",
+      activeIndexAvailable: true,
+      reposMissingCitationMetadata: 0,
+      reposMissingActiveIndex: 1,
+      reposReady: 0,
+      ready: false,
+      enqueued: 1,
+    })
+  })
+
+  it("reports fail-closed readiness only after every repo has current citations and an exact on snapshot", async () => {
+    const githubRepoId = 42
+    const manifest = okManifest({
+      githubRepoId,
+      activeIndex: { version: 1, githubRepoId, builtMode: "on", byPath: {} },
+    })
+    const raw = JSON.stringify(manifest.manifest)
+    const activeEnv = {
+      ...env,
+      OPENCLAW_REPO_ACTIVE_INDEX_MODE: "on",
+      SIGILIX_PLATFORM_DB: {},
+      OPENCLAW_STATE: { get: vi.fn(async () => raw) },
+    } as unknown as Env
+    mockListInstalls.mockResolvedValue(ok([111]))
+    mockListRepos.mockResolvedValueOnce(ok(["o/a"]))
+    mockReadManifest.mockResolvedValueOnce(manifest)
+
+    const out = await runIndexReconciliation(activeEnv, { dryRun: true })
+
+    expect(out).toMatchObject({
+      activeIndexMode: "on",
+      activeIndexAvailable: true,
+      reposMissingCitationMetadata: 0,
+      reposMissingActiveIndex: 0,
+      activeIndexReadErrors: 0,
+      reposReady: 1,
+      ready: true,
+      enqueued: 0,
+    })
+    expect(mockEnqueue).not.toHaveBeenCalled()
+  })
+
   it("enqueues repos whose manifest is fresh but graph active version is missing (SIG-155)", async () => {
     mockListInstalls.mockResolvedValue(ok([111]))
     mockListRepos.mockResolvedValueOnce(ok(["o/a", "o/b"]))
@@ -230,6 +314,59 @@ describe("runIndexReconciliation", () => {
 
     expect(out.reposMissingGraph).toBe(0)
     expect(out.graphReadErrors).toBe(1)
+    expect(mockEnqueue).not.toHaveBeenCalled()
+  })
+
+  it("fails closed without queueing when the active-index tenant copy cannot be read", async () => {
+    const githubRepoId = 42
+    const activeEnv = {
+      ...env,
+      OPENCLAW_REPO_ACTIVE_INDEX_MODE: "on",
+      SIGILIX_PLATFORM_DB: {},
+      OPENCLAW_STATE: { get: vi.fn(async () => Promise.reject(new Error("KV transient"))) },
+    } as unknown as Env
+    mockListInstalls.mockResolvedValue(ok([111]))
+    mockListRepos.mockResolvedValueOnce(ok(["o/a"]))
+    mockReadManifest.mockResolvedValueOnce(
+      okManifest({
+        githubRepoId,
+        citationChunkVersion: undefined,
+        activeIndex: { version: 1, githubRepoId, builtMode: "on", byPath: {} },
+      }),
+    )
+
+    const out = await runIndexReconciliation(activeEnv, { dryRun: false })
+
+    expect(out).toMatchObject({
+      reposMissingCitationMetadata: 1,
+      activeIndexReadErrors: 1,
+      reposReady: 0,
+      enumerationIncomplete: true,
+      ready: false,
+      enqueued: 0,
+    })
+    expect(mockEnqueue).not.toHaveBeenCalled()
+  })
+
+  it("fails closed without queueing when on-mode lacks its D1 writer dependency", async () => {
+    const activeEnv = {
+      ...env,
+      OPENCLAW_REPO_ACTIVE_INDEX_MODE: "on",
+    } as unknown as Env
+    mockListInstalls.mockResolvedValue(ok([111]))
+    mockListRepos.mockResolvedValueOnce(ok(["o/a"]))
+    mockReadManifest.mockResolvedValueOnce(okManifest({ citationChunkVersion: undefined }))
+
+    const out = await runIndexReconciliation(activeEnv, { dryRun: false })
+
+    expect(out).toMatchObject({
+      activeIndexAvailable: false,
+      reposMissingCitationMetadata: 1,
+      reposMissingActiveIndex: 1,
+      reposReady: 0,
+      ready: false,
+      enqueued: 0,
+    })
     expect(mockEnqueue).not.toHaveBeenCalled()
   })
 

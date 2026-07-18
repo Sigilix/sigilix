@@ -68,6 +68,14 @@ export function repoRoleClassifyEnabled(env: Pick<Env, "OPENCLAW_REPO_ROLE_CLASS
 
 export const MAX_FILES_PER_JOB = 1000
 
+/**
+ * Stop starting new files after ten minutes so the queue invocation keeps a
+ * five-minute reserve below Cloudflare's hard fifteen-minute wall. The
+ * remaining chunk/vector buffers are bounded by EMBED_BATCH / UPSERT_BATCH;
+ * callers stage the slice only after those buffers are durably drained.
+ */
+export const INDEX_JOB_PROCESSING_BUDGET_MS = 10 * 60 * 1000
+
 const SKIP_DIRS = new Set([
   "node_modules",
   ".git",

@@ -14,6 +14,7 @@
 import { describe, expect, it } from "vitest"
 import {
   CHUNKER_VERSION,
+  INDEX_JOB_PROCESSING_BUDGET_MS,
   MAX_FILES_PER_JOB,
   chunkFile,
   chunkId,
@@ -35,6 +36,9 @@ describe("CHUNKER_VERSION constant", () => {
   })
   it("MAX_FILES_PER_JOB is 1000 per the ARC-235 spec", () => {
     expect(MAX_FILES_PER_JOB).toBe(1000)
+  })
+  it("reserves five minutes below the queue consumer wall limit", () => {
+    expect(INDEX_JOB_PROCESSING_BUDGET_MS).toBe(10 * 60 * 1000)
   })
 })
 

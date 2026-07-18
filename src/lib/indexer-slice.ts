@@ -42,6 +42,8 @@ interface ProcessSliceArgs {
   runId: string
   files: ReadonlyArray<IndexableFile>
   astChunking: boolean
+  /** Absolute wall-clock deadline after which no additional file may start. */
+  deadlineMs?: number
   /**
    * SIG-423: whether this slice writes per-file graph rows to the RepoGraphDO.
    * Defaults to `true` (the full-tree bootstrap/shard path, whose run is later
@@ -57,6 +59,8 @@ interface ProcessSliceArgs {
 }
 
 export interface ProcessSliceResult {
+  /** Contiguous prefix of `files` fully drained to durable vector writes. */
+  processedFileCount: number
   /** Total chunks upserted across the slice. */
   chunkCount: number
   /** Path → ordered chunk ids accumulated for this slice. Used by
@@ -85,8 +89,23 @@ export async function processSlice(args: ProcessSliceArgs): Promise<ProcessSlice
   let astChunkFiles = 0
   let lineChunkFiles = 0
   let parseFallbackFiles = 0
+  let processedFileCount = 0
 
   for (const file of files) {
+    if (processedFileCount > 0 && args.deadlineMs !== undefined && Date.now() >= args.deadlineMs) {
+      console.log(
+        JSON.stringify({
+          event: "index-slice-deadline-reached",
+          owner,
+          repo,
+          run_id: runId,
+          processed_files: processedFileCount,
+          requested_files: files.length,
+          remaining_files: files.length - processedFileCount,
+        }),
+      )
+      break
+    }
     let content: string | null = null
     try {
       content = await client.getFileContent(owner, repo, file.path, headSha)
@@ -105,9 +124,13 @@ export async function processSlice(args: ProcessSliceArgs): Promise<ProcessSlice
           err: err instanceof Error ? err.message : String(err),
         }),
       )
+      processedFileCount += 1
       continue
     }
-    if (content === null) continue
+    if (content === null) {
+      processedFileCount += 1
+      continue
+    }
 
     // SIG-138: graph write is best-effort and additive — any error here
     // logs + continues; the embedding/upsert pipeline is unaffected.
@@ -185,6 +208,7 @@ export async function processSlice(args: ProcessSliceArgs): Promise<ProcessSlice
         await dualWriteLexical(env, upBatch) // SIG-45 — soft lexical mirror
       }
     }
+    processedFileCount += 1
   }
 
   // Drain remaining chunks.
@@ -220,7 +244,7 @@ export async function processSlice(args: ProcessSliceArgs): Promise<ProcessSlice
     }),
   )
 
-  return { chunkCount: totalChunks, idsByPath }
+  return { processedFileCount, chunkCount: totalChunks, idsByPath }
 }
 
 interface VectorizeRecord {

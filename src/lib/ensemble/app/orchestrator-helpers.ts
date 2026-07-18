@@ -152,6 +152,7 @@ export function createEnsembleTelemetrySkeleton(args: {
       droppedForFailedInlineGroundingValidation: 0,
       droppedForFailedAbsenceGroundingValidation: 0,
       droppedForFailedWindowBlindnessValidation: 0,
+      droppedForFailedDiffConsistencyValidation: 0,
       droppedForFailedSecurityGroundingValidation: 0,
       droppedForFailedSecurityUsageValidation: 0,
     },

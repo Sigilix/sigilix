@@ -25,6 +25,7 @@ import { parsePerfValidatorMode } from "./domain/gates/validate-perf-finding"
 import { parseInlineGroundingValidatorMode } from "./domain/gates/validate-inline-grounding"
 import { parseAbsenceClaimValidatorMode } from "./domain/gates/validate-absence-grounding"
 import { parseWindowBlindnessValidatorMode } from "./domain/gates/validate-window-blindness"
+import { parseDiffConsistencyValidatorMode } from "./domain/gates/validate-diff-consistency"
 import { parseSecurityGroundingValidatorMode } from "./domain/gates/validate-security-grounding"
 import { parseSecurityUsageValidatorMode } from "./domain/gates/validate-security-usage"
 import { parseReceiptJoinMode } from "@/src/lib/verification/verify-finding-receipt"
@@ -155,6 +156,7 @@ export interface EnsembleConfigEnv {
   OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE?: string | undefined
   OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE?: string | undefined
   OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE?: string | undefined
+  SIGILIX_DIFF_CONSISTENCY_VALIDATOR_MODE?: string | undefined
   OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE?: string | undefined
   OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE?: string | undefined
   // feature-flag / mode reads (PR 5b)
@@ -278,6 +280,7 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       inlineGroundingValidatorMode: parseInlineGroundingValidatorMode(env.OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE),
       absenceClaimValidatorMode: parseAbsenceClaimValidatorMode(env.OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE),
       windowBlindnessValidatorMode: parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE),
+      diffConsistencyValidatorMode: parseDiffConsistencyValidatorMode(env.SIGILIX_DIFF_CONSISTENCY_VALIDATOR_MODE),
       securityGroundingValidatorMode: parseSecurityGroundingValidatorMode(
         env.OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE,
       ),

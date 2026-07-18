@@ -60,6 +60,7 @@ export interface FindingTrust {
     | "do-race"
     | "tests-coverage"
     | "window-blindness"
+    | "diff-consistency"
     | "refutation-survival"
     // SIG-488 (recall #5): a sev>=4 finding the vague-prefix / uncited-testing
     // HARD-DROP heuristic would delete, demoted to a P2 note instead of dropped.

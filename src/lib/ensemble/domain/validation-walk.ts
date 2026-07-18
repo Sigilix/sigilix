@@ -35,6 +35,7 @@ import { evaluatePerfFinding, perfFindingIsSelfOriginated } from "./gates/valida
 import { evaluateInlineGrounding } from "./gates/validate-inline-grounding"
 import { evaluateAbsenceGrounding } from "./gates/validate-absence-grounding"
 import { evaluateWindowBlindness } from "./gates/validate-window-blindness"
+import { evaluateDiffConsistency } from "./gates/validate-diff-consistency"
 import { evaluateSecurityGrounding } from "./gates/validate-security-grounding"
 import { evaluateSecurityUsage } from "./gates/validate-security-usage"
 import { annotateFindingTrust } from "./gates/trust-ledger-thread"
@@ -826,6 +827,42 @@ function applyDemoteGates(
         if (args.trustLedgerEnabled)
           annotateFindingTrust(workingFinding, {
             demoteReason: "window-blindness",
+          })
+        return { kind: "proceed", workingFinding, rewroteRange }
+      }
+      // shadow mode: fall through and keep the finding inline.
+    }
+  }
+
+  // SIG-602 v1: diff-consistency gate. A finding whose OWN claim is
+  // DETERMINISTICALLY CONTRADICTED by the diff or its own body — a "missing"
+  // file that IS in the PR, an "exported" Go symbol whose identifier is
+  // lower-case, or a headline that contradicts its explanation — is
+  // trust-demoted while preserving inline visibility when anchorable. Reuses
+  // `ctx.reviewablePaths` + `args.addedLineTextByLine` already threaded above;
+  // needs no new context. FP-safe: every ambiguity keeps (see the gate module).
+  //
+  // PLACEMENT mirrors the grounding blocks above (after the hard-drop gates +
+  // anchor repair, so the demote routes `workingFinding` with the repaired
+  // anchor). `off` skips the gate; `shadow` counts + telemeters and keeps
+  // inline; only `enforce` trust-demotes. No score floor — a provably-false
+  // P0/P1 is a false positive, not a real P0/P1, and is trust-demoted too.
+  if (args.diffConsistencyValidatorMode !== "off") {
+    const dcDecision = evaluateDiffConsistency(workingFinding, {
+      reviewablePaths: ctx.reviewablePaths,
+      addedLineTextByLine: args.addedLineTextByLine,
+    })
+    if (!dcDecision.keep) {
+      const demoted = args.diffConsistencyValidatorMode === "enforce"
+      state.droppedForFailedDiffConsistencyValidation++
+      args.onDiffConsistencyFindingDropped?.(workingFinding, {
+        reason: dcDecision.reason,
+        dropped: false,
+      })
+      if (demoted) {
+        if (args.trustLedgerEnabled)
+          annotateFindingTrust(workingFinding, {
+            demoteReason: "diff-consistency",
           })
         return { kind: "proceed", workingFinding, rewroteRange }
       }

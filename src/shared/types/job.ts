@@ -469,6 +469,8 @@ export type JobMessage =
         filesDone: number
         /** Accumulated count of chunks upserted so far in this run. */
         chunksDone: number
+        /** Completed queue invocations before this continuation. */
+        shardsDone?: number
         /** Stable run id: sha256(owner|repo|headSha|modelId|chunkerVersion).slice(0,16). */
         runId: string
       }

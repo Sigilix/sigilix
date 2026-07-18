@@ -25,6 +25,7 @@ import {
 } from "./indexer-active-index"
 import {
   MAX_FILES_PER_JOB,
+  INDEX_JOB_PROCESSING_BUDGET_MS,
   effectiveChunkerVersion,
   astChunkingEnabled,
   computeRunId,
@@ -48,6 +49,7 @@ export type { Chunk } from "./chunk-core"
 export {
   CHUNKER_VERSION,
   MAX_FILES_PER_JOB,
+  INDEX_JOB_PROCESSING_BUDGET_MS,
   effectiveChunkerVersion,
   astChunkingEnabled,
   computeRunId,
@@ -78,13 +80,14 @@ interface ConsumerArgs {
 }
 
 export async function handleIndexRepoJob(args: ConsumerArgs): Promise<void> {
+  const deadlineMs = Date.now() + INDEX_JOB_PROCESSING_BUDGET_MS
   if (args.job.shard !== undefined) {
-    return handleShardJob(args.job, args.job.shard, args.env)
+    return handleShardJob(args.job, args.job.shard, args.env, deadlineMs)
   }
-  return handleBootstrapJob(args.job, args.env)
+  return handleBootstrapJob(args.job, args.env, deadlineMs)
 }
 
-async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void> {
+async function handleBootstrapJob(job: IndexRepoMessage, env: Env, deadlineMs: number): Promise<void> {
   const { owner, repo, installationId, reason } = job
   const astOn = astChunkingEnabled(env)
 
@@ -401,9 +404,9 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     return
   }
 
-  const sliceHi = Math.min(totalFiles, MAX_FILES_PER_JOB)
-  const sliceFiles = indexableFiles.slice(0, sliceHi)
-  const { chunkCount, idsByPath } = await processSlice({
+  const plannedSliceHi = Math.min(totalFiles, MAX_FILES_PER_JOB)
+  const sliceFiles = indexableFiles.slice(0, plannedSliceHi)
+  const { processedFileCount, chunkCount, idsByPath } = await processSlice({
     client,
     env,
     owner,
@@ -414,7 +417,10 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     runId,
     files: sliceFiles,
     astChunking: astOn,
+    deadlineMs,
   })
+  if (processedFileCount <= 0) throw new Error("indexer slice made no progress")
+  const sliceHi = processedFileCount
 
   // A stale vector-ledger merge must stop this run before D1 admits the slice,
   // publish, or enqueue. Keep D1 staging below both processSlice (which durably
@@ -452,11 +458,11 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     lo: 0,
     hi: sliceHi,
     idsByPath,
-    finalize: totalFiles <= MAX_FILES_PER_JOB,
+    finalize: sliceHi >= totalFiles,
   })
   if (activeSlice.runSealed && activeSlice.activeIndex === undefined) return
 
-  if (totalFiles > MAX_FILES_PER_JOB) {
+  if (sliceHi < totalFiles) {
     // Hand off to the next continuation shard. Final shard will write
     // the manifest with cumulative totals; this bootstrap doesn't.
     if (!(await leaseAllows(env, owner, stateRepo, runId))) {
@@ -481,14 +487,15 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       activeIndexMode,
       ...(activeSlice.bookmark ? { activeIndexBookmark: activeSlice.bookmark } : {}),
       ...(target.isDefault ? {} : { branch: target.branch }),
-      lo: MAX_FILES_PER_JOB,
-      hi: Math.min(MAX_FILES_PER_JOB * 2, totalFiles),
+      lo: sliceHi,
+      hi: Math.min(sliceHi + MAX_FILES_PER_JOB, totalFiles),
       headSha,
       treeSha,
       defaultBranch: target.defaultBranch,
       totalFiles,
       filesDone: sliceHi,
       chunksDone: chunkCount,
+      shardsDone: 1,
       runId,
     })
     return
@@ -627,6 +634,7 @@ async function handleShardJob(
   job: IndexRepoMessage,
   shard: NonNullable<IndexRepoMessage["shard"]>,
   env: Env,
+  deadlineMs: number,
 ): Promise<void> {
   const { owner, repo, installationId, reason } = job
   const resolvedDefaultBranch = shard.defaultBranch ?? job.branch ?? null
@@ -653,6 +661,10 @@ async function handleShardJob(
   const namespace = target.namespace
   const astOn = astChunkingEnabled(env)
   const activeIndexMode = activeIndexModeForContinuation(job.activeIndexMode, target.isDefault)
+  const completedShardCount =
+    typeof shard.shardsDone === "number" && Number.isSafeInteger(shard.shardsDone) && shard.shardsDone >= 1
+      ? shard.shardsDone
+      : Math.max(1, Math.ceil(shard.lo / MAX_FILES_PER_JOB))
 
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
     console.log(
@@ -785,7 +797,11 @@ async function handleShardJob(
   await writeActiveRun(env, owner, stateRepo, shard.runId)
 
   const sliceFiles = indexableFiles.slice(shard.lo, shard.hi)
-  const { chunkCount: sliceChunkCount, idsByPath } = await processSlice({
+  const {
+    processedFileCount,
+    chunkCount: sliceChunkCount,
+    idsByPath,
+  } = await processSlice({
     client,
     env,
     owner,
@@ -796,7 +812,10 @@ async function handleShardJob(
     runId: shard.runId,
     files: sliceFiles,
     astChunking: astOn,
+    deadlineMs,
   })
+  if (processedFileCount <= 0) throw new Error("indexer slice made no progress")
+  const actualHi = shard.lo + processedFileCount
 
   // Keep D1 staging below this ledger write for the same durability invariant
   // as bootstrap: an admitted slice may reference only already-written IDs.
@@ -831,19 +850,18 @@ async function handleShardJob(
     runId: shard.runId,
     totalFiles: shard.totalFiles,
     lo: shard.lo,
-    hi: shard.hi,
+    hi: actualHi,
     idsByPath,
     ...(job.activeIndexBookmark ? { bookmark: job.activeIndexBookmark } : {}),
-    finalize: shard.hi >= shard.totalFiles,
+    finalize: actualHi >= shard.totalFiles,
   })
   if (activeSlice.runSealed && activeSlice.activeIndex === undefined) return
 
-  const cumulativeFiles = shard.filesDone + sliceFiles.length
+  const cumulativeFiles = shard.filesDone + processedFileCount
   const cumulativeChunks = shard.chunksDone + sliceChunkCount
+  const currentShardCount = completedShardCount + 1
 
-  if (shard.hi >= shard.totalFiles) {
-    // Final shard — derive shardCount from the chain length.
-    const shardCount = Math.ceil(shard.totalFiles / MAX_FILES_PER_JOB)
+  if (actualHi >= shard.totalFiles) {
     // SIG-138: read activeRunId explicitly so we can reuse it for the graph
     // commit check below without a second KV read (don't re-read KV).
     const activeRunId = await readActiveRunId(env, owner, stateRepo)
@@ -875,7 +893,7 @@ async function handleShardJob(
       runId: shard.runId,
       fileCount: cumulativeFiles,
       chunkCount: publishedChunkCount,
-      shardCount,
+      shardCount: currentShardCount,
       chunkerVersion: effectiveChunkerVersion(astOn),
       ...(activeSlice.activeIndex ? { activeIndex: activeSlice.activeIndex } : {}),
       roleClassify: { client, treeEntries: tree.tree },
@@ -888,7 +906,7 @@ async function handleShardJob(
         run_id: shard.runId,
         file_count: cumulativeFiles,
         chunk_count: publishedChunkCount,
-        shard_count: shardCount,
+        shard_count: currentShardCount,
       }),
     )
     // SIG-138: commit the graph version after a successful manifest write,
@@ -954,21 +972,18 @@ async function handleShardJob(
     activeIndexMode,
     ...(activeSlice.bookmark ? { activeIndexBookmark: activeSlice.bookmark } : {}),
     ...(target.isDefault ? {} : { branch: target.branch }),
-    lo: shard.hi,
-    hi: Math.min(shard.hi + MAX_FILES_PER_JOB, shard.totalFiles),
+    lo: actualHi,
+    hi: Math.min(actualHi + MAX_FILES_PER_JOB, shard.totalFiles),
     headSha: shard.headSha,
     treeSha: shard.treeSha,
     defaultBranch: target.defaultBranch,
     totalFiles: shard.totalFiles,
     filesDone: cumulativeFiles,
     chunksDone: cumulativeChunks,
+    shardsDone: currentShardCount,
     runId: shard.runId,
   })
 }
-
-// ---------------------------------------------------------------------
-// Auth helper (mirrors the pattern used elsewhere in src/lib/)
-// ---------------------------------------------------------------------
 
 async function buildClient(env: Env, installationId: number): Promise<GitHubClient> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {

@@ -71,6 +71,7 @@ interface EnqueueNextShardArgs {
   totalFiles: number
   filesDone: number
   chunksDone: number
+  shardsDone: number
   runId: string
 }
 
@@ -100,6 +101,7 @@ export async function enqueueNextShard(env: Env, args: EnqueueNextShardArgs): Pr
       totalFiles: args.totalFiles,
       filesDone: args.filesDone,
       chunksDone: args.chunksDone,
+      shardsDone: args.shardsDone,
       runId: args.runId,
     },
   })

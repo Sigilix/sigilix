@@ -69,6 +69,7 @@ describe("enqueueNextShard — pinned active-index state", () => {
       totalFiles: 2500,
       filesDone: 1000,
       chunksDone: 1200,
+      shardsDone: 1,
       runId: "0123456789abcdef",
     })
 
@@ -76,7 +77,7 @@ describe("enqueueNextShard — pinned active-index state", () => {
     expect(send.mock.calls[0]?.[0]).toMatchObject({
       activeIndexMode: "shadow",
       activeIndexBookmark: "bookmark-1",
-      shard: { runId: "0123456789abcdef" },
+      shard: { runId: "0123456789abcdef", shardsDone: 1 },
     })
   })
 
@@ -97,6 +98,7 @@ describe("enqueueNextShard — pinned active-index state", () => {
       totalFiles: 2,
       filesDone: 1,
       chunksDone: 1,
+      shardsDone: 1,
       runId: "run-1",
     })
 

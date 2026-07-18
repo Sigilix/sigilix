@@ -180,9 +180,9 @@ describe("evaluateDiffConsistency — (3) export-status-contradicted (Go)", () =
       headline: "the exported function `parseOrder` should be documented",
       body: "`parseOrder` is exported.",
     })
-    expect(evaluateDiffConsistency(f, ctx({ addedLineTextByLine: new Map([[PATH, new Map([[10, "parseOrder"]])]]) }))).toEqual(
-      { keep: true },
-    )
+    expect(
+      evaluateDiffConsistency(f, ctx({ addedLineTextByLine: new Map([[PATH, new Map([[10, "parseOrder"]])]]) })),
+    ).toEqual({ keep: true })
   })
 
   it("KEEPS the overloaded word 'public' (only exported/unexported are unambiguous Go terms)", () => {

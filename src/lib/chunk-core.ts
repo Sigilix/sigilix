@@ -185,5 +185,28 @@ export function chunkFile(path: string, content: string): Chunk[] {
     })
     if (end === lines.length) break
   }
-  return chunks
+  return dedupeExactChunks(chunks)
+}
+
+/** Overlapping oversized windows can reproduce the same source fragment.
+ * Keep the first exact tuple: both copies map to the same Vectorize ID, so
+ * retaining multiplicity only repeats embedding work and violates the active
+ * index's unique-membership contract. A distinct fragment index, range,
+ * content, or path remains a distinct chunk. */
+function dedupeExactChunks(chunks: readonly Chunk[]): Chunk[] {
+  const seen = new Set<string>()
+  const unique: Chunk[] = []
+  for (const chunk of chunks) {
+    const identity = JSON.stringify([
+      chunk.path,
+      chunk.lineStart,
+      chunk.lineEnd,
+      chunk.content,
+      chunk.fragmentIndex ?? null,
+    ])
+    if (seen.has(identity)) continue
+    seen.add(identity)
+    unique.push(chunk)
+  }
+  return unique
 }

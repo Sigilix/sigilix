@@ -134,6 +134,40 @@ beforeEach(() => {
 })
 
 describe("handleIndexRepoJob — immutable active index across a shard chain", () => {
+  it("publishes one active membership entry for an identical overlap fragment", async () => {
+    const content = [
+      ...Array.from({ length: 20 }, (_, index) => `prefix-${index}`.padEnd(64, "a")),
+      ...Array.from({ length: 6 }, (_, index) => `shared-${index}`.padEnd(180, "b")),
+      ...Array.from({ length: 24 }, (_, index) => `suffix-${index}`.padEnd(180, "c")),
+    ].join("\n")
+    mockGetRepoTree.mockResolvedValue({
+      tree: [{ path: "theme.config.tsx", type: "blob", size: content.length }],
+      truncated: false,
+    })
+    mockGetFileContent.mockResolvedValue(content)
+    const activeIndexDb = await makeActiveIndexDb()
+    const { env, kv } = makeEnv(activeIndexDb)
+
+    await handleIndexRepoJob({ job: bootstrapJob(), env })
+
+    const stored = kv.get(repoIndexManifestKey("Sigilix", "sigilix"))
+    expect(stored).toBeTruthy()
+    const manifest = JSON.parse(stored!) as RepoIndexManifestV1
+    const ids = manifest.activeIndex?.byPath["theme.config.tsx"] ?? []
+    expect(ids.length).toBeGreaterThan(0)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(manifest.chunkCount).toBe(ids.length)
+    const upsertedIds = mockVectorizeUpsert.mock.calls.flatMap((call) =>
+      (call[0] as Array<{ id: string }>).map((record) => record.id),
+    )
+    expect(new Set(upsertedIds).size).toBe(upsertedIds.length)
+    await expect(
+      activeIndexDb
+        .prepare("SELECT completed_through, total_files, sealed, invalidated FROM repo_active_index_run")
+        .first(),
+    ).resolves.toEqual({ completed_through: 1, total_files: 1, sealed: 1, invalidated: 0 })
+  })
+
   it("repairs a sealed divergent final replay with the canonical snapshot's chunk count", async () => {
     mockGetRepoTree.mockResolvedValue({
       tree: [{ path: "src/index.ts", type: "blob", size: 100 }],

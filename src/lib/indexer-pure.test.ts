@@ -301,6 +301,24 @@ describe("chunkFile", () => {
     }
     expect(cursor).toBeGreaterThan(27) // covered through line 27
   })
+
+  it("emits byte-identical overlap fragments only once", () => {
+    const lines = [
+      ...Array.from({ length: 20 }, (_, index) => `prefix-${index}`.padEnd(64, "a")),
+      ...Array.from({ length: 6 }, (_, index) => `shared-${index}`.padEnd(180, "b")),
+      ...Array.from({ length: 24 }, (_, index) => `suffix-${index}`.padEnd(180, "c")),
+    ]
+
+    const chunks = chunkFile("overlap.ts", lines.join("\n"))
+    const identities = chunks.map((chunk) =>
+      JSON.stringify([chunk.path, chunk.lineStart, chunk.lineEnd, chunk.content, chunk.fragmentIndex ?? null]),
+    )
+
+    expect(new Set(identities).size).toBe(chunks.length)
+    for (let line = 1; line <= lines.length; line += 1) {
+      expect(chunks.some((chunk) => chunk.lineStart <= line && chunk.lineEnd >= line)).toBe(true)
+    }
+  })
 })
 
 describe("splitOversizedWindow", () => {

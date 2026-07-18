@@ -156,6 +156,8 @@ export interface EnsembleConfigEnv {
   OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE?: string | undefined
   OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE?: string | undefined
   OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE?: string | undefined
+  // SIG-602: sole declaration of this var (Env in shared/types/env.ts is at its
+  // file-size budget); read only via this local optional type. off|shadow|enforce.
   SIGILIX_DIFF_CONSISTENCY_VALIDATOR_MODE?: string | undefined
   OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE?: string | undefined
   OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE?: string | undefined

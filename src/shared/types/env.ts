@@ -1060,17 +1060,6 @@ export interface Env extends AwsBedrockEnv {
   // keep on any uncertainty. The deterministic backstop to PR #327's prompt fence.
   OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE?: string
 
-  // SIG-602 v1: diff-consistency gate mode. off (default) | shadow (count /
-  // telemeter the would-demote, keep inline) | enforce (demote a finding whose
-  // OWN claim is deterministically contradicted by the diff or its own body —
-  // a "missing" file that is in the PR, an "exported" Go symbol whose
-  // identifier is lower-case, or a headline that contradicts its explanation).
-  // Demote-not-drop, keep on any ambiguity. SIGILIX_-native new var — no
-  // legacy OPENCLAW_ alias exists (normalizeEnv is prefix-generic, so a
-  // SIGILIX_ value resolves without one). Operator flips via
-  // `wrangler secret put SIGILIX_DIFF_CONSISTENCY_VALIDATOR_MODE shadow`.
-  SIGILIX_DIFF_CONSISTENCY_VALIDATOR_MODE?: string
-
   // SIG-121 (SIG-109 PR B): symbol-based retrieval for the logic
   // specialist. "on" fires a second, AST-symbol-derived retrieval pass
   // that AUGMENTS the logic role's shared snapshot; any other value

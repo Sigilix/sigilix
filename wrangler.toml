@@ -681,9 +681,16 @@ SIGILIX_REPO_ACTIVE_INDEX_MODE = "on"
 # /metrics/graph showed real grounded context (nodeCount/addedCount/blast >0
 # across multi-repo PR reviews once the SIG-156 backfill landed). In "post",
 # the graph block now INJECTS context into the logic/tests/synth prompts (not
-# just telemetry). The INDEX flag stays "shadow" (`graphIndexEnabled` treats
-# "on" and "shadow" identically, so no behavior change there).
-SIGILIX_GRAPH_INDEX = "shadow"
+# just telemetry).
+# INDEX flag set to "off": in "shadow" the incremental push path writes no
+# graph rows (writeGraph:false), so the graph active-version permanently
+# diverges from the vector runId. `graphMissingForManifest` then flagged every
+# pushed repo as "graph-missing" every reconcile, forcing continuous FULL
+# repo re-embeds (~$13-20/day of Workers AI bge neurons). "off" makes the
+# missing-check return not-missing and pushes go incremental again. Retrieval
+# degrades gracefully to pure-vector. Re-enable only after the durable fix
+# (correct graphMissingForManifest comparison + content-hash skip-unchanged).
+SIGILIX_GRAPH_INDEX = "off"
 SIGILIX_GRAPH_RETRIEVAL = "post"
 
 # SIG-426: CI-failure triage → review synth (grounded inline). "off" | "shadow" |

@@ -216,6 +216,53 @@ describe("repo active-index D1 staging", () => {
     expect(withSession.mock.calls.every(([constraint]) => constraint === "first-primary")).toBe(true)
   })
 
+  it("keeps the first committed checkpoint boundary canonical across a shorter stale replay", async () => {
+    const first = await stageRepoActiveIndexSlice({
+      db,
+      githubRepoId: REPO_ID,
+      installationId: INSTALLATION_ID,
+      runId: RUN_ID,
+      totalFiles: 4,
+      lo: 0,
+      hi: 2,
+      mode: "on",
+      idsByPath: { "src/a.ts": [vectorId(1)], "src/b.ts": [vectorId(2)] },
+      nowMs: 100,
+    })
+    await stageRepoActiveIndexSlice({
+      db,
+      githubRepoId: REPO_ID,
+      installationId: INSTALLATION_ID,
+      runId: RUN_ID,
+      totalFiles: 4,
+      lo: 2,
+      hi: 4,
+      mode: "on",
+      idsByPath: { "src/c.ts": [vectorId(3)], "src/d.ts": [vectorId(4)] },
+      bookmark: first.bookmark,
+      nowMs: 200,
+    })
+
+    await expect(
+      stageRepoActiveIndexSlice({
+        db,
+        githubRepoId: REPO_ID,
+        installationId: INSTALLATION_ID,
+        runId: RUN_ID,
+        totalFiles: 4,
+        lo: 0,
+        hi: 1,
+        mode: "on",
+        idsByPath: { "src/a.ts": [vectorId(1)] },
+        bookmark: first.bookmark,
+        nowMs: 300,
+      }),
+    ).resolves.toMatchObject({ completedThrough: 4 })
+    await expect(
+      db.prepare("SELECT completed_through, invalidated FROM repo_active_index_run").first(),
+    ).resolves.toEqual({ completed_through: 4, invalidated: 0 })
+  })
+
   it("rejects a completed slice replay whose exact membership changed", async () => {
     const first = await stageRepoActiveIndexSlice({
       db,

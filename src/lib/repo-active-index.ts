@@ -31,6 +31,24 @@ export interface StageRepoActiveIndexSliceArgs {
 export interface RepoActiveIndexStageResult {
   bookmark: string | null
   completedThrough: number
+  shardCount: number
+}
+
+export interface ReadRepoActiveIndexProgressArgs {
+  db: D1Database
+  githubRepoId: number
+  installationId: number
+  runId: string
+  totalFiles: number
+  mode: RepoActiveIndexBuiltMode
+}
+
+export interface RepoActiveIndexProgress {
+  bookmark: string | null
+  chunkCount: number
+  completedThrough: number
+  sealed: boolean
+  shardCount: number
 }
 
 export interface MaterializeRepoActiveIndexArgs {
@@ -78,6 +96,11 @@ interface SliceRow {
   content_sha256: string
 }
 
+interface ProgressRow extends RunRow {
+  chunk_count: unknown
+  shard_count: unknown
+}
+
 type PartEntry = [path: string, ids: string[]]
 
 const RUN_COLUMNS =
@@ -117,6 +140,39 @@ export function parseRepoActiveIndexSnapshot(value: unknown): RepoActiveIndexSna
   }
 }
 
+/** Read the primary-owned high-water for an at-least-once queue delivery. */
+export async function readRepoActiveIndexProgress(
+  args: ReadRepoActiveIndexProgressArgs,
+): Promise<RepoActiveIndexProgress | null> {
+  validateRunIdentity(args)
+  const session = args.db.withSession("first-primary")
+  const run = await session
+    .prepare(
+      `SELECT r.*,
+        (SELECT COUNT(*) FROM repo_active_index_slice AS slice
+          WHERE slice.github_repo_id = r.github_repo_id AND slice.run_id = r.run_id) AS shard_count,
+        (SELECT COALESCE(SUM(json_array_length(json_extract(entry.value, '$[1]'))), 0)
+           FROM repo_active_index_part AS part, json_each(part.entries_json) AS entry
+          WHERE part.github_repo_id = r.github_repo_id AND part.run_id = r.run_id) AS chunk_count
+       FROM repo_active_index_run AS r WHERE r.github_repo_id = ? AND r.run_id = ?`,
+    )
+    .bind(args.githubRepoId, args.runId)
+    .first<ProgressRow>()
+  if (run === null) return null
+  assertRunMetadata(run, args)
+  assertRunUsable(run)
+  if (!validNonNegativeSafeInteger(run.chunk_count) || !validNonNegativeSafeInteger(run.shard_count)) {
+    throw new Error("repo active index progress count is malformed")
+  }
+  return {
+    bookmark: session.getBookmark() ?? run.latest_bookmark,
+    chunkCount: run.chunk_count,
+    completedThrough: run.completed_through,
+    sealed: run.sealed === 1,
+    shardCount: run.shard_count,
+  }
+}
+
 /**
  * Atomically stage one contiguous file range. The run's immutable repository,
  * installation, file-count, and rollout mode are pinned on its first slice.
@@ -144,11 +200,8 @@ export async function stageRepoActiveIndexSlice(
     assertRunMetadata(before, args)
     assertRunUsable(before)
     if (before.completed_through >= args.hi) {
-      await assertReplayMatches(session, args, parts.length, contentSha256)
-      return {
-        completedThrough: before.completed_through,
-        bookmark: session.getBookmark() ?? before.latest_bookmark ?? args.bookmark ?? null,
-      }
+      await assertReplayCompatible(session, args, parts.length, contentSha256)
+      return progressResult(session, before, args.bookmark)
     }
     if (before.completed_through !== args.lo) throw new Error("repo active index slice is out of order")
   } else if (args.lo !== 0) {
@@ -178,7 +231,9 @@ export async function stageRepoActiveIndexSlice(
         .bind(stagedBookmark, args.githubRepoId, args.runId, args.hi)
         .run()
     }
-    return { completedThrough: args.hi, bookmark: session.getBookmark() ?? stagedBookmark }
+    const staged = await readRun(session, args.githubRepoId, args.runId)
+    if (staged === null) throw new Error("repo active index run disappeared while staging")
+    return progressResult(session, staged, stagedBookmark)
   }
 
   // A concurrent primary writer may have advanced the high-water after our
@@ -189,11 +244,8 @@ export async function stageRepoActiveIndexSlice(
   assertRunMetadata(after, args)
   assertRunUsable(after)
   if (after.completed_through >= args.hi) {
-    await assertReplayMatches(session, args, parts.length, contentSha256)
-    return {
-      completedThrough: after.completed_through,
-      bookmark: session.getBookmark() ?? after.latest_bookmark ?? args.bookmark ?? null,
-    }
+    await assertReplayCompatible(session, args, parts.length, contentSha256)
+    return progressResult(session, after, args.bookmark)
   }
   throw new Error("repo active index slice is out of order")
 }
@@ -364,21 +416,25 @@ export async function deleteRepoActiveIndexByInstallationId(args: {
 }
 
 function validateStageArgs(args: StageRepoActiveIndexSliceArgs, nowMs: number): void {
-  if (!validPositiveSafeInteger(args.githubRepoId)) throw new Error("invalid GitHub repository id")
-  if (!validPositiveSafeInteger(args.installationId)) throw new Error("invalid installation id")
-  if (!RUN_ID.test(args.runId)) throw new Error("invalid repo active index run id")
-  if (!validNonNegativeSafeInteger(args.totalFiles)) throw new Error("invalid repo active index file count")
+  validateRunIdentity(args)
   if (!validNonNegativeSafeInteger(args.lo) || !validNonNegativeSafeInteger(args.hi)) {
     throw new Error("invalid repo active index slice")
   }
   if (args.lo > args.hi || args.hi > args.totalFiles || (args.lo === args.hi && args.totalFiles !== 0)) {
     throw new Error("invalid repo active index slice")
   }
-  if (!isBuiltMode(args.mode)) throw new Error("invalid repo active index rollout mode")
   if (!validNonNegativeSafeInteger(nowMs)) throw new Error("invalid repo active index timestamp")
   if (args.bookmark !== undefined && args.bookmark !== null && !validBookmark(args.bookmark)) {
     throw new Error("invalid repo active index bookmark")
   }
+}
+
+function validateRunIdentity(args: ReadRepoActiveIndexProgressArgs): void {
+  if (!validPositiveSafeInteger(args.githubRepoId)) throw new Error("invalid GitHub repository id")
+  if (!validPositiveSafeInteger(args.installationId)) throw new Error("invalid installation id")
+  if (!RUN_ID.test(args.runId)) throw new Error("invalid repo active index run id")
+  if (!validNonNegativeSafeInteger(args.totalFiles)) throw new Error("invalid repo active index file count")
+  if (!isBuiltMode(args.mode)) throw new Error("invalid repo active index rollout mode")
 }
 
 async function readRun(session: D1DatabaseSession, githubRepoId: number, runId: string): Promise<RunRow | null> {
@@ -495,7 +551,7 @@ function advanceRunStatement(
     .bind(args.hi, expiresAtMs, args.githubRepoId, args.runId, args.installationId, args.totalFiles, args.mode, args.lo)
 }
 
-function assertRunMetadata(row: RunRow, args: StageRepoActiveIndexSliceArgs): void {
+function assertRunMetadata(row: RunRow, args: ReadRepoActiveIndexProgressArgs): void {
   if (
     !validRunRow(row) ||
     row.github_repo_id !== args.githubRepoId ||
@@ -508,11 +564,29 @@ function assertRunMetadata(row: RunRow, args: StageRepoActiveIndexSliceArgs): vo
   }
 }
 
+async function progressResult(
+  session: D1DatabaseSession,
+  run: RunRow,
+  fallbackBookmark?: string | null,
+): Promise<RepoActiveIndexStageResult> {
+  if (!validRunRow(run)) throw new Error("repo active index run metadata is malformed")
+  const count = await session
+    .prepare("SELECT COUNT(*) AS count FROM repo_active_index_slice WHERE github_repo_id = ? AND run_id = ?")
+    .bind(run.github_repo_id, run.run_id)
+    .first<{ count: unknown }>()
+  if (!validNonNegativeSafeInteger(count?.count)) throw new Error("repo active index slice count is malformed")
+  return {
+    completedThrough: run.completed_through,
+    shardCount: count.count,
+    bookmark: session.getBookmark() ?? run.latest_bookmark ?? fallbackBookmark ?? null,
+  }
+}
+
 function assertRunUsable(row: RunRow): void {
   if (row.invalidated !== 0) throw new Error("repo active index run is invalidated")
 }
 
-async function assertReplayMatches(
+async function assertReplayCompatible(
   session: D1DatabaseSession,
   args: StageRepoActiveIndexSliceArgs,
   partCount: number,
@@ -525,13 +599,12 @@ async function assertReplayMatches(
     )
     .bind(args.githubRepoId, args.runId, args.lo)
     .first<SliceRow>()
-  if (
-    slice !== null &&
-    slice.slice_hi === args.hi &&
-    slice.part_count === partCount &&
-    slice.content_sha256 === contentSha256
-  ) {
-    return
+  if (slice !== null) {
+    // Deadline-based slices can end at a different file on redelivery. The
+    // first committed boundary owns the run; a stale worker fast-forwards to
+    // that high-water. Exact-boundary replays still prove full membership.
+    if (slice.slice_hi !== args.hi) return
+    if (slice.part_count === partCount && slice.content_sha256 === contentSha256) return
   }
   const invalidated = await session
     .prepare(

@@ -19,9 +19,11 @@ import {
   activeIndexModeForBootstrap,
   activeIndexModeForContinuation,
   activeIndexRunAlreadyPublished,
+  readActiveIndexProgress,
   repoActiveIndexChunkCount,
   resolveLiveGithubRepoId,
   stageActiveIndexSlice,
+  type StageActiveIndexResult,
 } from "./indexer-active-index"
 import {
   MAX_FILES_PER_JOB,
@@ -404,50 +406,10 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env, deadlineMs: n
     return
   }
 
-  const plannedSliceHi = Math.min(totalFiles, MAX_FILES_PER_JOB)
-  const sliceFiles = indexableFiles.slice(0, plannedSliceHi)
-  const { processedFileCount, chunkCount, idsByPath } = await processSlice({
-    client,
-    env,
-    owner,
-    repo,
-    stateRepo,
-    namespace,
-    headSha,
-    runId,
-    files: sliceFiles,
-    astChunking: astOn,
-    deadlineMs,
-  })
-  if (processedFileCount <= 0) throw new Error("indexer slice made no progress")
-  const sliceHi = processedFileCount
-
-  // A stale vector-ledger merge must stop this run before D1 admits the slice,
-  // publish, or enqueue. Keep D1 staging below both processSlice (which durably
-  // upserts every referenced vector) and this ledger write: completed_through
-  // certifies that the slice's referenced vector IDs already exist.
-  const vectorsResult = await persistVectorIds({
-    env,
-    owner,
-    repo: stateRepo,
-    githubRepoId,
-    runId,
-    idsByPathSlice: idsByPath,
-    isBootstrap: true,
-  })
-  if (!vectorsResult.proceed) {
-    console.warn(
-      JSON.stringify({
-        event: "index-job-skip-stale-bootstrap",
-        owner,
-        repo,
-        branch: target.isDefault ? null : target.branch,
-        run_id: runId,
-      }),
-    )
-    return
-  }
-  const activeSlice = await stageActiveIndexSlice({
+  let activeSlice: StageActiveIndexResult
+  let chunkCount = 0
+  let sliceHi = 0
+  const resumed = await readActiveIndexProgress({
     env,
     mode: activeIndexMode,
     isDefaultBranch: target.isDefault,
@@ -455,11 +417,54 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env, deadlineMs: n
     installationId,
     runId,
     totalFiles,
-    lo: 0,
-    hi: sliceHi,
-    idsByPath,
-    finalize: sliceHi >= totalFiles,
   })
+  if (resumed?.completedThrough) {
+    activeSlice = resumed
+    chunkCount = resumed.chunkCount ?? 0
+    sliceHi = resumed.completedThrough
+  } else {
+    const sliceFiles = indexableFiles.slice(0, Math.min(totalFiles, MAX_FILES_PER_JOB))
+    const processed = await processSlice({
+      client,
+      env,
+      owner,
+      repo,
+      stateRepo,
+      namespace,
+      headSha,
+      runId,
+      files: sliceFiles,
+      astChunking: astOn,
+      deadlineMs,
+    })
+    if (processed.processedFileCount <= 0) throw new Error("indexer slice made no progress")
+    chunkCount = processed.chunkCount
+    const vectorsResult = await persistVectorIds({
+      env,
+      owner,
+      repo: stateRepo,
+      githubRepoId,
+      runId,
+      idsByPathSlice: processed.idsByPath,
+      isBootstrap: true,
+    })
+    if (!vectorsResult.proceed) return
+    activeSlice = await stageActiveIndexSlice({
+      env,
+      mode: activeIndexMode,
+      isDefaultBranch: target.isDefault,
+      githubRepoId,
+      installationId,
+      runId,
+      totalFiles,
+      lo: 0,
+      hi: processed.processedFileCount,
+      idsByPath: processed.idsByPath,
+      finalize: processed.processedFileCount >= totalFiles,
+    })
+    chunkCount = activeSlice.chunkCount ?? chunkCount
+    sliceHi = activeSlice.completedThrough ?? processed.processedFileCount
+  }
   if (activeSlice.runSealed && activeSlice.activeIndex === undefined) return
 
   if (sliceHi < totalFiles) {
@@ -495,7 +500,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env, deadlineMs: n
       totalFiles,
       filesDone: sliceHi,
       chunksDone: chunkCount,
-      shardsDone: 1,
+      shardsDone: activeSlice.shardCount ?? 1,
       runId,
     })
     return
@@ -532,7 +537,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env, deadlineMs: n
     defaultBranch: target.defaultBranch,
     fileCount: sliceHi,
     chunkCount: publishedChunkCount,
-    shardCount: 1,
+    shardCount: activeSlice.shardCount ?? 1,
     chunkerVersion: effectiveChunkerVersion(astOn),
     ...(activeSlice.activeIndex ? { activeIndex: activeSlice.activeIndex } : {}),
     roleClassify: { client, treeEntries: tree.tree },
@@ -546,7 +551,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env, deadlineMs: n
       run_id: runId,
       file_count: sliceHi,
       chunk_count: publishedChunkCount,
-      shard_count: 1,
+      shard_count: activeSlice.shardCount ?? 1,
     }),
   )
   // SIG-138: commit the graph version after a successful manifest write,
@@ -791,57 +796,12 @@ async function handleShardJob(
     )
     return
   }
-  // The check above and this refresh are NOT atomic, but that's safe: the
-  // authoritative gate is persistVectorIds' own lease read + computeMerge
-  // (a newer run that claims in this window stale-skips us at persist time).
   await writeActiveRun(env, owner, stateRepo, shard.runId)
 
-  const sliceFiles = indexableFiles.slice(shard.lo, shard.hi)
-  const {
-    processedFileCount,
-    chunkCount: sliceChunkCount,
-    idsByPath,
-  } = await processSlice({
-    client,
-    env,
-    owner,
-    repo,
-    stateRepo,
-    namespace,
-    headSha: shard.headSha,
-    runId: shard.runId,
-    files: sliceFiles,
-    astChunking: astOn,
-    deadlineMs,
-  })
-  if (processedFileCount <= 0) throw new Error("indexer slice made no progress")
-  const actualHi = shard.lo + processedFileCount
-
-  // Keep D1 staging below this ledger write for the same durability invariant
-  // as bootstrap: an admitted slice may reference only already-written IDs.
-  const vectorsResult = await persistVectorIds({
-    env,
-    owner,
-    repo: stateRepo,
-    githubRepoId,
-    runId: shard.runId,
-    idsByPathSlice: idsByPath,
-    isBootstrap: false,
-  })
-  if (!vectorsResult.proceed) {
-    console.warn(
-      JSON.stringify({
-        event: "index-job-skip-stale-shard",
-        owner,
-        repo,
-        run_id: shard.runId,
-        lo: shard.lo,
-        hi: shard.hi,
-      }),
-    )
-    return
-  }
-  const activeSlice = await stageActiveIndexSlice({
+  let activeSlice: StageActiveIndexResult
+  let actualHi = shard.lo
+  let sliceChunkCount = 0
+  const resumed = await readActiveIndexProgress({
     env,
     mode: activeIndexMode,
     isDefaultBranch: target.isDefault,
@@ -849,21 +809,62 @@ async function handleShardJob(
     installationId,
     runId: shard.runId,
     totalFiles: shard.totalFiles,
-    lo: shard.lo,
-    hi: actualHi,
-    idsByPath,
-    ...(job.activeIndexBookmark ? { bookmark: job.activeIndexBookmark } : {}),
-    finalize: actualHi >= shard.totalFiles,
   })
+  if (resumed && resumed.completedThrough !== undefined && resumed.completedThrough > shard.lo) {
+    activeSlice = resumed
+    actualHi = resumed.completedThrough
+  } else {
+    if (resumed?.completedThrough !== undefined && resumed.completedThrough < shard.lo) {
+      throw new Error("repo active index continuation is ahead of the durable high-water")
+    }
+    const processed = await processSlice({
+      client,
+      env,
+      owner,
+      repo,
+      stateRepo,
+      namespace,
+      headSha: shard.headSha,
+      runId: shard.runId,
+      files: indexableFiles.slice(shard.lo, shard.hi),
+      astChunking: astOn,
+      deadlineMs,
+    })
+    if (processed.processedFileCount <= 0) throw new Error("indexer slice made no progress")
+    sliceChunkCount = processed.chunkCount
+    const vectorsResult = await persistVectorIds({
+      env,
+      owner,
+      repo: stateRepo,
+      githubRepoId,
+      runId: shard.runId,
+      idsByPathSlice: processed.idsByPath,
+      isBootstrap: false,
+    })
+    if (!vectorsResult.proceed) return
+    activeSlice = await stageActiveIndexSlice({
+      env,
+      mode: activeIndexMode,
+      isDefaultBranch: target.isDefault,
+      githubRepoId,
+      installationId,
+      runId: shard.runId,
+      totalFiles: shard.totalFiles,
+      lo: shard.lo,
+      hi: shard.lo + processed.processedFileCount,
+      idsByPath: processed.idsByPath,
+      ...(job.activeIndexBookmark ? { bookmark: job.activeIndexBookmark } : {}),
+      finalize: shard.lo + processed.processedFileCount >= shard.totalFiles,
+    })
+    actualHi = activeSlice.completedThrough ?? shard.lo + processed.processedFileCount
+  }
   if (activeSlice.runSealed && activeSlice.activeIndex === undefined) return
 
-  const cumulativeFiles = shard.filesDone + processedFileCount
-  const cumulativeChunks = shard.chunksDone + sliceChunkCount
-  const currentShardCount = completedShardCount + 1
+  const cumulativeFiles = actualHi
+  const cumulativeChunks = activeSlice.chunkCount ?? shard.chunksDone + sliceChunkCount
+  const currentShardCount = activeSlice.shardCount ?? completedShardCount + 1
 
   if (actualHi >= shard.totalFiles) {
-    // SIG-138: read activeRunId explicitly so we can reuse it for the graph
-    // commit check below without a second KV read (don't re-read KV).
     const activeRunId = await readActiveRunId(env, owner, stateRepo)
     if (!shouldFinalize(activeRunId, shard.runId)) {
       console.warn(

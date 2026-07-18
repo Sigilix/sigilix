@@ -80,6 +80,7 @@ import { activeRunKey } from "@/src/lib/repo-index-active-run"
 import { scopedRulesKey } from "@/src/lib/scoped-rules-kv"
 import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "@/src/shared/adapters/model"
 import { CHUNKER_VERSION } from "@/src/lib/indexer"
+import { CITATION_CHUNK_VERSION } from "@/src/lib/chunk-core"
 import { encodeBranchName } from "@/src/lib/index-branch"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
@@ -313,6 +314,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
       modelId: EMBEDDING_MODEL,
       embeddingDim: EMBEDDING_DIMENSIONS,
       chunkerVersion: 2,
+      citationChunkVersion: CITATION_CHUNK_VERSION,
       windowLines: 30,
       overlapLines: 10,
     }
@@ -345,6 +347,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
       modelId: EMBEDDING_MODEL,
       embeddingDim: EMBEDDING_DIMENSIONS,
       chunkerVersion: CHUNKER_VERSION,
+      citationChunkVersion: CITATION_CHUNK_VERSION,
       windowLines: 30,
       overlapLines: 10,
     }
@@ -359,8 +362,37 @@ describe("handleIndexRepoJob — freshness skip", () => {
       githubRepoId: 808247824,
       builtMode: "shadow",
     })
+    expect(stored.citationChunkVersion).toBe(CITATION_CHUNK_VERSION)
   })
 
+  it("rebuilds an otherwise-fresh legacy manifest to stamp citation-safe chunk metadata", async () => {
+    mockGetRepoTree.mockResolvedValue({
+      tree: [{ path: "src/index.ts", type: "blob", size: 100 }],
+      truncated: false,
+    })
+    const { env, kv } = makeEnv()
+    const manifest: RepoIndexManifestV1 = {
+      v: 1,
+      repo: "sigilix",
+      owner: "Sigilix",
+      headSha: "a".repeat(40),
+      runId: "0123456789abcdef",
+      fileCount: 1,
+      chunkCount: 1,
+      shardCount: 1,
+      indexedAt: "2026-05-17T00:00:00.000Z",
+      modelId: EMBEDDING_MODEL,
+      embeddingDim: EMBEDDING_DIMENSIONS,
+      chunkerVersion: CHUNKER_VERSION,
+      windowLines: 30,
+      overlapLines: 10,
+    }
+    kv.set(repoIndexManifestKey("Sigilix", "sigilix"), JSON.stringify(manifest))
+    await handleIndexRepoJob({ job: bootstrapJob(), env })
+    expect(mockVectorizeUpsert).toHaveBeenCalled()
+    const stored = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(stored.citationChunkVersion).toBe(CITATION_CHUNK_VERSION)
+  })
   it("skips a fresh manifest only when graph active version also matches (SIG-155)", async () => {
     const headSha = "a".repeat(40)
     const { computeRunId } = await import("@/src/lib/indexer")
@@ -386,6 +418,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
       modelId: EMBEDDING_MODEL,
       embeddingDim: EMBEDDING_DIMENSIONS,
       chunkerVersion: CHUNKER_VERSION,
+      citationChunkVersion: CITATION_CHUNK_VERSION,
       windowLines: 30,
       overlapLines: 10,
     }
@@ -431,6 +464,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
       modelId: EMBEDDING_MODEL,
       embeddingDim: EMBEDDING_DIMENSIONS,
       chunkerVersion: CHUNKER_VERSION,
+      citationChunkVersion: CITATION_CHUNK_VERSION,
       windowLines: 30,
       overlapLines: 10,
     }
@@ -475,6 +509,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
       modelId: EMBEDDING_MODEL,
       embeddingDim: EMBEDDING_DIMENSIONS,
       chunkerVersion: CHUNKER_VERSION,
+      citationChunkVersion: CITATION_CHUNK_VERSION,
       windowLines: 30,
       overlapLines: 10,
     }
@@ -513,6 +548,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
       modelId: EMBEDDING_MODEL,
       embeddingDim: EMBEDDING_DIMENSIONS,
       chunkerVersion: CHUNKER_VERSION,
+      citationChunkVersion: CITATION_CHUNK_VERSION,
       windowLines: 30,
       overlapLines: 10,
     }

@@ -208,8 +208,9 @@ export async function handleAdminMigrateReviewMemoryToRepoIdRoute(request: Reque
  * the same reconciliation routine the scheduled `crons` handler runs. Unlike
  * the backfill (which fans out ALL repos and relies on consumer freshness),
  * the reconciler reads each repo's manifest first and only enqueues repos
- * whose manifest is missing or invalid. Cheap to re-run; safe to call any
- * time the operator wants a single tick of the cron on demand.
+ * whose manifest, citation metadata, active-index snapshot, or graph version
+ * is incomplete. Its fail-closed `ready` field is the rollout gate for strict
+ * active-index consumers. Cheap to re-run; safe to call any time.
  */
 export async function handleAdminReconcileRoute(request: Request, env: Env): Promise<Response> {
   const token = env.OPENCLAW_ADMIN_TOKEN

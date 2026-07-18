@@ -33,6 +33,7 @@ import {
   resolveIndexHead,
 } from "@/src/lib/indexer-internals"
 import { processSlice } from "@/src/lib/indexer-slice"
+import { CITATION_CHUNK_VERSION } from "@/src/lib/chunk-core"
 import { maybeHandleIncrementalPushIndex } from "@/src/lib/indexer-incremental"
 import {
   enqueueNextShard,
@@ -181,6 +182,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       currentModelId: EMBEDDING_MODEL,
       currentEmbeddingDim: EMBEDDING_DIMENSIONS,
       currentChunkerVersion: effectiveChunkerVersion(astOn),
+      currentCitationChunkVersion: CITATION_CHUNK_VERSION,
     })
     if (
       fresh &&

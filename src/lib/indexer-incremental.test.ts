@@ -96,6 +96,7 @@ import { repoIndexVectorsKey, type RepoIndexVectorsV1 } from "@/src/lib/repo-ind
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { handlePushEvent } from "@/src/index-internals"
 import { EMBEDDING_DIMENSIONS } from "@/src/shared/adapters/model"
+import { CITATION_CHUNK_VERSION } from "@/src/lib/chunk-core"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
 import {
@@ -297,6 +298,21 @@ describe("handleIndexRepoJob — incremental push indexing", () => {
     expect(vectors.byPath["src/changed.ts"]).not.toContain("old-changed-id")
     const deletedIds = mockVectorizeDeleteByIds.mock.calls.flatMap((call) => call[0] as string[])
     expect(deletedIds).not.toEqual(expect.arrayContaining(vectors.byPath["src/changed.ts"] ?? []))
+  })
+
+  it("full-rebuilds a legacy manifest before stamping current citation metadata", async () => {
+    const { env, kv } = makeEnv()
+    seedIndexedRepo(kv)
+    const legacyKey = repoIndexManifestKey("Sigilix", "sigilix")
+    const legacy = JSON.parse(kv.get(legacyKey) as string) as RepoIndexManifestV1
+    delete legacy.citationChunkVersion
+    kv.set(legacyKey, JSON.stringify(legacy))
+
+    await handleIndexRepoJob({ job: pushJobWithChangedPaths(), env })
+
+    expect(mockGetFileContent).toHaveBeenCalledWith("Sigilix", "sigilix", "src/unchanged.ts", "c".repeat(40))
+    const stored = JSON.parse(kv.get(repoIndexManifestKey("Sigilix", "sigilix")) as string) as RepoIndexManifestV1
+    expect(stored.citationChunkVersion).toBe(CITATION_CHUNK_VERSION)
   })
 
   it("refreshes metadata without walking the tree when changed paths cannot affect the index", async () => {

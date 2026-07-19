@@ -219,33 +219,51 @@ function fileIsInDiff(token: string, reviewablePaths: ReadonlySet<string>): bool
   return matches === 1
 }
 
+// A test/coverage ARTIFACT noun (not "file"). When one of these sits between
+// the absence marker and the file token ("without tests `foo.ts`"), the missing
+// thing is the TESTS/COVERAGE *for* a present source file — not the file — so we
+// KEEP. The `file` carve-out preserves "missing test FILE `foo_test.go`" (there
+// the file itself is the missing artifact) → that still demotes. (SIG-602 audit.)
+const TEST_ARTIFACT = /\b(?:tests?|coverage|specs?|assertions?|untested)\b/i
+
+function evaluateMissingFileInSegment(seg: string, reviewablePaths: ReadonlySet<string>): DiffConsistencyDecision {
+  const fileTokens = backtickTokensIn(seg).filter((t) => FILE_TOKEN.test(t))
+  for (const f of fileTokens) {
+    if (!fileIsInDiff(f, reviewablePaths)) continue
+    const fe = escapeRegExp(f)
+    // Absence marker attached to THIS file token (0-4 words before it). Bare
+    // "no" is deliberately excluded ("no changes to `foo.go`" = leave it alone,
+    // the opposite of missing); the real "file is missing" phrasings are below.
+    const absenceOfFile = new RegExp(
+      `\\b(?:missing|absent|lacks?|lacking|without|needs?|need\\s+to\\s+add|should\\s+add|add\\s+a|create\\s+a)\\b(?:\\s+\\w+){0,4}?\\s+[\`"']?${fe}`,
+      "i",
+    )
+    const match = absenceOfFile.exec(seg)
+    if (!match) continue
+    const idx = seg.indexOf(f, match.index)
+    // Locational: "missing null check in `foo.go`" — the file is a location.
+    if (LOCATIONAL_BEFORE.test(seg.slice(0, idx))) continue
+    // Test/coverage-subject: "without tests `foo.ts`" — tests are missing, not
+    // the file (unless the phrase names it as the missing FILE).
+    const span = seg.slice(match.index, idx)
+    if (TEST_ARTIFACT.test(span) && !/\bfile\b/i.test(span)) continue
+    return { keep: false, reason: "claimed-missing-file-present" }
+  }
+  return { keep: true }
+}
+
 function evaluateMissingFilePresent(
   finding: PrReviewFinding,
   reviewablePaths: ReadonlySet<string>,
 ): DiffConsistencyDecision {
   if (reviewablePaths.size === 0) return { keep: true } // diff not wired ⇒ no ground truth
-  const text = `${finding.headline ?? ""} ${finding.body ?? ""}`
-  const fileTokens = backtickTokensIn(text).filter((t) => FILE_TOKEN.test(t))
-  for (const f of fileTokens) {
-    if (!fileIsInDiff(f, reviewablePaths)) continue
-    // Absence marker attached to THIS file token (0-4 words before it),
-    // and the token is not introduced as a location.
-    const fe = escapeRegExp(f)
-    // Bare "no" is deliberately excluded: "no changes to `foo.go` required" /
-    // "no reason to touch `foo.go`" assert the file should be LEFT ALONE (the
-    // opposite of missing). The real "file is missing" phrasings are all
-    // covered by the explicit markers below.
-    const absenceOfFile = new RegExp(
-      `\\b(?:missing|absent|lacks?|lacking|without|needs?|need\\s+to\\s+add|should\\s+add|add\\s+a|create\\s+a)\\b(?:\\s+\\w+){0,4}?\\s+[\`"']?${fe}`,
-      "i",
-    )
-    const match = absenceOfFile.exec(text)
-    if (!match) continue
-    // Reject if the file token is immediately preceded by a locational
-    // preposition (the "missing X in `foo.go`" false positive).
-    const upToToken = text.slice(0, text.indexOf(f, match.index))
-    if (LOCATIONAL_BEFORE.test(upToToken)) continue
-    return { keep: false, reason: "claimed-missing-file-present" }
+  // Evaluate headline and body SEPARATELY: an absence claim in the headline
+  // ("... ships without tests") must NOT bind to a filename that merely leads
+  // the body ("`server/auth.ts` is a new module") — the SIG-602 audit FP where
+  // a real, correct "no tests for a present file" finding was demoted.
+  for (const seg of [finding.headline ?? "", finding.body ?? ""]) {
+    const decision = evaluateMissingFileInSegment(seg, reviewablePaths)
+    if (!decision.keep) return decision
   }
   return { keep: true }
 }

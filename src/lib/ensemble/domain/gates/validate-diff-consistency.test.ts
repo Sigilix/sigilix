@@ -271,6 +271,58 @@ describe("evaluateDiffConsistency — false-positive regressions", () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────
+// SIG-602 offline-audit regressions: real, verified-correct test-coverage
+// findings on a PR that adds source files and NO tests. The source files ARE
+// in the diff, so the gate must NOT read "ships without tests" + a leading body
+// filename as "the file is missing." (Found by auditing the gate on 67 real
+// Sigilix findings before enforce.)
+describe("evaluateDiffConsistency — SIG-602 audit regressions (no-tests-for-present-file)", () => {
+  const paths = new Set(["server/auth.ts", "server/refunds.ts", "server/api.ts"])
+
+  it("keeps: headline 'ships without tests' + body led by the present source file (cross-segment)", () => {
+    const f = finding({
+      path: "server/auth.ts",
+      category: "testing",
+      headline: "New auth middleware with a critical authentication branch ships without tests",
+      body: "`server/auth.ts` is a new 28-line module handling the login branch; it has no accompanying test.",
+    })
+    expect(evaluateDiffConsistency(f, ctx({ reviewablePaths: paths }))).toEqual({ keep: true })
+  })
+
+  it("keeps: same-segment 'without tests `source.ts`' (tests are the missing thing, not the file)", () => {
+    const f = finding({
+      path: "server/refunds.ts",
+      category: "testing",
+      headline: "Refund module ships without tests `server/refunds.ts`",
+      body: "The dollars-to-cents conversion and DB write path are untested.",
+    })
+    expect(evaluateDiffConsistency(f, ctx({ reviewablePaths: paths }))).toEqual({ keep: true })
+  })
+
+  it("keeps: 'no test coverage for `server/api.ts`'", () => {
+    const f = finding({
+      path: "server/api.ts",
+      category: "testing",
+      headline: "New Express middleware setup ships with no test coverage",
+      body: "`server/api.ts` wires the middleware; add coverage for the new routes.",
+    })
+    expect(evaluateDiffConsistency(f, ctx({ reviewablePaths: paths }))).toEqual({ keep: true })
+  })
+
+  it("STILL demotes: a test FILE named as missing that is actually in the PR (Ruslan's original case)", () => {
+    const f = finding({
+      path: "server/auth.ts",
+      category: "testing",
+      headline: "missing test file `auth_test.ts`",
+      body: "The new auth branch has no sibling spec.",
+    })
+    expect(
+      evaluateDiffConsistency(f, ctx({ reviewablePaths: new Set(["server/auth.ts", "server/auth_test.ts"]) })),
+    ).toEqual({ keep: false, reason: "claimed-missing-file-present" })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
 describe("evaluateDiffConsistency — robustness", () => {
   it("never throws on empty / weird findings", () => {
     expect(() => evaluateDiffConsistency(finding({ headline: "", body: "" }), ctx())).not.toThrow()

@@ -9,6 +9,7 @@ import {
   materializeRepoActiveIndex,
   parseRepoActiveIndexMode,
   parseRepoActiveIndexSnapshot,
+  readRepoActiveIndexProgress,
   RepoActiveIndexSealedReplayMismatchError,
   stageRepoActiveIndexSlice,
   type RepoActiveIndexMode,
@@ -107,6 +108,9 @@ export async function activeIndexRunAlreadyPublished(args: {
 
 export interface StageActiveIndexResult {
   bookmark?: string
+  chunkCount?: number
+  completedThrough?: number
+  shardCount?: number
   activeIndex?: RepoActiveIndexSnapshotV1
   /** A divergent late replay found a complete canonical run and must stop. */
   runSealed?: true
@@ -128,6 +132,65 @@ export async function computeRepoActiveStageRunId(
     new TextEncoder().encode(`${sourceRunId}\0${mode}\0${installationId}`),
   )
   return Array.from(new Uint8Array(digest).slice(0, 8), (byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+/** Resume the canonical D1 high-water before repeating queue work. */
+export async function readActiveIndexProgress(args: {
+  env: Env
+  mode: RepoActiveIndexMode
+  isDefaultBranch: boolean
+  githubRepoId: number
+  installationId: number
+  runId: string
+  totalFiles: number
+}): Promise<StageActiveIndexResult | null> {
+  if (!args.isDefaultBranch || args.mode === "off") return null
+  const db = args.env.SIGILIX_PLATFORM_DB
+  if (db === undefined) {
+    if (args.mode === "on") throw new Error("SIGILIX_PLATFORM_DB is unavailable")
+    return null
+  }
+  const stageRunId = await computeRepoActiveStageRunId(args.runId, args.mode, args.installationId)
+  try {
+    const progress = await readRepoActiveIndexProgress({
+      db,
+      githubRepoId: args.githubRepoId,
+      installationId: args.installationId,
+      runId: stageRunId,
+      totalFiles: args.totalFiles,
+      mode: args.mode,
+    })
+    if (progress === null) return null
+    const base = {
+      chunkCount: progress.chunkCount,
+      completedThrough: progress.completedThrough,
+      shardCount: progress.shardCount,
+      ...(progress.bookmark === null ? {} : { bookmark: progress.bookmark }),
+    }
+    if (progress.completedThrough < args.totalFiles) return base
+    const materialized = await materializeRepoActiveIndex({
+      db,
+      githubRepoId: args.githubRepoId,
+      runId: stageRunId,
+      bookmark: progress.bookmark,
+    })
+    return {
+      ...base,
+      ...(materialized.bookmark === null ? {} : { bookmark: materialized.bookmark }),
+      activeIndex: materialized.snapshot,
+    }
+  } catch (error) {
+    if (args.mode === "on") throw error
+    console.warn(
+      JSON.stringify({
+        event: "repo-active-index-shadow-resume-failed",
+        github_repo_id: args.githubRepoId,
+        run_id: args.runId,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return null
+  }
 }
 
 /** Stage one default-branch slice; shadow failures preserve legacy indexing. */
@@ -162,7 +225,24 @@ export async function stageActiveIndexSlice(args: {
       idsByPath: args.idsByPath,
       ...(args.bookmark !== undefined ? { bookmark: args.bookmark } : {}),
     })
-    if (!args.finalize) return staged.bookmark === null ? {} : { bookmark: staged.bookmark }
+    const replayed =
+      staged.completedThrough === args.hi
+        ? null
+        : await readRepoActiveIndexProgress({
+            db,
+            githubRepoId: args.githubRepoId,
+            installationId: args.installationId,
+            runId: stageRunId,
+            totalFiles: args.totalFiles,
+            mode: args.mode,
+          })
+    const base = {
+      ...(replayed === null ? {} : { chunkCount: replayed.chunkCount }),
+      completedThrough: staged.completedThrough,
+      shardCount: staged.shardCount,
+      ...(staged.bookmark === null ? {} : { bookmark: staged.bookmark }),
+    }
+    if (staged.completedThrough < args.totalFiles) return base
     const materialized = await materializeRepoActiveIndex({
       db,
       githubRepoId: args.githubRepoId,
@@ -170,6 +250,7 @@ export async function stageActiveIndexSlice(args: {
       bookmark: staged.bookmark,
     })
     return {
+      ...base,
       ...(materialized.bookmark === null ? {} : { bookmark: materialized.bookmark }),
       activeIndex: materialized.snapshot,
     }

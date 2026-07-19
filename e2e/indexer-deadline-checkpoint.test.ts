@@ -174,15 +174,31 @@ describe("index-repo queue deadline checkpoint", () => {
         .first(),
     ).resolves.toEqual({ completed_through: 1, total_files: 2, sealed: 0, invalidated: 0 })
 
+    await dispatchJob(bootstrapJob(), env)
+
+    expect(mockGetFileContent).toHaveBeenCalledTimes(1)
+    expect(sent).toHaveLength(2)
+    expect(sent[1]).toMatchObject({
+      type: "index-repo",
+      owner: "Sigilix",
+      repo: "large-repo",
+      githubRepoId: 808247824,
+      installationId: 99,
+      activeIndexMode: "on",
+      shard: { lo: 1, hi: 2, totalFiles: 2, filesDone: 1, chunksDone: 1, shardsDone: 1 },
+    })
+
     mockGetFileContent.mockImplementation(
       async (_owner, _repo, path: string) => `export const path = ${JSON.stringify(path)}`,
     )
     await dispatchJob(continuation, env)
+    await dispatchJob(sent[1]!, env)
 
     const stored = kv.get(manifestKey)
     expect(stored).toBeTruthy()
     const manifest = JSON.parse(stored!) as RepoIndexManifestV1
     expect(manifest.fileCount).toBe(2)
+    expect(manifest.chunkCount).toBe(2)
     expect(manifest.shardCount).toBe(2)
     expect(Object.keys(manifest.activeIndex?.byPath ?? {}).sort()).toEqual(["src/first.ts", "src/second.ts"])
     await expect(

@@ -197,6 +197,13 @@ export interface ValidatedOutput {
    */
   droppedForFailedWindowBlindnessValidation: number
   /**
+   * SIG-602 v1: count of findings the diff-consistency gate flagged as
+   * self-contradicted or contradicted by the diff (would-demote-to-body in
+   * shadow, demoted in enforce, 0 when off). Surfaced to telemetry so the
+   * would-demote rate is observable before enforce.
+   */
+  droppedForFailedDiffConsistencyValidation: number
+  /**
    * SIG-293 v1: count of secrets-exposure findings the security-grounding
    * gate flagged as ungrounded — the cited line held no credential token
    * and no scanner fact corroborated it (would-demote-to-body in shadow,
@@ -271,6 +278,7 @@ export function validateForSubmission(args: ValidateForSubmissionArgs): Validate
     droppedForFailedInlineGroundingValidation: state.droppedForFailedInlineGroundingValidation,
     droppedForFailedAbsenceGroundingValidation: state.droppedForFailedAbsenceGroundingValidation,
     droppedForFailedWindowBlindnessValidation: state.droppedForFailedWindowBlindnessValidation,
+    droppedForFailedDiffConsistencyValidation: state.droppedForFailedDiffConsistencyValidation,
     droppedForFailedSecurityGroundingValidation: state.droppedForFailedSecurityGroundingValidation,
     droppedForFailedSecurityUsageValidation: state.droppedForFailedSecurityUsageValidation,
     cleanFindingProvenance: state.cleanFindingProvenance,

@@ -17,6 +17,7 @@ import { parsePerfValidatorMode } from "@/src/lib/ensemble/domain/gates/validate
 import { parseInlineGroundingValidatorMode } from "@/src/lib/ensemble/domain/gates/validate-inline-grounding"
 import { parseAbsenceClaimValidatorMode } from "@/src/lib/ensemble/domain/gates/validate-absence-grounding"
 import { parseWindowBlindnessValidatorMode } from "@/src/lib/ensemble/domain/gates/validate-window-blindness"
+import { parseDiffConsistencyValidatorMode } from "@/src/lib/ensemble/domain/gates/validate-diff-consistency"
 import { parseSecurityGroundingValidatorMode } from "@/src/lib/ensemble/domain/gates/validate-security-grounding"
 import { parseSecurityUsageValidatorMode } from "@/src/lib/ensemble/domain/gates/validate-security-usage"
 import { parseReceiptJoinMode } from "@/src/lib/verification/verify-finding-receipt"
@@ -114,6 +115,7 @@ describe("SIG-318 parseEnsembleConfig — validator gate modes (PR 4)", () => {
       OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE: "shadow",
       OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE: "enforce",
       OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE: "shadow",
+      SIGILIX_DIFF_CONSISTENCY_VALIDATOR_MODE: "enforce",
       OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE: "enforce",
       OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE: "shadow",
     }
@@ -129,6 +131,7 @@ describe("SIG-318 parseEnsembleConfig — validator gate modes (PR 4)", () => {
       inlineGroundingValidatorMode: parseInlineGroundingValidatorMode(env.OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE),
       absenceClaimValidatorMode: parseAbsenceClaimValidatorMode(env.OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE),
       windowBlindnessValidatorMode: parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE),
+      diffConsistencyValidatorMode: parseDiffConsistencyValidatorMode(env.SIGILIX_DIFF_CONSISTENCY_VALIDATOR_MODE),
       securityGroundingValidatorMode: parseSecurityGroundingValidatorMode(
         env.OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE,
       ),
@@ -153,6 +156,7 @@ describe("SIG-318 parseEnsembleConfig — validator gate modes (PR 4)", () => {
       inlineGroundingValidatorMode: parseInlineGroundingValidatorMode(undefined),
       absenceClaimValidatorMode: parseAbsenceClaimValidatorMode(undefined),
       windowBlindnessValidatorMode: parseWindowBlindnessValidatorMode(undefined),
+      diffConsistencyValidatorMode: parseDiffConsistencyValidatorMode(undefined),
       securityGroundingValidatorMode: parseSecurityGroundingValidatorMode(undefined),
       securityUsageValidatorMode: parseSecurityUsageValidatorMode(undefined),
     })

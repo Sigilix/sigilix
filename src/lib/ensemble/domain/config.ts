@@ -21,6 +21,7 @@ import type { PerfValidatorMode } from "./gates/validate-perf-finding"
 import type { InlineGroundingValidatorMode } from "./gates/validate-inline-grounding"
 import type { AbsenceClaimValidatorMode } from "./gates/validate-absence-grounding"
 import type { WindowBlindnessValidatorMode } from "./gates/validate-window-blindness"
+import type { DiffConsistencyValidatorMode } from "./gates/validate-diff-consistency"
 import type { SecurityGroundingValidatorMode } from "./gates/validate-security-grounding"
 import type { SecurityUsageValidatorMode } from "./gates/validate-security-usage"
 import type { ReceiptJoinMode } from "@/src/lib/verification/verify-finding-receipt"
@@ -87,6 +88,7 @@ export interface EnsembleValidatorModes {
   inlineGroundingValidatorMode: InlineGroundingValidatorMode
   absenceClaimValidatorMode: AbsenceClaimValidatorMode
   windowBlindnessValidatorMode: WindowBlindnessValidatorMode
+  diffConsistencyValidatorMode: DiffConsistencyValidatorMode
   securityGroundingValidatorMode: SecurityGroundingValidatorMode
   securityUsageValidatorMode: SecurityUsageValidatorMode
 }

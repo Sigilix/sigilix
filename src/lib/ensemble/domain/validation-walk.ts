@@ -35,6 +35,7 @@ import { evaluatePerfFinding, perfFindingIsSelfOriginated } from "./gates/valida
 import { evaluateInlineGrounding } from "./gates/validate-inline-grounding"
 import { evaluateAbsenceGrounding } from "./gates/validate-absence-grounding"
 import { evaluateWindowBlindness } from "./gates/validate-window-blindness"
+import { applyDiffConsistencyGate } from "./apply-diff-consistency-gate"
 import { evaluateSecurityGrounding } from "./gates/validate-security-grounding"
 import { evaluateSecurityUsage } from "./gates/validate-security-usage"
 import { annotateFindingTrust } from "./gates/trust-ledger-thread"
@@ -831,6 +832,13 @@ function applyDemoteGates(
       }
       // shadow mode: fall through and keep the finding inline.
     }
+  }
+
+  // SIG-602: diff-consistency gate (demote a finding contradicted by the diff
+  // or its own body). Placement mirrors the grounding blocks above; logic lives
+  // in `applyDiffConsistencyGate` (extracted for the file-size budget).
+  if (applyDiffConsistencyGate(workingFinding, args, ctx, state)) {
+    return { kind: "proceed", workingFinding, rewroteRange }
   }
 
   // SIG-293 v1: security-grounding gate (secrets-exposure). A

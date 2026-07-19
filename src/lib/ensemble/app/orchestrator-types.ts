@@ -303,6 +303,10 @@ export interface EnsembleTelemetry {
      * (would-demote-to-body in shadow, actual-demote in enforce; 0 when the
      * gate is off). */
     droppedForFailedWindowBlindnessValidation: number
+    /** SIG-602 v1: count of findings the diff-consistency gate flagged as
+     * self-contradicted or contradicted by the diff (would-demote-to-body in
+     * shadow, actual-demote in enforce; 0 when the gate is off). */
+    droppedForFailedDiffConsistencyValidation: number
     /** SIG-293 v1: count of secrets-exposure findings the security-
      * grounding gate flagged as ungrounded — cited line held no credential
      * token, uncorroborated by any scanner fact (would-demote-to-body in

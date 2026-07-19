@@ -30,6 +30,7 @@ import type { PerfValidatorMode, PerfDropReason, PerfEvidence } from "./gates/va
 import type { InlineGroundingValidatorMode, InlineGroundingDropReason } from "./gates/validate-inline-grounding"
 import type { AbsenceClaimValidatorMode, AbsenceGroundingDropReason } from "./gates/validate-absence-grounding"
 import type { WindowBlindnessValidatorMode, WindowBlindnessDropReason } from "./gates/validate-window-blindness"
+import type { DiffConsistencyValidatorMode, DiffConsistencyDropReason } from "./gates/validate-diff-consistency"
 import type { SecurityGroundingValidatorMode, SecurityGroundingDropReason } from "./gates/validate-security-grounding"
 import type { SecurityUsageValidatorMode, SecurityUsageDropReason } from "./gates/validate-security-usage"
 import type { TestingEvidencePack } from "@/src/lib/testing-evidence-pack"
@@ -598,6 +599,30 @@ export type ValidateForSubmissionArgs = {
     },
   ) => void
   /**
+   * SIG-602 v1: diff-consistency gate mode. `off` (default) skips the gate;
+   * `shadow` counts + telemeters but keeps every finding inline; `enforce`
+   * DEMOTES a finding whose OWN claim is deterministically contradicted by the
+   * diff or its own body (a "missing" file present in the PR, an "exported" Go
+   * symbol whose identifier is lower-case, or a headline that contradicts its
+   * explanation) to the review body (never hard-drops). Reuses `reviewablePaths`
+   * + `addedLineTextByLine` already threaded above. Read from
+   * `SIGILIX_DIFF_CONSISTENCY_VALIDATOR_MODE` at the call site.
+   */
+  diffConsistencyValidatorMode?: DiffConsistencyValidatorMode
+  /**
+   * SIG-602 v1: telemetry callback fired once per finding the diff-consistency
+   * gate flagged (reuses the `pr-review-finding-rejected-validation` event with
+   * a `gate: "diff-consistency"` discriminator). `dropped` here means "demoted
+   * to body" (enforce), not hard-dropped.
+   */
+  onDiffConsistencyFindingDropped?: (
+    finding: PrReviewFinding,
+    info: {
+      reason: DiffConsistencyDropReason
+      dropped: boolean
+    },
+  ) => void
+  /**
    * SIG-293 v1: security-grounding gate mode. `off` (default) skips the
    * gate entirely; `shadow` counts + telemeters but keeps every finding
    * inline; `enforce` DEMOTES a `secrets-exposure` finding to the review
@@ -692,6 +717,7 @@ export interface ValidationState {
   droppedForFailedInlineGroundingValidation: number
   droppedForFailedAbsenceGroundingValidation: number
   droppedForFailedWindowBlindnessValidation: number
+  droppedForFailedDiffConsistencyValidation: number
   droppedForFailedSecurityGroundingValidation: number
   droppedForFailedSecurityUsageValidation: number
 }
@@ -759,6 +785,8 @@ export interface ResolvedValidationArgs {
   fullFileByPath: ReadonlyMap<string, string>
   astCache: AstCache
   onWindowBlindnessFindingDropped: ValidateForSubmissionArgs["onWindowBlindnessFindingDropped"]
+  diffConsistencyValidatorMode: DiffConsistencyValidatorMode
+  onDiffConsistencyFindingDropped: ValidateForSubmissionArgs["onDiffConsistencyFindingDropped"]
   securityGroundingValidatorMode: SecurityGroundingValidatorMode
   onSecurityGroundingFindingDropped: ValidateForSubmissionArgs["onSecurityGroundingFindingDropped"]
   securityUsageValidatorMode: SecurityUsageValidatorMode

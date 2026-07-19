@@ -77,6 +77,7 @@ type PostValidationCounts = {
   droppedForFailedInlineGroundingValidation: number
   droppedForFailedAbsenceGroundingValidation: number
   droppedForFailedWindowBlindnessValidation: number
+  droppedForFailedDiffConsistencyValidation: number
   droppedForFailedSecurityGroundingValidation: number
   droppedForFailedSecurityUsageValidation: number
 }
@@ -576,6 +577,39 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
         category: finding.category,
       })
     },
+    // SIG-602 v1: diff-consistency gate. Default `off` — the gate doesn't run
+    // until the operator flips SIGILIX_DIFF_CONSISTENCY_VALIDATOR_MODE to
+    // "shadow" (count/telemeter, keep inline) or "enforce" (demote a finding
+    // whose own claim is contradicted by the diff or its body). Reuses
+    // `reviewablePaths` + `addedLineTextByLine` already threaded above, and the
+    // `pr-review-finding-rejected-validation` event (`gate: "diff-consistency"`).
+    // `dropped` here = "demoted to body".
+    diffConsistencyValidatorMode: ensembleConfig.validatorModes.diffConsistencyValidatorMode,
+    onDiffConsistencyFindingDropped: (finding, info) => {
+      console.log(
+        JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          gate: "diff-consistency",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          category: finding.category,
+        }),
+      )
+      validationSink?.push({
+        kind: "gate-rejection",
+        gate: "diff-consistency",
+        reason: info.reason,
+        dropped: info.dropped,
+        category: finding.category,
+      })
+    },
     // SIG-293 v1: security-grounding gate (secrets-exposure). Default
     // `off` — the gate doesn't run until the operator flips
     // OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE to "shadow" (count/
@@ -671,6 +705,7 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
     droppedForFailedInlineGroundingValidation: validated.droppedForFailedInlineGroundingValidation,
     droppedForFailedAbsenceGroundingValidation: validated.droppedForFailedAbsenceGroundingValidation,
     droppedForFailedWindowBlindnessValidation: validated.droppedForFailedWindowBlindnessValidation,
+    droppedForFailedDiffConsistencyValidation: validated.droppedForFailedDiffConsistencyValidation,
     droppedForFailedSecurityGroundingValidation: validated.droppedForFailedSecurityGroundingValidation,
     droppedForFailedSecurityUsageValidation: validated.droppedForFailedSecurityUsageValidation,
   }

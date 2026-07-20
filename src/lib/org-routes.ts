@@ -11,6 +11,7 @@
 //   POST /v1/org/:installationId/data-consent          → data-consent-route.ts
 //   GET  /v1/org/:installationId/repository-context     → repository-context-route.ts
 //   PUT  /v1/org/:installationId/repository-context     → repository-context-route.ts
+//   POST /v1/org/:installationId/repository-context/import-onboarding → repository-context-route.ts
 //   GET/POST/DELETE /v1/org/:installationId/learnings[/:id] → org-learnings-route.ts
 //   GET/POST/DELETE /v1/org/:installationId/repos/:repoId/learnings[/:id] → repo-learnings-route.ts
 //
@@ -33,7 +34,11 @@ import {
 import { handleOrgOverviewRoute } from "@/src/lib/org-overview-route"
 import { handleAddOrgMember, handleDeleteOrgMember, handleUpdateOrgMemberRole } from "@/src/lib/org-members-route"
 import { handleOrgSeatRoute } from "@/src/lib/org-seat-route"
-import { handleGetRepositoryContext, handlePutRepositoryContext } from "@/src/lib/repository-context-route"
+import {
+  handleGetRepositoryContext,
+  handleImportOnboardingRepositoryContext,
+  handlePutRepositoryContext,
+} from "@/src/lib/repository-context-route"
 import { handleGetReviewConfig, handleSetReviewConfig } from "@/src/lib/review-config-route"
 import { handleGetLinearConfig, handleSetLinearConfig } from "@/src/lib/linear-config-route"
 import { handleGetSlackConfig, handleSetSlackConfig } from "@/src/lib/slack-config-route"
@@ -55,6 +60,7 @@ const APP_MEMORY_PATH_RE = /^\/v1\/org\/([^/]+)\/apps\/([^/]+)\/memories(?:\/([^
 const LEARNINGS_PATH_RE = /^\/v1\/org\/([^/]+)\/learnings(?:\/([^/]+))?$/
 const REPO_LEARNINGS_PATH_RE = /^\/v1\/org\/([^/]+)\/repos\/([^/]+)\/learnings(?:\/([^/]+))?$/
 const REPOSITORY_CONTEXT_PATH_RE = /^\/v1\/org\/([^/]+)\/repository-context$/
+const REPOSITORY_CONTEXT_IMPORT_PATH_RE = /^\/v1\/org\/([^/]+)\/repository-context\/import-onboarding$/
 
 /** True for a path this surface serves — overview, seat, data-consent, or review-config. */
 function isOrgPath(pathname: string): boolean {
@@ -71,6 +77,7 @@ function isOrgPath(pathname: string): boolean {
     APP_MEMORY_PATH_RE.test(pathname) ||
     LEARNINGS_PATH_RE.test(pathname) ||
     REPO_LEARNINGS_PATH_RE.test(pathname) ||
+    REPOSITORY_CONTEXT_IMPORT_PATH_RE.test(pathname) ||
     REPOSITORY_CONTEXT_PATH_RE.test(pathname)
   )
 }
@@ -254,6 +261,15 @@ export async function handleOrgRoutes(request: Request, env: Env, ctx: Execution
     if (request.method === "PUT") {
       return withPortalCors(request, await handlePutRepositoryContext(request, env, ctx, installationId), env)
     }
+  }
+  const repositoryContextImportMatch = REPOSITORY_CONTEXT_IMPORT_PATH_RE.exec(url.pathname)
+  if (request.method === "POST" && repositoryContextImportMatch) {
+    const installationId = decodeInstallationId(repositoryContextImportMatch[1]!)
+    return withPortalCors(
+      request,
+      await handleImportOnboardingRepositoryContext(request, env, ctx, installationId),
+      env,
+    )
   }
   return null
 }

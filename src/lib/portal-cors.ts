@@ -39,7 +39,8 @@ export interface PortalCorsEnv {
  * consulted for it; the browser still attaches the SameSite=None cookie.
  * Requiring `application/json` (which is NOT CORS-safelisted) forces the
  * browser to preflight first, so the allowlist actually gates the request.
- * Every mutating route on this cookie (POST /v1/keys, POST /v1/onboarding)
+ * Every mutating route on this cookie (including POST /v1/keys, POST
+ * /v1/onboarding, and repository-context onboarding import)
  * MUST call this before touching the body. This is a request-shape check,
  * not a substitute for the origin allowlist — pair the two.
  */

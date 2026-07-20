@@ -1,7 +1,7 @@
 // Canonical per-installation repository-context HTTP surface.
 //
-// GET/PUT /v1/org/:installationId/repository-context are dark unless the
-// explicit rollout flag is on. Both routes require an exact-installation
+// GET/PUT /v1/org/:installationId/repository-context and the explicit legacy
+// onboarding import are dark unless the rollout flag is on. Every route requires an exact-installation
 // Sigilix admin and a complete GitHub App-installation repository snapshot
 // before repository-context D1 is touched. Repository names and scope are always derived from
 // that live snapshot; callers may submit only immutable numeric repository ids
@@ -20,8 +20,11 @@ import { hasHighConfidenceSecretText } from "@/src/lib/secret-scan"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import type { Env } from "@/src/shared/types/env"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
+import { importOnboardingRepositoryContext } from "@/src/lib/onboarding-repository-context-import"
 
 const MAX_BODY_BYTES = 64 * 1024
+const MAX_IMPORT_BODY_BYTES = 1_024
+const IMPORT_CONFIRMATION = "migrate-from-onboarding-kv"
 const PROVIDER = "github" as const
 
 interface AvailableRepository {
@@ -160,6 +163,91 @@ export async function handlePutRepositoryContext(
   return json(publicSnapshot(written.snapshot, installationId, scope.value.availableRepositories), 200)
 }
 
+/** Explicitly import this admin's legacy signup answers into one exact installation. */
+export async function handleImportOnboardingRepositoryContext(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext | undefined,
+  installationId: number,
+): Promise<Response> {
+  if (!repositoryContextEnabled(env)) return json({ error: "not_found" }, 404)
+
+  // Authorization and the JSON CSRF guard both precede body, KV, live-scope,
+  // and repository-context reads. A non-admin cannot probe legacy payloads.
+  const access = await requireOrgAccess(request, env, ctx, installationId, { requiredRole: "admin" })
+  if (!access.ok) return privateResponse(access.response)
+  if (!hasJsonContentType(request)) {
+    return json({ error: "content-type must be application/json" }, 415)
+  }
+
+  const rawBody = await readBodyCapped(request, MAX_IMPORT_BODY_BYTES)
+  if (rawBody === null) return json({ error: "payload_too_large" }, 413)
+  let confirmation: unknown
+  try {
+    confirmation = JSON.parse(rawBody) as unknown
+  } catch {
+    return json({ error: "invalid_import_confirmation" }, 400)
+  }
+  if (!isImportConfirmation(confirmation)) {
+    return json({ error: "invalid_import_confirmation" }, 400)
+  }
+
+  const scope = await resolveLiveScopeAndDb(env, access)
+  if (!scope.ok) return scope.response
+  const nowIso = new Date().toISOString()
+  const imported = await importOnboardingRepositoryContext({
+    db: scope.value.db,
+    kv: env.OPENCLAW_STATE,
+    githubUserId: access.githubUserId,
+    installationId,
+    availableRepositories: scope.value.availableRepositories,
+    nowIso,
+  })
+  if (imported.status === "not_found") return json({ error: "legacy_context_not_found" }, 404)
+  if (imported.status === "invalid") {
+    return json({ error: "legacy_context_invalid", reason: imported.reason }, 422)
+  }
+  if (imported.status === "scope_changed") {
+    return json(
+      {
+        error: "legacy_scope_changed",
+        missingRepositoryCount: imported.missingRepositoryCount,
+      },
+      409,
+    )
+  }
+  if (imported.status === "exists") {
+    return json({ error: "repository_context_exists", currentRevision: imported.currentRevision }, 409)
+  }
+  if (imported.status === "unavailable") {
+    const error = imported.stage === "kv" ? "legacy_context_unavailable" : "repository_context_unavailable"
+    emitUnavailable(`repository-context-onboarding-import-${imported.stage}-unavailable`, installationId)
+    return json({ error }, 503)
+  }
+
+  console.log(
+    JSON.stringify({
+      event: "repository-context-onboarding-imported",
+      provider: PROVIDER,
+      scopeId: String(installationId),
+      githubUserId: access.githubUserId,
+      importedAt: nowIso,
+      revision: imported.snapshot.revision,
+      repositoryCount: imported.snapshot.repositories.length,
+      relationshipCount: imported.snapshot.relationships.length,
+    }),
+  )
+  return json(
+    {
+      imported: true,
+      repositoryCount: imported.snapshot.repositories.length,
+      relationshipCount: imported.snapshot.relationships.length,
+      snapshot: publicSnapshot(imported.snapshot, installationId, scope.value.availableRepositories),
+    },
+    200,
+  )
+}
+
 async function authorizeAndResolveScope(
   request: Request,
   env: Env,
@@ -252,6 +340,12 @@ function publicSnapshot(
 
 function repositoryContextEnabled(env: Env): boolean {
   return env.OPENCLAW_REPOSITORY_CONTEXT_API === "on"
+}
+
+function isImportConfirmation(value: unknown): value is { confirm: typeof IMPORT_CONFIRMATION } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return Object.keys(record).length === 1 && record.confirm === IMPORT_CONFIRMATION
 }
 
 function privateResponse(response: Response): Response {

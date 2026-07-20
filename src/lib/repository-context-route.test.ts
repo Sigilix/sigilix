@@ -2,7 +2,11 @@ import { readFileSync } from "node:fs"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import worker from "@/src/index"
 import { base64urlEncode, createSession } from "@/src/lib/auth-session"
-import { handleGetRepositoryContext, handlePutRepositoryContext } from "@/src/lib/repository-context-route"
+import {
+  handleGetRepositoryContext,
+  handleImportOnboardingRepositoryContext,
+  handlePutRepositoryContext,
+} from "@/src/lib/repository-context-route"
 import { bootstrapFirstOrgAdmin } from "@/src/features/org-membership"
 import {
   purgeRepositoryContext,
@@ -197,19 +201,28 @@ function stubGitHub(
 }
 
 function request(
-  method: "GET" | "PUT",
-  options: { installationId?: number; body?: string; contentType?: string | null; origin?: string } = {},
+  method: "GET" | "POST" | "PUT",
+  options: {
+    installationId?: number
+    body?: string
+    contentType?: string | null
+    origin?: string
+    suffix?: string
+  } = {},
 ): Request {
   const headers = new Headers({ cookie: `${SESSION_COOKIE}=${SESSION_ID}` })
   if (options.body !== undefined && options.contentType !== null) {
     headers.set("content-type", options.contentType ?? "application/json")
   }
   if (options.origin) headers.set("origin", options.origin)
-  return new Request(`https://api.sigilix.ai/v1/org/${options.installationId ?? INSTALLATION_ID}/repository-context`, {
-    method,
-    headers,
-    ...(options.body === undefined ? {} : { body: options.body }),
-  })
+  return new Request(
+    `https://api.sigilix.ai/v1/org/${options.installationId ?? INSTALLATION_ID}/repository-context${options.suffix ?? ""}`,
+    {
+      method,
+      headers,
+      ...(options.body === undefined ? {} : { body: options.body }),
+    },
+  )
 }
 
 function validBody(revision = 0): Record<string, unknown> {
@@ -747,5 +760,214 @@ describe("repository-context route", () => {
         { repositoryId: 202, fullName: "acme/worker" },
       ],
     } satisfies PublicSnapshot)
+  })
+
+  it("imports legacy signup answers through the explicit portal route using exact live repository ids", async () => {
+    const db = await makeDb()
+    const env = await makeEnv({ db })
+    await env.OPENCLAW_STATE.put(
+      "onboarding:111",
+      JSON.stringify({
+        selectedRepos: ["acme/api", "acme/worker"],
+        repoDescriptions: {
+          "acme/api": "Public API",
+          "acme/worker": "Background jobs",
+        },
+        links: [{ from: "acme/api", label: "publishes jobs", to: "acme/worker" }],
+        conventions: "Use conventional commits.",
+      }),
+    )
+    stubGitHub()
+
+    const response = await worker.fetch(
+      request("POST", {
+        suffix: "/import-onboarding",
+        body: JSON.stringify({ confirm: "migrate-from-onboarding-kv" }),
+        origin: PORTAL_ORIGIN,
+      }),
+      env,
+      ctx,
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("access-control-allow-origin")).toBe(PORTAL_ORIGIN)
+    expect(await response.json()).toMatchObject({
+      imported: true,
+      repositoryCount: 2,
+      relationshipCount: 1,
+      snapshot: {
+        provider: "github",
+        scopeId: "42",
+        revision: 1,
+        repositories: [
+          { repositoryId: 101, fullName: "acme/api", context: "Public API", available: true },
+          { repositoryId: 202, fullName: "acme/worker", context: "Background jobs", available: true },
+        ],
+        relationships: [{ fromRepositoryId: 101, toRepositoryId: 202, label: "publishes jobs" }],
+        conventions: "Use conventional commits.",
+      },
+    })
+    await expect(readRepositoryContext(db, "github", String(INSTALLATION_ID))).resolves.toMatchObject({
+      status: "ok",
+      snapshot: {
+        revision: 1,
+        repositories: [
+          { externalId: "101", fullName: "acme/api", context: "Public API" },
+          { externalId: "202", fullName: "acme/worker", context: "Background jobs" },
+        ],
+      },
+    })
+  })
+
+  it("authorizes the exact installation and enforces JSON confirmation before import scope or D1 reads", async () => {
+    const db = await makeDb()
+    const env = await makeEnv({ db })
+    const memberFetch = stubGitHub({ role: "member" })
+    const forbidden = await handleImportOnboardingRepositoryContext(
+      request("POST", {
+        suffix: "/import-onboarding",
+        body: JSON.stringify({ confirm: "wrong" }),
+      }),
+      env,
+      undefined,
+      INSTALLATION_ID,
+    )
+    expect(forbidden.status).toBe(403)
+    expect(
+      memberFetch.mock.calls.some(([input]) => String(input).startsWith("https://api.github.com/installation/")),
+    ).toBe(false)
+
+    const adminFetch = stubGitHub()
+    const wrongType = await handleImportOnboardingRepositoryContext(
+      request("POST", {
+        suffix: "/import-onboarding",
+        contentType: "text/plain",
+        body: JSON.stringify({ confirm: "migrate-from-onboarding-kv" }),
+      }),
+      env,
+      undefined,
+      INSTALLATION_ID,
+    )
+    expect(wrongType.status).toBe(415)
+    expect(
+      adminFetch.mock.calls.some(([input]) => String(input).startsWith("https://api.github.com/installation/")),
+    ).toBe(false)
+    await expect(readRepositoryContext(db, "github", String(INSTALLATION_ID))).resolves.toEqual({
+      status: "not_found",
+    })
+  })
+
+  it("rejects a stale or cross-installation authored repository atomically", async () => {
+    const db = await makeDb()
+    const env = await makeEnv({ db })
+    await env.OPENCLAW_STATE.put(
+      "onboarding:111",
+      JSON.stringify({
+        selectedRepos: ["acme/api", "victim/secret"],
+        repoDescriptions: {
+          "acme/api": "Public API",
+          "victim/secret": "Must not cross installation boundaries",
+        },
+      }),
+    )
+    stubGitHub({ appRepositories: [{ id: 101, full_name: "acme/api" }] })
+
+    const response = await handleImportOnboardingRepositoryContext(
+      request("POST", {
+        suffix: "/import-onboarding",
+        body: JSON.stringify({ confirm: "migrate-from-onboarding-kv" }),
+      }),
+      env,
+      undefined,
+      INSTALLATION_ID,
+    )
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ error: "legacy_scope_changed", missingRepositoryCount: 1 })
+    await expect(readRepositoryContext(db, "github", String(INSTALLATION_ID))).resolves.toEqual({
+      status: "not_found",
+    })
+  })
+
+  it("rejects credentials in legacy signup context without writing canonical D1", async () => {
+    const db = await makeDb()
+    const env = await makeEnv({ db })
+    await env.OPENCLAW_STATE.put(
+      "onboarding:111",
+      JSON.stringify({
+        selectedRepos: ["acme/api"],
+        repoDescriptions: { "acme/api": "Deploy with sk_live_4eC39HqLyjWDarjtT1zdp7dc" },
+      }),
+    )
+    stubGitHub({ appRepositories: [{ id: 101, full_name: "acme/api" }] })
+
+    const response = await handleImportOnboardingRepositoryContext(
+      request("POST", {
+        suffix: "/import-onboarding",
+        body: JSON.stringify({ confirm: "migrate-from-onboarding-kv" }),
+      }),
+      env,
+      undefined,
+      INSTALLATION_ID,
+    )
+
+    expect(response.status).toBe(422)
+    expect(await response.json()).toEqual({ error: "legacy_context_invalid", reason: "credential_detected" })
+    await expect(readRepositoryContext(db, "github", String(INSTALLATION_ID))).resolves.toEqual({
+      status: "not_found",
+    })
+  })
+
+  it("never overwrites an active or tombstoned canonical snapshot", async () => {
+    for (const tombstoned of [false, true]) {
+      const db = await makeDb()
+      await seedSnapshot(db)
+      if (tombstoned) {
+        const purged = await purgeRepositoryContext(db, {
+          provider: "github",
+          scopeId: String(INSTALLATION_ID),
+          expectedRevision: 1,
+          nowIso: "2026-07-20T10:00:00.000Z",
+          updatedBy: "test",
+        })
+        expect(purged.status).toBe("updated")
+      }
+      const env = await makeEnv({ db })
+      await env.OPENCLAW_STATE.put(
+        "onboarding:111",
+        JSON.stringify({ selectedRepos: ["acme/api"], repoDescriptions: { "acme/api": "Legacy" } }),
+      )
+      stubGitHub({ appRepositories: [{ id: 101, full_name: "acme/api" }] })
+
+      const response = await handleImportOnboardingRepositoryContext(
+        request("POST", {
+          suffix: "/import-onboarding",
+          body: JSON.stringify({ confirm: "migrate-from-onboarding-kv" }),
+        }),
+        env,
+        undefined,
+        INSTALLATION_ID,
+      )
+
+      expect(response.status).toBe(409)
+      expect(await response.json()).toEqual({
+        error: "repository_context_exists",
+        currentRevision: tombstoned ? 2 : 1,
+      })
+      const preserved = await readRepositoryContext(db, "github", String(INSTALLATION_ID))
+      expect(preserved.status).toBe("ok")
+      if (preserved.status === "ok") {
+        if (tombstoned) {
+          expect(preserved.snapshot).toMatchObject({
+            revision: 2,
+            deletedAt: "2026-07-20T10:00:00.000Z",
+          })
+        } else {
+          expect(preserved.snapshot.revision).toBe(1)
+          expect(preserved.snapshot.repositories).toHaveLength(2)
+          expect(preserved.snapshot.repositories[0]).toMatchObject({ context: "Public API" })
+        }
+      }
+    }
   })
 })

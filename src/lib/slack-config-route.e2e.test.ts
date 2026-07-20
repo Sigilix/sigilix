@@ -6,7 +6,7 @@
 
 import { readFileSync } from "node:fs"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { base64urlEncode, createSession } from "@/src/lib/auth-session"
+import { base64urlEncode, createSession, decryptAccessToken, getSession } from "@/src/lib/auth-session"
 import { handleGetSlackConfig, handleSetSlackConfig } from "@/src/lib/slack-config-route"
 import { resolveSlackScope } from "@/src/lib/slack/slack-scope"
 import { upsertSlackWorkspace } from "@/src/lib/slack/slack-binding-store"
@@ -55,7 +55,7 @@ function makeKV(): { kv: KVNamespace; values: Map<string, string> } {
   }
 }
 
-async function setup(options?: { connectWorkspace?: boolean }) {
+async function setup(options?: { connectWorkspace?: boolean; expiredGithubToken?: boolean }) {
   const db = makeD1()
   await db.exec(BASE_SQL)
   await db.exec(IDENTITY_SQL)
@@ -108,15 +108,24 @@ async function setup(options?: { connectWorkspace?: boolean }) {
     login: "octocat",
     githubUserId: 111,
     userId,
-    accessToken: "github-user-token",
+    accessToken: options?.expiredGithubToken ? "expired-access" : "github-user-token",
+    ...(options?.expiredGithubToken
+      ? {
+          refreshToken: "old-refresh",
+          accessTokenExpiresAt: Date.now() - 1_000,
+          refreshTokenExpiresAt: Date.now() + 60_000,
+        }
+      : {}),
     encryptionKeyB64url: ENC_KEY,
   })
   const env = {
     OPENCLAW_STATE: kv,
     OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
     SIGILIX_PLATFORM_DB: db,
+    GITHUB_OAUTH_CLIENT_ID: "client-id",
+    GITHUB_OAUTH_CLIENT_SECRET: "client-secret",
   } as unknown as Env
-  return { db, env }
+  return { db, env, kv }
 }
 
 function request(method: "GET" | "PUT", installationId: number, body?: unknown): Request {
@@ -130,11 +139,26 @@ function request(method: "GET" | "PUT", installationId: number, body?: unknown):
   })
 }
 
-function stubExternalAccess(): void {
+function stubExternalAccess(options?: { expectedAccessToken?: string }): string[] {
+  const seenAuthorizations: string[] = []
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString()
+      if (url === "https://github.com/login/oauth/access_token") {
+        return new Response(
+          JSON.stringify({
+            access_token: options?.expectedAccessToken,
+            refresh_token: "rotated-refresh",
+            expires_in: 28_800,
+            refresh_token_expires_in: 15_897_600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      if (url.startsWith("https://api.github.com/")) {
+        seenAuthorizations.push(new Headers(init?.headers).get("authorization") ?? "")
+      }
       if (url.includes("/user/installations/42/repositories")) {
         return new Response(
           JSON.stringify({
@@ -164,6 +188,7 @@ function stubExternalAccess(): void {
       return new Response("not found", { status: 404 })
     }),
   )
+  return seenAuthorizations
 }
 
 describe("Slack config route tenant contract", () => {
@@ -200,6 +225,41 @@ describe("Slack config route tenant contract", () => {
     expect(noSession.status).toBe(401)
     const crossTenant = await handleGetSlackConfig(request("GET", 999), env, undefined, 999)
     expect(crossTenant.status).toBe(403)
+  })
+
+  it("refreshes an expired GitHub token before the exact-installation admin write and repo intersection", async () => {
+    const seenAuthorizations = stubExternalAccess({ expectedAccessToken: "rotated-access" })
+    const { env, kv } = await setup({ expiredGithubToken: true })
+
+    const response = await handleSetSlackConfig(
+      request("PUT", 42, { bindings: [{ channelId: "C0CUSTOMER1", githubRepoIds: [101] }] }),
+      env,
+      undefined,
+      42,
+    )
+
+    expect(response.status).toBe(200)
+    expect((await response.json()) as { repositories: unknown[] }).toMatchObject({
+      repositories: [
+        { githubRepoId: 101, fullName: "acme/api" },
+        { githubRepoId: 102, fullName: "acme/web" },
+      ],
+    })
+    expect(seenAuthorizations).toEqual([
+      "Bearer rotated-access",
+      "Bearer rotated-access",
+      "Bearer rotated-access",
+      "Bearer rotated-access",
+    ])
+    const persisted = await getSession({ kv, sessionId: "session-1" })
+    expect(persisted).not.toBeNull()
+    await expect(
+      decryptAccessToken(
+        { encryptedAccessToken: persisted!.encryptedAccessToken, iv: persisted!.iv },
+        "session-1",
+        ENC_KEY,
+      ),
+    ).resolves.toBe("rotated-access")
   })
 
   it("GET returns the linked workspace, eligible repos, and current bindings", async () => {

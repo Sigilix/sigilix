@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { handleOnboardingContextRoute } from "@/src/lib/onboarding-context-route"
-import { base64urlEncode, createSession } from "@/src/lib/auth-session"
+import { base64urlEncode, createSession, decryptAccessToken, getSession } from "@/src/lib/auth-session"
 import type { Env } from "@/src/shared/types/env"
 
 const SESSION_COOKIE = "__Host-sigilix_session"
@@ -123,6 +123,92 @@ describe("handleOnboardingContextRoute (GET /v1/onboarding/context)", () => {
     })
     // No GitLab projects connected → 0 (never marks a non-GitLab user onboarded).
     expect(body.gitlabConnectionCount).toBe(0)
+  })
+
+  it("refreshes an expired GitHub token before listing installations and repositories", async () => {
+    const kv = makeKV()
+    await createSession({
+      kv,
+      sessionId: "sess-refresh",
+      login: "octocat",
+      githubUserId: 111,
+      accessToken: "expired-access",
+      refreshToken: "old-refresh",
+      accessTokenExpiresAt: Date.now() - 1_000,
+      refreshTokenExpiresAt: Date.now() + 60_000,
+      encryptionKeyB64url: ENC_KEY,
+    })
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      GITHUB_OAUTH_CLIENT_ID: "client-id",
+      GITHUB_OAUTH_CLIENT_SECRET: "client-secret",
+    } as unknown as Env
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString()
+      if (url === "https://github.com/login/oauth/access_token") {
+        return new Response(
+          JSON.stringify({
+            access_token: "rotated-access",
+            refresh_token: "rotated-refresh",
+            expires_in: 28_800,
+            refresh_token_expires_in: 15_897_600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer rotated-access")
+      if (url === "https://api.github.com/user") {
+        return new Response(JSON.stringify({ login: "octocat", name: "The Octocat" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      if (url.startsWith("https://api.github.com/user/installations?")) {
+        return new Response(
+          JSON.stringify({ total_count: 1, installations: [{ id: 42, account: { login: "acme-corp" } }] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      if (url.startsWith("https://api.github.com/user/installations/42/repositories?")) {
+        return new Response(
+          JSON.stringify({
+            total_count: 1,
+            repositories: [{ full_name: "acme-corp/api", description: "The API" }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const res = await handleOnboardingContextRoute(
+      reqWithSession("https://x/v1/onboarding/context", "sess-refresh"),
+      env,
+    )
+
+    expect(res.status).toBe(200)
+    await expect(res.json()).resolves.toMatchObject({
+      installations: [
+        {
+          installationId: 42,
+          account: "acme-corp",
+          repos: [{ fullName: "acme-corp/api", description: "The API" }],
+        },
+      ],
+    })
+    const persisted = await getSession({ kv, sessionId: "sess-refresh" })
+    expect(persisted).not.toBeNull()
+    await expect(
+      decryptAccessToken(
+        { encryptedAccessToken: persisted!.encryptedAccessToken, iv: persisted!.iv },
+        "sess-refresh",
+        ENC_KEY,
+      ),
+    ).resolves.toBe("rotated-access")
   })
 
   it("reports the count of GitLab projects the caller owns (only their own)", async () => {

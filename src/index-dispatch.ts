@@ -62,6 +62,7 @@ import { handleMcpMemoryExpireJob } from "@/src/do/mcp/mcp-memory-jobs"
 import { handleConsolidateClusterJob } from "@/src/lib/memory-consolidate-cluster"
 import { consumeActivitySeatCommand, recoverOrgSeatBillingOperation } from "@/src/features/billing"
 import { makeGitHubRepositoryContextReviewIdentity } from "@/src/features/repository-context"
+import { runSlackMentionJob } from "@/src/index-slack-webhook"
 /**
  * Post the slash-command ack comment for `cmd` on the given PR.
  * Used by pr-review-rerun and pr-improve queue handlers so the user
@@ -138,6 +139,8 @@ export async function dispatchJob(
         triggerReason: job.triggerReason ?? "mention",
         ...(linearTenantContextFromJob(job) ? { tenant: linearTenantContextFromJob(job)! } : {}),
       })
+    case "slack-mention":
+      return runSlackMentionJob(env, job)
     case "pr-overview":
       // handlePrOverview returns the verdict only under the SIG-304 CLI dryRun
       // seam; the webhook dispatch ignores it and stays Promise<void>.

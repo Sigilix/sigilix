@@ -211,7 +211,13 @@ export async function runIndexReconciliation(env: Env, opts: { dryRun: boolean }
             }
           }
         }
-        const graphStatus = await graphMissingForManifest(env, owner, repo, result.manifest.runId)
+        const graphStatus = await graphMissingForManifest(
+          env,
+          owner,
+          repo,
+          result.manifest.runId,
+          result.manifest.graphRunId,
+        )
         if (graphStatus.readError) summary.graphReadErrors += 1
         if (graphStatus.missing) {
           summary.reposMissingGraph += 1
@@ -279,6 +285,7 @@ async function graphMissingForManifest(
   owner: string,
   repo: string,
   runId: string,
+  graphRunId: string | undefined,
 ): Promise<{ missing: boolean; readError: boolean }> {
   if (!graphIndexEnabled(env)) return { missing: false, readError: false }
   let activeGraphVersion: string | null = null
@@ -296,5 +303,15 @@ async function graphMissingForManifest(
     )
     return { missing: false, readError: true }
   }
-  return { missing: activeGraphVersion !== runId, readError: false }
+  // A repo's graph is "present" when the DO's active graph version matches the
+  // manifest's EXPECTED graph version — which is `graphRunId` when the manifest
+  // pins one (the incremental push path preserves it and never rewrites graph
+  // rows), else the vector `runId`. Mirrors `freshManifestHasActiveGraph`
+  // (indexer.ts) + `preservedGraphRunId`'s `expected = graphRunId ?? runId`.
+  // The prior code compared ONLY against `runId`, so any repo whose graph
+  // version had (legitimately) diverged from its vector runId — every repo
+  // pushed under graph-index "shadow" — was perpetually flagged graph-missing
+  // and re-enqueued for a FULL re-embed every reconcile (the SIG cost incident).
+  const present = activeGraphVersion === runId || (graphRunId !== undefined && activeGraphVersion === graphRunId)
+  return { missing: !present, readError: false }
 }

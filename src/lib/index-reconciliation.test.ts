@@ -302,6 +302,25 @@ describe("runIndexReconciliation", () => {
     )
   })
 
+  it("does NOT enqueue a graph-shadow-drift repo whose active version matches its manifest graphRunId", async () => {
+    // The cost-incident regression: under graph-index "shadow" the incremental
+    // push path pins the manifest's graphRunId (≠ the vector runId) and does not
+    // rewrite graph rows, so the DO's active graph version legitimately equals
+    // graphRunId, NOT runId. The reconciler must treat that as PRESENT (mirror
+    // freshManifestHasActiveGraph), not re-enqueue a full re-embed every tick.
+    mockListInstalls.mockResolvedValue(ok([111]))
+    mockListRepos.mockResolvedValueOnce(ok(["o/a"]))
+    mockReadManifest.mockResolvedValueOnce(okManifest({ runId: "vec-run", graphRunId: "graph-run" }))
+    mockDebugActiveGraphVersion.mockResolvedValueOnce("graph-run")
+
+    const out = await runIndexReconciliation({ ...env, OPENCLAW_GRAPH_INDEX: "shadow" } as Env, {
+      dryRun: false,
+    })
+
+    expect(out.reposMissingGraph).toBe(0)
+    expect(mockEnqueue).not.toHaveBeenCalled()
+  })
+
   it("treats graph active-version read errors as fail-soft and does not enqueue", async () => {
     mockListInstalls.mockResolvedValue(ok([111]))
     mockListRepos.mockResolvedValueOnce(ok(["o/a"]))

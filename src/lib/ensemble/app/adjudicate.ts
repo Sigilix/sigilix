@@ -600,6 +600,11 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
           line: finding.line,
           score: finding.score,
           category: finding.category,
+          // SIG-602 enforce monitoring: the finding TEXT so a residual
+          // false-demote is auditable from prod logs (the offline corpus
+          // lacks live findings). Body truncated to bound log size.
+          headline: finding.headline,
+          bodyPreview: (finding.body ?? "").slice(0, 280),
         }),
       )
       validationSink?.push({

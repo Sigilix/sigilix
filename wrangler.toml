@@ -1074,6 +1074,18 @@ SIGILIX_SECURITY_USAGE_VALIDATOR_MODE = "enforce"
 # bugs). Rollback: "off".
 SIGILIX_WINDOW_BLINDNESS_VALIDATOR_MODE = "shadow"
 
+# SIG-602: diff-consistency gate (evaluateDiffConsistency). Demotes a finding
+# whose OWN claim is deterministically contradicted by the diff or its own body
+# — a "missing" file that IS in the PR, an "exported" Go symbol whose identifier
+# is lower-case, or a headline that contradicts its explanation. Demote-not-drop,
+# keeps on any ambiguity. Set to "enforce" after an OFFLINE audit on 67 real
+# Sigilix findings showed 0 false-demotes (recall-safe) and the "no-tests-for-a-
+# present-file" FP class was fixed (PR #1008). The demote telemetry logs the
+# finding headline + body-preview so any residual false-demote is auditable from
+# prod logs. Rollback: "off" (one-line revert; demote-not-drop means even a
+# wrongly-demoted finding still lands in the review body, recoverable).
+SIGILIX_DIFF_CONSISTENCY_VALIDATOR_MODE = "enforce"
+
 # SIG-308: logic-refutation backstop (evaluateLogicRefutation). Flags a sev>=4
 # logic finding that never showed it survives refutation (no
 # `independentAssessment`) — the self-refuting-finding shape (sigilix-monitor

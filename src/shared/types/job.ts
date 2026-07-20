@@ -38,6 +38,20 @@ export type JobMessage =
       triggerReason?: "mention" | "thread-followup"
     } & LinearJobTenantContext)
   | {
+      /**
+       * A signed Slack app_mention accepted by the webhook producer. The
+       * consumer re-resolves every authority-bearing value (scope, bot token,
+       * entitlement) from storage; this payload carries no secrets or tokens.
+       */
+      type: "slack-mention"
+      eventId: string
+      teamId: string
+      channelId: string
+      slackUserId: string
+      rawText: string
+      threadTs: string
+    }
+  | {
       type: "pr-overview"
       owner: string
       repo: string

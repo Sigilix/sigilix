@@ -4,9 +4,11 @@ import { MAX_CHUNK_CHARS } from "@/src/lib/chunk-core"
 import { chunkId } from "@/src/lib/indexer-internals"
 import { repoTenantKey, type RepoIndexManifestV1 } from "@/src/lib/repo-index-manifest"
 import { handleSlackRequest } from "@/src/index-slack-webhook"
+import { dispatchJob } from "@/src/index-dispatch"
 import { replaceRepositoryContext } from "@/src/features/repository-context"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
 import { normalizeEnv } from "@/src/shared/util/normalize-env"
 
 const BASE_SQL = readFileSync(new URL("../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
@@ -641,8 +643,14 @@ describe("signed Slack webhook verified citations", () => {
     })
     vi.stubGlobal("fetch", fetchMock)
 
+    const queuedJobs: JobMessage[] = []
     const env = normalizeEnv({
       OPENCLAW_STATE: kv,
+      OPENCLAW_JOBS: {
+        send: vi.fn(async (job: JobMessage) => {
+          queuedJobs.push(job)
+        }),
+      } as unknown as Queue<JobMessage>,
       SIGILIX_PLATFORM_DB: db,
       SIGILIX_SLACK_MODE: "on",
       SIGILIX_REPOSITORY_CONTEXT_SLACK_MODE: productionSlackRepositoryContextMode(),
@@ -670,8 +678,9 @@ describe("signed Slack webhook verified citations", () => {
     const response = await handleSlackRequest(await signedMention(), env, ctx)
 
     expect(response.status).toBe(200)
-    expect(ctx.pendingCount()).toBe(1)
-    await ctx.flush()
+    expect(ctx.pendingCount()).toBe(0)
+    expect(queuedJobs).toHaveLength(1)
+    await dispatchJob(queuedJobs[0]!, env)
 
     expect(codeIndex.query).toHaveBeenCalledTimes(2)
     expect(codeIndex.query).toHaveBeenCalledWith(
@@ -817,7 +826,7 @@ describe("signed Slack webhook verified citations", () => {
     expect(slackText).toContain(fileUrl)
     expect(slackText).toContain(compareUrl)
     expect(slackText).not.toContain(`/pull/${PR_NUMBER}`)
-    expect(kv.values.has(`slack-event:EvVerifiedCitation`)).toBe(true)
+    expect(kv.values.has(`slack-event:${TEAM_ID}:EvVerifiedCitation`)).toBe(true)
     expect([...kv.values.keys()].some((key) => key.startsWith("agent-loop-telemetry:"))).toBe(true)
 
     expect(memoryIndex.query).toHaveBeenCalledOnce()

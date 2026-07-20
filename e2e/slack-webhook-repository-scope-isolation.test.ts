@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { handleSlackRequest } from "@/src/index-slack-webhook"
+import { dispatchJob } from "@/src/index-dispatch"
 import { resolveSlackScope } from "@/src/lib/slack/slack-scope"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import type { Env } from "@/src/shared/types/env"
+import type { JobMessage } from "@/src/shared/types/job"
 
 vi.mock("@/src/lib/slack/slack-agent", () => ({
   runSlackAgent: vi.fn(),
@@ -194,7 +196,7 @@ async function makePlatformDb(): Promise<D1Database> {
   return db
 }
 
-async function setup(): Promise<{ env: Env; fetchMock: ReturnType<typeof vi.fn> }> {
+async function setup(): Promise<{ env: Env; fetchMock: ReturnType<typeof vi.fn>; queuedJobs: JobMessage[] }> {
   const db = await makePlatformDb()
   const kv = makeKv()
   kv.values.set(
@@ -215,9 +217,15 @@ async function setup(): Promise<{ env: Env; fetchMock: ReturnType<typeof vi.fn> 
     )
   })
   vi.stubGlobal("fetch", fetchMock)
+  const queuedJobs: JobMessage[] = []
 
   const env = {
     OPENCLAW_STATE: kv,
+    OPENCLAW_JOBS: {
+      send: vi.fn(async (job: JobMessage) => {
+        queuedJobs.push(job)
+      }),
+    } as unknown as Queue<JobMessage>,
     SIGILIX_PLATFORM_DB: db,
     SIGILIX_SLACK_MODE: "on",
     SLACK_SIGNING_SECRET: SIGNING_SECRET,
@@ -233,7 +241,7 @@ async function setup(): Promise<{ env: Env; fetchMock: ReturnType<typeof vi.fn> 
       "globex/secrets": String(OTHER_INSTALLATION_ID),
     }),
   } as unknown as Env
-  return { env, fetchMock }
+  return { env, fetchMock, queuedJobs }
 }
 
 beforeEach(() => {
@@ -255,27 +263,29 @@ afterEach(() => {
 
 describe("signed Slack webhook repository-scope isolation", () => {
   it("allows a same-installation repository through the real D1 scope path", async () => {
-    const { env } = await setup()
+    const { env, queuedJobs } = await setup()
     const scope = await resolveSlackScope(env, { teamId: TEAM_ID, channelId: SAME_TENANT_CHANNEL })
     expect(scope.ok).toBe(true)
 
     const ctx = makeExecutionContext()
     const response = await handleSlackRequest(await signedMention(SAME_TENANT_CHANNEL, "EvSameTenant"), env, ctx)
     expect(response.status).toBe(200)
-    await ctx.flush()
+    expect(queuedJobs).toHaveLength(1)
+    await dispatchJob(queuedJobs[0]!, env)
 
     expect(fetchSlackThread).toHaveBeenCalledOnce()
     expect(runSlackAgent).toHaveBeenCalledOnce()
   })
 
   it("denies a foreign immutable repo id before thread fetch or agent/model work", async () => {
-    const { env } = await setup()
+    const { env, queuedJobs } = await setup()
     const ctx = makeExecutionContext()
     const response = await handleSlackRequest(await signedMention(FOREIGN_REPO_CHANNEL, "EvForeignTenant"), env, ctx)
 
-    // Slack still receives its retry-safe acknowledgement; denial is deferred.
+    // Slack still receives its retry-safe acknowledgement; denial is queued.
     expect(response.status).toBe(200)
-    await ctx.flush()
+    expect(queuedJobs).toHaveLength(1)
+    await dispatchJob(queuedJobs[0]!, env)
 
     expect(fetchSlackThread).not.toHaveBeenCalled()
     expect(runSlackAgent).not.toHaveBeenCalled()

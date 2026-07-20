@@ -160,6 +160,110 @@ describe("getValidGithubToken", () => {
     expect(raw).not.toContain("new-refresh")
   })
 
+  it("single-flights concurrent refreshes for the same expired session", async () => {
+    const kv = makeKV()
+    const record = await makeRecord("s3-race", {
+      accessToken: "dead-token",
+      refreshToken: "old-refresh",
+      accessTokenExpiresAt: Date.now() - 1000,
+      refreshTokenExpiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+    })
+    let refreshCount = 0
+    const fetchImpl = vi.fn(async () => {
+      refreshCount += 1
+      return jsonResponse({
+        access_token: `new-token-${refreshCount}`,
+        refresh_token: `new-refresh-${refreshCount}`,
+        expires_in: 28800,
+        refresh_token_expires_in: 15897600,
+      })
+    }) as unknown as typeof fetch
+
+    const args = {
+      env: envWith(kv),
+      sessionId: "s3-race",
+      record,
+      encryptionKeyB64url: KEY,
+      fetchImpl,
+    }
+    const tokens = await Promise.all([getValidGithubToken(args), getValidGithubToken(args)])
+
+    expect(tokens).toEqual(["new-token-1", "new-token-1"])
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(kv.put).toHaveBeenCalledTimes(1)
+  })
+
+  it("shares a failed refresh fallback, clears it, and allows the next request to retry", async () => {
+    const kv = makeKV()
+    const record = await makeRecord("s3-retry", {
+      accessToken: "stale-token",
+      refreshToken: "old-refresh",
+      accessTokenExpiresAt: Date.now() - 1000,
+    })
+    let shouldFail = true
+    const fetchImpl = vi.fn(async () =>
+      shouldFail
+        ? jsonResponse({ error: "temporary_failure" }, 503)
+        : jsonResponse({ access_token: "recovered-token", refresh_token: "rotated-refresh", expires_in: 28800 }),
+    ) as unknown as typeof fetch
+    const args = {
+      env: envWith(kv),
+      sessionId: "s3-retry",
+      record,
+      encryptionKeyB64url: KEY,
+      fetchImpl,
+    }
+
+    const failedTokens = await Promise.all([getValidGithubToken(args), getValidGithubToken(args)])
+    expect(failedTokens).toEqual(["stale-token", "stale-token"])
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(kv.put).not.toHaveBeenCalled()
+
+    shouldFail = false
+    expect(await getValidGithubToken(args)).toBe("recovered-token")
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(kv.put).toHaveBeenCalledTimes(1)
+  })
+
+  it("refreshes different sessions independently", async () => {
+    const kv = makeKV()
+    const firstRecord = await makeRecord("s3-first", {
+      accessToken: "first-stale",
+      refreshToken: "first-refresh",
+      accessTokenExpiresAt: Date.now() - 1000,
+    })
+    const secondRecord = await makeRecord("s3-second", {
+      accessToken: "second-stale",
+      refreshToken: "second-refresh",
+      accessTokenExpiresAt: Date.now() - 1000,
+    })
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const refreshToken = (init?.body as URLSearchParams).get("refresh_token")
+      return jsonResponse({ access_token: `${refreshToken}-access`, expires_in: 28800 })
+    }) as unknown as typeof fetch
+
+    const tokens = await Promise.all([
+      getValidGithubToken({
+        env: envWith(kv),
+        sessionId: "s3-first",
+        record: firstRecord,
+        encryptionKeyB64url: KEY,
+        fetchImpl,
+      }),
+      getValidGithubToken({
+        env: envWith(kv),
+        sessionId: "s3-second",
+        record: secondRecord,
+        encryptionKeyB64url: KEY,
+        fetchImpl,
+      }),
+    ])
+
+    expect(tokens).toEqual(["first-refresh-access", "second-refresh-access"])
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(kv.put).toHaveBeenCalledTimes(2)
+  })
+
   it("falls back to the stale token (never throws) when the refresh call fails", async () => {
     const kv = makeKV()
     const record = await makeRecord("s4", {

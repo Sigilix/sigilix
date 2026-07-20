@@ -376,6 +376,35 @@ export async function writeRepoIndexManifest(env: Env, manifest: RepoIndexManife
  * to decide whether to skip (return early with `index-job-skip-fresh`)
  * or proceed with re-indexing.
  */
+/**
+ * SIG-604: is the prior manifest's EMBEDDING config compatible with the current
+ * run's — i.e. same owner + model + embeddingDim + chunker/citation versions,
+ * IGNORING headSha. This is exactly the condition under which a prior run's
+ * content-addressed vector ids can be REUSED (chunkId is content-only, so an
+ * unchanged file's ids are identical AND its stored vectors were produced by
+ * this same model/chunker). When any of these differ — a model swap or chunker
+ * bump, the usual reason a full re-index is triggered — reuse would keep stale
+ * vectors, so it must NOT fire. `isManifestFresh` is this predicate AND a
+ * headSha match.
+ */
+export function isManifestEmbedCompatible(args: {
+  manifest: RepoIndexManifestV1
+  currentOwner: string
+  currentModelId: string
+  currentEmbeddingDim: number
+  currentChunkerVersion: number
+  currentCitationChunkVersion: number
+}): boolean {
+  const m = args.manifest
+  return (
+    m.owner === args.currentOwner &&
+    m.modelId === args.currentModelId &&
+    m.embeddingDim === args.currentEmbeddingDim &&
+    m.chunkerVersion === args.currentChunkerVersion &&
+    m.citationChunkVersion === args.currentCitationChunkVersion
+  )
+}
+
 export function isManifestFresh(args: {
   manifest: RepoIndexManifestV1
   currentHeadSha: string
@@ -385,13 +414,5 @@ export function isManifestFresh(args: {
   currentChunkerVersion: number
   currentCitationChunkVersion: number
 }): boolean {
-  const m = args.manifest
-  return (
-    m.headSha === args.currentHeadSha &&
-    m.owner === args.currentOwner &&
-    m.modelId === args.currentModelId &&
-    m.embeddingDim === args.currentEmbeddingDim &&
-    m.chunkerVersion === args.currentChunkerVersion &&
-    m.citationChunkVersion === args.currentCitationChunkVersion
-  )
+  return args.manifest.headSha === args.currentHeadSha && isManifestEmbedCompatible(args)
 }

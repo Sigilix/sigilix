@@ -56,16 +56,42 @@ interface ProcessSliceArgs {
    * with zero effect on the graph the reviewer reads (recall-neutral, SIG-423).
    */
   writeGraph?: boolean
+  /**
+   * SIG-604: prior run's content-addressed chunk ids by path (from
+   * `readRepoIndexVectors(...).vectors.byPath`), supplied ONLY when the prior
+   * manifest is embed-compatible (same model/embeddingDim/chunker/citation —
+   * `isManifestEmbedCompatible`). A file whose freshly-computed chunk ids EXACTLY
+   * match its prior ids is unchanged content under the same config, so its
+   * vectors already exist in Vectorize under those (content-addressed) ids — the
+   * embed is skipped and the ids are reused. Undefined (default) ⇒ no reuse, the
+   * pre-SIG-604 behavior of embedding every file. Fail-safe: any mismatch (a
+   * changed file, an over-length-dropped id, a model/chunker bump that made the
+   * caller withhold this map) falls back to a full embed. The graph write above
+   * is UNCONDITIONAL so the committed graph stays complete even for reused files.
+   */
+  reuseIdsByPath?: Readonly<Record<string, string[]>> | undefined
 }
 
 export interface ProcessSliceResult {
   /** Contiguous prefix of `files` fully drained to durable vector writes. */
   processedFileCount: number
-  /** Total chunks upserted across the slice. */
+  /** Chunks embedded + upserted across the slice. SIG-604: reused (skip-embed)
+   *  files are NOT counted here — this is the embed/upsert volume, not the
+   *  index's total chunk count. */
   chunkCount: number
-  /** Path → ordered chunk ids accumulated for this slice. Used by
-   *  ARC-238's uninstall delete to call `deleteByIds` later. */
+  /** Path → ordered chunk ids accumulated for this slice (embedded OR reused).
+   *  Used by ARC-238's uninstall delete to call `deleteByIds` later. */
   idsByPath: Record<string, string[]>
+  /** SIG-604: files whose embed was skipped via content-id reuse this slice. */
+  reusedFileCount: number
+}
+
+/** Order-sensitive chunk-id set equality (mirrors indexer-incremental's
+ *  `sameIds`): a reused file must reproduce the prior ids exactly. */
+function idsEqual(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
 }
 
 /** SIG-137: group an upsert batch's chunk ids by source path for the
@@ -90,6 +116,7 @@ export async function processSlice(args: ProcessSliceArgs): Promise<ProcessSlice
   let lineChunkFiles = 0
   let parseFallbackFiles = 0
   let processedFileCount = 0
+  let reusedFileCount = 0
 
   for (const file of files) {
     if (processedFileCount > 0 && args.deadlineMs !== undefined && Date.now() >= args.deadlineMs) {
@@ -185,6 +212,24 @@ export async function processSlice(args: ProcessSliceArgs): Promise<ProcessSlice
       fileChunks = chunkFile(file.path, content) // AST off or non-JS/TS
       lineChunkFiles += 1
     }
+
+    // SIG-604: skip-unchanged reuse. If the caller supplied the prior run's
+    // (embed-compatible) chunk ids for this path and our freshly-computed ids
+    // match EXACTLY, the content is unchanged under the same model/chunker —
+    // its vectors already exist in Vectorize under these content-addressed ids.
+    // Record the ids and skip the embed (the expensive Workers-AI call). The
+    // graph write above already ran, so the committed graph stays complete.
+    const priorIds = args.reuseIdsByPath?.[file.path]
+    if (priorIds !== undefined) {
+      const currentIds = await Promise.all(fileChunks.map((chunk) => chunkId(namespace, chunk)))
+      if (idsEqual(priorIds, currentIds)) {
+        idsByPath[file.path] = currentIds
+        reusedFileCount += 1
+        processedFileCount += 1
+        continue
+      }
+    }
+
     chunkBuffer.push(...fileChunks)
 
     while (chunkBuffer.length >= EMBED_BATCH) {
@@ -241,10 +286,11 @@ export async function processSlice(args: ProcessSliceArgs): Promise<ProcessSlice
       ast_chunk_files: astChunkFiles,
       line_chunk_files: lineChunkFiles,
       parse_fallback_files: parseFallbackFiles,
+      reused_files: reusedFileCount, // SIG-604: embeds skipped via content-id reuse
     }),
   )
 
-  return { processedFileCount, chunkCount: totalChunks, idsByPath }
+  return { processedFileCount, chunkCount: totalChunks, idsByPath, reusedFileCount }
 }
 
 interface VectorizeRecord {

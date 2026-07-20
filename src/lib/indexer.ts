@@ -8,6 +8,7 @@ import { GitHubClient } from "@/src/shared/adapters/github"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from "@/src/shared/adapters/model"
 import { isManifestFresh, readRepoIndexManifest } from "./repo-index-manifest"
+import { loadReuseIdsByPath } from "./indexer-full-reuse"
 import { isRepoSensitive } from "./repo-policy"
 import { writeActiveRun, readActiveRunId, shouldFinalize } from "./repo-index-active-run"
 import { enqueueWarmupRerunsForIndex } from "./warmup"
@@ -227,9 +228,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env, deadlineMs: n
         reason: existing.reason,
       }),
     )
-    // Fall through to re-index.
   }
-
   if (
     await maybeHandleIncrementalPushIndex({
       job,
@@ -829,6 +828,7 @@ async function handleShardJob(
       files: indexableFiles.slice(shard.lo, shard.hi),
       astChunking: astOn,
       deadlineMs,
+      reuseIdsByPath: await loadReuseIdsByPath({ env, owner, stateRepo, astOn }),
     })
     if (processed.processedFileCount <= 0) throw new Error("indexer slice made no progress")
     sliceChunkCount = processed.chunkCount

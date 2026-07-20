@@ -149,4 +149,62 @@ describe("processSlice", () => {
     const records = upsert.mock.calls.flatMap((call) => call[0] as Array<{ metadata: Record<string, unknown> }>)
     expect(records).toHaveLength(1)
   })
+
+  // SIG-604: skip-unchanged content-id reuse.
+  const sliceArgs = (env: Env, extra: Record<string, unknown> = {}) => ({
+    client,
+    env,
+    owner: "Sigilix",
+    repo: "sigilix",
+    stateRepo: "sigilix",
+    namespace: "sigilix/sigilix",
+    headSha: "abc123456789",
+    runId: "run-abc",
+    files: [{ path: "src/foo.ts", size: 42 }],
+    astChunking: false,
+    ...extra,
+  })
+
+  it("SIG-604: no reuseIdsByPath → embeds every file (pre-604 behavior)", async () => {
+    const { env, upsert } = graphEnv()
+    const result = await processSlice(sliceArgs(env))
+    expect(result.reusedFileCount).toBe(0)
+    expect(upsert).toHaveBeenCalled()
+  })
+
+  it("SIG-604: reuses (skips embed) a file whose current chunk ids match the prior ids", async () => {
+    // First pass with no reuse → capture the file's real chunk ids.
+    const first = await processSlice(sliceArgs(graphEnv().env))
+    const priorIds = first.idsByPath["src/foo.ts"]!
+    expect(priorIds.length).toBeGreaterThan(0)
+    mockWriteFileGraph.mockClear() // ignore the id-capturing pass's graph write
+
+    // Second pass supplying those exact ids → the embed/upsert is skipped.
+    const { env, upsert } = graphEnv()
+    const result = await processSlice(sliceArgs(env, { reuseIdsByPath: { "src/foo.ts": priorIds } }))
+
+    expect(result.reusedFileCount).toBe(1)
+    expect(result.processedFileCount).toBe(1)
+    expect(upsert).not.toHaveBeenCalled() // no embed
+    expect(result.idsByPath["src/foo.ts"]).toEqual(priorIds) // ids preserved
+    // The graph write is UNCONDITIONAL — a reused file still writes graph rows so
+    // the committed graph stays complete.
+    expect(mockWriteFileGraph).toHaveBeenCalledTimes(1)
+  })
+
+  it("SIG-604: does NOT reuse when the prior ids differ (changed content) → re-embeds", async () => {
+    const { env, upsert } = graphEnv()
+    const result = await processSlice(
+      sliceArgs(env, { reuseIdsByPath: { "src/foo.ts": ["stale-id-that-wont-match"] } }),
+    )
+    expect(result.reusedFileCount).toBe(0)
+    expect(upsert).toHaveBeenCalled() // embedded, not reused
+  })
+
+  it("SIG-604: reuse is per-path — an unmapped path still embeds", async () => {
+    const { env, upsert } = graphEnv()
+    const result = await processSlice(sliceArgs(env, { reuseIdsByPath: { "some/other.ts": ["whatever"] } }))
+    expect(result.reusedFileCount).toBe(0)
+    expect(upsert).toHaveBeenCalled()
+  })
 })

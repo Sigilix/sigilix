@@ -57,12 +57,12 @@ describe("loadLinearRepositoryContext", () => {
     vi.restoreAllMocks()
   })
 
-  it("keeps the canonical production rollout in shadow and mirrors it to the legacy reader", () => {
+  it("enables the canonical production rollout (on) and mirrors it to the legacy reader", () => {
     const wrangler = readFileSync(new URL("../../wrangler.toml", import.meta.url), "utf8")
     const configured = /SIGILIX_REPOSITORY_CONTEXT_LINEAR_MODE\s*=\s*"([^"]*)"/u.exec(wrangler)?.[1]
-    expect(configured, "SIGILIX_REPOSITORY_CONTEXT_LINEAR_MODE in wrangler.toml").toBe("shadow")
+    expect(configured, "SIGILIX_REPOSITORY_CONTEXT_LINEAR_MODE in wrangler.toml").toBe("on")
     const normalized = normalizeEnv({ SIGILIX_REPOSITORY_CONTEXT_LINEAR_MODE: configured } as unknown as Env)
-    expect(normalized.OPENCLAW_REPOSITORY_CONTEXT_LINEAR_MODE).toBe("shadow")
+    expect(normalized.OPENCLAW_REPOSITORY_CONTEXT_LINEAR_MODE).toBe("on")
   })
 
   it("returns zero prompt bytes in shadow while measuring the exact team-bound repositories", async () => {

@@ -1243,10 +1243,15 @@ SIGILIX_REVIEW_MULTIBATCH_MODE = "on"
 # review specialists. Roll back to "shadow" to measure without prompt changes.
 SIGILIX_REPOSITORY_CONTEXT_REVIEW_MODE = "post"
 
-# Canonical repository descriptions for Linear triage and mention replies.
-# Shadow reads the exact installation + team-bound immutable repository ids,
-# measures the bounded prompt block, and returns zero prompt bytes.
-SIGILIX_REPOSITORY_CONTEXT_LINEAR_MODE = "shadow"
+# Canonical repository descriptions for Linear triage and mention replies. On
+# reads the exact installation + team-bound immutable repository ids and supplies
+# the bounded untrusted block to the model (same scoped renderer as Slack:
+# cross-tenant-isolated, 8k-char cap, 500ms read timeout, soft-fail, wrapped in
+# an [REPOSITORY CONTEXT — UNTRUSTED DATA] fence that never grants authorization).
+# This is what makes the portal repository-context editor actually reach Linear.
+# Roll back to "shadow" to keep the scoped read + content-free telemetry while
+# returning zero prompt bytes.
+SIGILIX_REPOSITORY_CONTEXT_LINEAR_MODE = "on"
 
 # Canonical repository descriptions for Slack Q&A and offer revision. On reads
 # the exact installation + channel-authorized immutable repository ids and supplies

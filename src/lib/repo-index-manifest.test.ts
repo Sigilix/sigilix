@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest"
 import {
   indexNamespace,
   isManifestFresh,
+  isManifestEmbedCompatible,
   legacyRepoIndexManifestKey,
   parseRepoIndexManifest,
   readRepoIndexManifest,
@@ -465,5 +466,51 @@ describe("isManifestFresh", () => {
 
   it("returns false when owner differs (same-named repo collision)", () => {
     expect(isManifestFresh({ ...base, currentOwner: "different-org" })).toBe(false)
+  })
+})
+
+// SIG-604: the reuse-safety gate — everything isManifestFresh checks EXCEPT
+// headSha. This is what makes full-index skip-unchanged reuse correct: reuse
+// content-addressed vectors ONLY when they were produced by the same model +
+// embeddingDim + chunker/citation, so a model/chunker migration never keeps
+// stale vectors.
+describe("isManifestEmbedCompatible (SIG-604 reuse-safety gate)", () => {
+  const base = {
+    manifest: SAMPLE_MANIFEST,
+    currentOwner: SAMPLE_MANIFEST.owner,
+    currentModelId: SAMPLE_MANIFEST.modelId,
+    currentEmbeddingDim: SAMPLE_MANIFEST.embeddingDim,
+    currentChunkerVersion: SAMPLE_MANIFEST.chunkerVersion,
+    currentCitationChunkVersion: CITATION_CHUNK_VERSION,
+  }
+
+  it("returns true when the embedding config matches (reuse is safe)", () => {
+    expect(isManifestEmbedCompatible(base)).toBe(true)
+  })
+
+  it("IGNORES headSha — a new head with the same config is compatible (the whole point)", () => {
+    // isManifestEmbedCompatible takes no headSha; a changed head must not block
+    // reuse of the unchanged files within it.
+    expect(isManifestEmbedCompatible(base)).toBe(true)
+  })
+
+  it("returns FALSE on a model rotation (would keep stale vectors → must re-embed)", () => {
+    expect(isManifestEmbedCompatible({ ...base, currentModelId: "@cf/some-new-model" })).toBe(false)
+  })
+
+  it("returns FALSE on a chunker bump", () => {
+    expect(isManifestEmbedCompatible({ ...base, currentChunkerVersion: 2 })).toBe(false)
+  })
+
+  it("returns FALSE on an embeddingDim change", () => {
+    expect(isManifestEmbedCompatible({ ...base, currentEmbeddingDim: 1024 })).toBe(false)
+  })
+
+  it("returns FALSE on a citation-version change", () => {
+    expect(isManifestEmbedCompatible({ ...base, currentCitationChunkVersion: CITATION_CHUNK_VERSION + 1 })).toBe(false)
+  })
+
+  it("returns FALSE on an owner mismatch", () => {
+    expect(isManifestEmbedCompatible({ ...base, currentOwner: "different-org" })).toBe(false)
   })
 })

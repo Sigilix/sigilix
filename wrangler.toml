@@ -693,6 +693,20 @@ SIGILIX_REPO_ACTIVE_INDEX_MODE = "on"
 SIGILIX_GRAPH_INDEX = "off"
 SIGILIX_GRAPH_RETRIEVAL = "post"
 
+# SIG-604: full-index skip-unchanged reuse. "on" lets a full (re)index skip the
+# embed for files whose content-addressed chunk ids exactly match the prior
+# run's MATERIALIZED active-index snapshot — but ONLY when the prior manifest is
+# embed-compatible (same model / embeddingDim / chunker / citation version), so a
+# model/chunker migration still re-embeds everything. Reuse ids come from the
+# active-index snapshot (durably-upserted vectors), NOT the write-ahead
+# delete-coverage ledger, so a never-written vector is never falsely reused
+# (code-review C1); reuse only fires when an active index exists, so chunkCount
+# stays correct (C1/M1). Fail-safe: any mismatch / read error / absent active
+# index falls back to a full embed; the graph write is unconditional so the
+# committed graph stays complete. Ships "off" (dark). Enable together with
+# re-enabling GRAPH_INDEX so a full re-index costs ~the delta. Rollback: "off".
+SIGILIX_INDEX_FULL_REUSE = "off"
+
 # SIG-426: CI-failure triage → review synth (grounded inline). "off" | "shadow" |
 # "enforce". "shadow": on a failed CI run, run the nemotron-ultra synth pass +
 # telemeter the would-post grounded-inline decisions, but keep the legacy sticky

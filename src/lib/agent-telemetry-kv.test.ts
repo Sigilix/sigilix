@@ -22,6 +22,7 @@ describe("makeKvTelemetrySink", () => {
       promptBuilderVersion: "linear-mention-reply-v7",
       promptBuilderSource: "source",
       turns: 1,
+      finalAnswerRepairAttempts: 1,
       toolCalls: [
         {
           name: "retrieve_codebase",
@@ -49,6 +50,7 @@ describe("makeKvTelemetrySink", () => {
 
     expect(kv.put).toHaveBeenCalledOnce()
     const stored = JSON.parse(storedValue ?? "{}") as {
+      finalAnswerRepairAttempts?: number
       linearMentionRetrieval?: {
         availableRepos: string[]
         mappedRepo: string
@@ -58,6 +60,7 @@ describe("makeKvTelemetrySink", () => {
         chunkCount: number
       }
     }
+    expect(stored.finalAnswerRepairAttempts).toBe(1)
     expect(stored.linearMentionRetrieval).toMatchObject({
       availableRepos: ["sigilix/sigilix"],
       mappedRepo: "sigilix/sigilix",

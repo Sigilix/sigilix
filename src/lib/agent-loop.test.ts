@@ -503,16 +503,147 @@ describe("runAgentLoop — failure paths (telemetry on each)", () => {
   })
 
   it("final-answer doesn't parse as JSON → final_answer_did_not_parse", async () => {
-    mockChat.mockResolvedValueOnce({
-      message: { role: "assistant", content: "this is not json" },
-      hasToolCalls: false,
-    })
+    mockChat
+      .mockResolvedValueOnce({
+        message: { role: "assistant", content: "this is not json" },
+        hasToolCalls: false,
+      })
+      .mockResolvedValueOnce({
+        message: { role: "assistant", content: "still not json" },
+        hasToolCalls: false,
+      })
     const { args, captured } = makeArgs()
     const result = await runAgentLoop(args)
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.reason).toBe("final_answer_did_not_parse")
+    if (result.reason !== "final_answer_did_not_parse") return
+    expect(result.rawAnswer).toBe("still not json")
+    expect(mockChat).toHaveBeenCalledTimes(2)
     expect(captured.callCount).toBe(1)
+    expect(captured.payload?.finalAnswerRepairAttempts).toBe(1)
+  })
+
+  it("repairs a correct prose answer into the required JSON after tool use", async () => {
+    const tool: AgentTool = {
+      name: "retrieve_codebase",
+      description: "get code chunks",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+      async execute() {
+        return { ok: true, repo: "sigilix/sigilix", chunks: [], count: 0 }
+      },
+    }
+    const productionProse = "The function is in src/lib/slack/slack-code-citations.ts and returns off, shadow, or on."
+    mockChat
+      .mockResolvedValueOnce({
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id: "call_1", function: { name: "retrieve_codebase", arguments: '{"query":"parse mode"}' } }],
+        },
+        hasToolCalls: true,
+      })
+      .mockResolvedValueOnce({
+        message: { role: "assistant", content: productionProse },
+        hasToolCalls: false,
+      })
+      .mockResolvedValueOnce({
+        message: {
+          role: "assistant",
+          content: JSON.stringify({ answer: productionProse, confidence: 5, abstain: false }),
+        },
+        hasToolCalls: false,
+      })
+
+    const { args, captured } = makeArgs({ tools: [tool] })
+    const result = await runAgentLoop(args)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.answer).toEqual({ answer: productionProse, confidence: 5, abstain: false })
+    expect(mockChat).toHaveBeenCalledTimes(3)
+    expect(captured.payload?.finalAnswerRepairAttempts).toBe(1)
+    expect(mockChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        tools: [],
+        format: args.finalAnswerSchema,
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: "assistant", content: productionProse }),
+          expect.objectContaining({ role: "user", content: expect.stringContaining("same answer") }),
+        ]),
+      }),
+    )
+    expect(captured.payload?.fallback).toBeUndefined()
+  })
+
+  it("rejects a repair that rewrites an answer-bearing response", async () => {
+    mockChat
+      .mockResolvedValueOnce({
+        message: { role: "assistant", content: "The verified answer." },
+        hasToolCalls: false,
+      })
+      .mockResolvedValueOnce({
+        message: {
+          role: "assistant",
+          content: JSON.stringify({ answer: "A different claim.", confidence: 5, abstain: false }),
+        },
+        hasToolCalls: false,
+      })
+    const { args } = makeArgs({
+      finalAnswerSchema: {
+        type: "object",
+        properties: { answer: { type: "string" }, confidence: { type: "integer" }, abstain: { type: "boolean" } },
+        required: ["answer", "confidence", "abstain"],
+      },
+    })
+
+    const result = await runAgentLoop(args)
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "final_answer_did_not_parse",
+      rawAnswer: expect.stringContaining("A different claim."),
+    })
+  })
+
+  it("rejects tool calls from the one-shot repair", async () => {
+    mockChat
+      .mockResolvedValueOnce({
+        message: { role: "assistant", content: "plain prose" },
+        hasToolCalls: false,
+      })
+      .mockResolvedValueOnce({
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id: "repair-tool", function: { name: "retrieve_codebase", arguments: "{}" } }],
+        },
+        hasToolCalls: true,
+      })
+
+    const { args } = makeArgs()
+    const result = await runAgentLoop(args)
+
+    expect(result).toMatchObject({ ok: false, reason: "final_answer_did_not_parse" })
+    expect(mockChat).toHaveBeenCalledTimes(2)
+  })
+
+  it("maps an aborted repair to wall_clock_exceeded", async () => {
+    mockChat
+      .mockResolvedValueOnce({
+        message: { role: "assistant", content: "plain prose" },
+        hasToolCalls: false,
+      })
+      .mockRejectedValueOnce(abortError())
+
+    const { args } = makeArgs()
+    const result = await runAgentLoop(args)
+
+    expect(result).toEqual({ ok: false, reason: "wall_clock_exceeded" })
   })
 
   it("final-answer with prose preamble + fenced JSON parses successfully (regression: GLM-5.1 on ARC-149)", async () => {
@@ -580,6 +711,7 @@ describe("buildTelemetryRecordInput", () => {
     const state: LoopTelemetryState = {
       startMs: Date.now() - 1000,
       turns: 2,
+      finalAnswerRepairAttempts: 0,
       toolCalls: [{ name: "x", ok: true, elapsedMs: 100, argsHash: "abc" }],
     }
     const payload = buildTelemetryRecordInput(result, args, state)
@@ -599,7 +731,7 @@ describe("buildTelemetryRecordInput", () => {
   it("sets fallback + null finalAnswer on failure", () => {
     const { args } = makeArgs()
     const result: AgentLoopResult = { ok: false, reason: "wall_clock_exceeded" }
-    const state: LoopTelemetryState = { startMs: Date.now(), turns: 0, toolCalls: [] }
+    const state: LoopTelemetryState = { startMs: Date.now(), turns: 0, finalAnswerRepairAttempts: 0, toolCalls: [] }
     const payload = buildTelemetryRecordInput(result, args, state)
     expect(payload.fallback).toBe("wall_clock_exceeded")
     expect(payload.finalAnswer).toBe(null)
@@ -608,14 +740,14 @@ describe("buildTelemetryRecordInput", () => {
   it("includes prNumber when provided", () => {
     const { args } = makeArgs({ prNumber: 162 })
     const result: AgentLoopResult = { ok: false, reason: "chat_error", error: "x" }
-    const state: LoopTelemetryState = { startMs: Date.now(), turns: 0, toolCalls: [] }
+    const state: LoopTelemetryState = { startMs: Date.now(), turns: 0, finalAnswerRepairAttempts: 0, toolCalls: [] }
     const payload = buildTelemetryRecordInput(result, args, state)
     expect(payload.prNumber).toBe(162)
   })
 
   it("includes failureRawAnswer ONLY on final_answer_did_not_parse", () => {
     const { args } = makeArgs()
-    const state: LoopTelemetryState = { startMs: Date.now(), turns: 3, toolCalls: [] }
+    const state: LoopTelemetryState = { startMs: Date.now(), turns: 3, finalAnswerRepairAttempts: 0, toolCalls: [] }
 
     // The failure mode we instrumented for: model returned something
     // that didn't parse as JSON OR didn't match the schema.

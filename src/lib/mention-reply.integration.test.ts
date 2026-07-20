@@ -234,6 +234,90 @@ describe("handleMention — SIG-207 retrieval proof", () => {
       undefined,
     )
   })
+
+  it("posts a grounded reply when the tool-using model needs a structured final-answer repair", async () => {
+    mockGetCommentWithIssue.mockResolvedValue({
+      id: "comment-repair",
+      body: "@sigilix where is parseSlackCodeCitationMode defined?",
+      user: { name: "daniel", displayName: "daniel" },
+      parent: null,
+      issue: {
+        id: "issue-repair",
+        identifier: "SIG-REPAIR",
+        title: "Find the Slack citation mode parser",
+        description: "Exercise the production agent loop after retrieval.",
+        team: { id: "team-1", key: "SIG" },
+        comments: { nodes: [] },
+      },
+    })
+    mockCreateComment.mockResolvedValue("reply-repair")
+    mockRetrieveChunks.mockResolvedValue([
+      {
+        path: "src/lib/slack/slack-code-citations.ts",
+        lineStart: 184,
+        lineEnd: 186,
+        score: 0.99,
+        content: 'return value === "shadow" || value === "on" ? value : "off"',
+      },
+    ])
+    const productionProse = "The parser is in src/lib/slack/slack-code-citations.ts and returns off, shadow, or on."
+    mockChat
+      .mockResolvedValueOnce({
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: "retrieve-parser",
+              function: {
+                name: "retrieve_codebase",
+                arguments: JSON.stringify({ query: "parseSlackCodeCitationMode", repo: "sigilix/sigilix" }),
+              },
+            },
+          ],
+        },
+        hasToolCalls: true,
+      })
+      .mockResolvedValueOnce({
+        message: { role: "assistant", content: productionProse },
+        hasToolCalls: false,
+      })
+      .mockResolvedValueOnce({
+        message: {
+          role: "assistant",
+          content: JSON.stringify({ answer: productionProse, confidence: 5, abstain: false }),
+        },
+        hasToolCalls: false,
+      })
+
+    const { env, puts } = makeEnv()
+    await handleMention("comment-repair", env)
+
+    expect(mockRetrieveChunks).toHaveBeenCalledWith(
+      expect.objectContaining({ teamKey: "sigilix/sigilix", text: "parseSlackCodeCitationMode" }),
+    )
+    expect(mockChat).toHaveBeenCalledTimes(3)
+    expect(mockChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        tools: [],
+        format: expect.objectContaining({ type: "object" }),
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: "assistant", content: productionProse }),
+          expect.objectContaining({ role: "user", content: expect.stringContaining("same answer") }),
+        ]),
+      }),
+    )
+    expect(mockCreateComment).toHaveBeenCalledWith("issue-repair", expect.stringContaining(productionProse), undefined)
+    const telemetryPut = puts.find((put) => put.key.startsWith("agent-loop-telemetry:"))
+    const telemetry = JSON.parse(telemetryPut?.value ?? "{}") as {
+      fallback?: string
+      finalAnswer?: unknown
+      finalAnswerRepairAttempts?: number
+    }
+    expect(telemetry.fallback).toBeUndefined()
+    expect(telemetry.finalAnswer).toEqual({ answer: productionProse, confidence: 5, abstain: false })
+    expect(telemetry.finalAnswerRepairAttempts).toBe(1)
+  })
 })
 
 // ── SIG-144 slice 4 spot-check: the REAL caller (handleMention) under

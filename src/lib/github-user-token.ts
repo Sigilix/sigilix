@@ -33,10 +33,24 @@ import { decryptAccessToken, updateSessionTokens, type SessionRecord } from "@/s
 // the boundary and 401 anyway.
 const EXPIRY_SKEW_MS = 60_000
 
+// GitHub rotates refresh tokens on use. Parallel portal requests for the same
+// expired session must therefore share the complete refresh + persist operation
+// inside an isolate; otherwise one request can lose the rotation race and carry
+// the stale access token into its downstream GitHub authorization call.
+const refreshesInFlight = new Map<string, Promise<string>>()
+
 interface RefreshEnv {
   OPENCLAW_STATE: KVNamespace
   GITHUB_OAUTH_CLIENT_ID?: string
   GITHUB_OAUTH_CLIENT_SECRET?: string
+}
+
+interface GithubTokenArgs {
+  env: RefreshEnv
+  sessionId: string
+  record: SessionRecord
+  encryptionKeyB64url: string
+  fetchImpl?: typeof fetch
 }
 
 interface GithubRefreshResponse {
@@ -119,34 +133,12 @@ async function callGithubRefresh(
   return parseGithubTokenSet(body, Date.now())
 }
 
-/**
- * Return a USABLE GitHub user-to-server access token for the session, refreshing
- * (and re-persisting) it first when the stored one has expired. The access-token
- * decrypt throws on failure (preserving each caller's own handling); the refresh
- * step is fail-soft (see the file header). Never logs any token.
- */
-export async function getValidGithubToken(args: {
-  env: RefreshEnv
-  sessionId: string
-  record: SessionRecord
-  encryptionKeyB64url: string
-  fetchImpl?: typeof fetch
-}): Promise<string> {
+async function refreshGithubToken(
+  args: GithubTokenArgs,
+  accessToken: string,
+  fetchImpl: typeof fetch,
+): Promise<string> {
   const { env, sessionId, record, encryptionKeyB64url } = args
-  const fetchImpl = args.fetchImpl ?? fetch
-
-  // Decrypt the current access token first — a decrypt failure is a session
-  // integrity fault and must surface exactly as it did before this module.
-  const accessToken = await decryptAccessToken(
-    { encryptedAccessToken: record.encryptedAccessToken, iv: record.iv },
-    sessionId,
-    encryptionKeyB64url,
-  )
-
-  const now = Date.now()
-  if (!needsRefresh(record, now)) return accessToken
-  if (!env.GITHUB_OAUTH_CLIENT_ID || !env.GITHUB_OAUTH_CLIENT_SECRET) return accessToken
-
   try {
     const refreshToken = await decryptAccessToken(
       { encryptedAccessToken: record.encryptedRefreshToken!, iv: record.refreshIv! },
@@ -155,8 +147,8 @@ export async function getValidGithubToken(args: {
     )
     const refreshed = await callGithubRefresh(
       refreshToken,
-      env.GITHUB_OAUTH_CLIENT_ID,
-      env.GITHUB_OAUTH_CLIENT_SECRET,
+      env.GITHUB_OAUTH_CLIENT_ID!,
+      env.GITHUB_OAUTH_CLIENT_SECRET!,
       fetchImpl,
     )
     // A refresh MUST yield both a new access token AND a new expiry to be worth
@@ -187,5 +179,39 @@ export async function getValidGithubToken(args: {
       }),
     )
     return accessToken
+  }
+}
+
+/**
+ * Return a USABLE GitHub user-to-server access token for the session, refreshing
+ * (and re-persisting) it first when the stored one has expired. The access-token
+ * decrypt throws on failure (preserving each caller's own handling); the refresh
+ * step is fail-soft (see the file header). Never logs any token.
+ */
+export async function getValidGithubToken(args: GithubTokenArgs): Promise<string> {
+  const { env, sessionId, record, encryptionKeyB64url } = args
+  const fetchImpl = args.fetchImpl ?? fetch
+
+  // Decrypt the current access token first — a decrypt failure is a session
+  // integrity fault and must surface exactly as it did before this module.
+  const accessToken = await decryptAccessToken(
+    { encryptedAccessToken: record.encryptedAccessToken, iv: record.iv },
+    sessionId,
+    encryptionKeyB64url,
+  )
+
+  const now = Date.now()
+  if (!needsRefresh(record, now)) return accessToken
+  if (!env.GITHUB_OAUTH_CLIENT_ID || !env.GITHUB_OAUTH_CLIENT_SECRET) return accessToken
+
+  const currentRefresh = refreshesInFlight.get(sessionId)
+  if (currentRefresh) return currentRefresh
+
+  const refresh = refreshGithubToken(args, accessToken, fetchImpl)
+  refreshesInFlight.set(sessionId, refresh)
+  try {
+    return await refresh
+  } finally {
+    refreshesInFlight.delete(sessionId)
   }
 }

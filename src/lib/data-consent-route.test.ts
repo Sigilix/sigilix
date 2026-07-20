@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import { makeR2 } from "@/src/features/training-consent/adapters/r2-fake.test-helpers"
 import { handleGetDataConsent, handleSetDataConsent, type ConsentStateResponse } from "@/src/lib/data-consent-route"
-import { base64urlEncode, createSession } from "@/src/lib/auth-session"
+import { base64urlEncode, createSession, decryptAccessToken, getSession } from "@/src/lib/auth-session"
 import type { Env } from "@/src/shared/types/env"
 
 const SESSION_COOKIE = "__Host-sigilix_session"
@@ -67,11 +67,29 @@ async function seedSession(kv: KVNamespace, sessionId: string, login: string): P
   })
 }
 
-function stubGitHub(installations: Array<{ id: number; account: { type: string; login: string } }>): void {
+function stubGitHub(
+  installations: Array<{ id: number; account: { type: string; login: string } }>,
+  expectedAccessToken?: string,
+): string[] {
+  const seenAuthorizations: string[] = []
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString()
+      if (url === "https://github.com/login/oauth/access_token") {
+        return new Response(
+          JSON.stringify({
+            access_token: expectedAccessToken,
+            refresh_token: "rotated-refresh",
+            expires_in: 28_800,
+            refresh_token_expires_in: 15_897_600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      if (expectedAccessToken) {
+        seenAuthorizations.push(new Headers(init?.headers).get("authorization") ?? "")
+      }
       if (url.startsWith("https://api.github.com/user/installations?")) {
         return new Response(JSON.stringify({ total_count: installations.length, installations }), { status: 200 })
       }
@@ -79,6 +97,7 @@ function stubGitHub(installations: Array<{ id: number; account: { type: string; 
       throw new Error(`unexpected fetch: ${url}`)
     }),
   )
+  return seenAuthorizations
 }
 
 function req(method: string, sessionId: string | null, iid: number, body?: unknown): Request {
@@ -111,6 +130,48 @@ async function readConsentRow(db: D1Database, iid: number) {
 afterEach(() => vi.unstubAllGlobals())
 
 describe("handleSetDataConsent (POST)", () => {
+  it("refreshes an expired GitHub token before the exact-installation admin write", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await createSession({
+      kv,
+      sessionId: "expired-session",
+      login: "octocat",
+      githubUserId: 111,
+      userId: "consent-user-111",
+      accessToken: "expired-access",
+      refreshToken: "old-refresh",
+      accessTokenExpiresAt: Date.now() - 1_000,
+      refreshTokenExpiresAt: Date.now() + 60_000,
+      encryptionKeyB64url: ENC_KEY,
+    })
+    await seedTenant(db, 1, "team")
+    const seenAuthorizations = stubGitHub([{ id: 1, account: { type: "User", login: "octocat" } }], "rotated-access")
+    const routeEnv = env(kv, db, {
+      GITHUB_OAUTH_CLIENT_ID: "client-id",
+      GITHUB_OAUTH_CLIENT_SECRET: "client-secret",
+    })
+
+    const res = await handleSetDataConsent(
+      req("POST", "expired-session", 1, { consent: "granted" }),
+      routeEnv,
+      undefined,
+      1,
+    )
+
+    expect(res.status).toBe(200)
+    expect(seenAuthorizations).toEqual(["Bearer rotated-access", "Bearer rotated-access"])
+    const persisted = await getSession({ kv, sessionId: "expired-session" })
+    expect(persisted).not.toBeNull()
+    await expect(
+      decryptAccessToken(
+        { encryptedAccessToken: persisted!.encryptedAccessToken, iv: persisted!.iv },
+        "expired-session",
+        ENC_KEY,
+      ),
+    ).resolves.toBe("rotated-access")
+  })
+
   it("401 without a session", async () => {
     const db = await makeDb()
     const res = await handleSetDataConsent(

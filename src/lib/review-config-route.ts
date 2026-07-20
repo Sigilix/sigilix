@@ -22,7 +22,7 @@
 // config → 400; oversize → 413. A write only happens once every gate has passed.
 
 import { requireSession } from "@/src/lib/auth-middleware"
-import { decryptAccessToken } from "@/src/lib/auth-session"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import { readDashboardReviewConfig, writeDashboardReviewConfig, repoScopeId } from "@/src/lib/review-config-store"
@@ -68,11 +68,12 @@ async function authAdmin(
   }
   let accessToken: string
   try {
-    accessToken = await decryptAccessToken(
-      { encryptedAccessToken: session.record.encryptedAccessToken, iv: session.record.iv },
-      session.sessionId,
-      env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-    )
+    accessToken = await getValidGithubToken({
+      env,
+      sessionId: session.sessionId,
+      record: session.record,
+      encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+    })
   } catch (error) {
     console.error(
       JSON.stringify({

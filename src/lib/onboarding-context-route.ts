@@ -15,7 +15,7 @@
 // wizard even if one installation's repo listing has a transient hiccup.
 
 import { requireSession } from "@/src/lib/auth-middleware"
-import { decryptAccessToken } from "@/src/lib/auth-session"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { connectUserKey } from "@/src/lib/gitlab-connect/gitlab-connect-oauth"
 import { getConnection, getUserConnectionIds } from "@/src/lib/gitlab-connect/gitlab-connect-store"
 import type { Env } from "@/src/shared/types/env"
@@ -214,11 +214,12 @@ export async function handleOnboardingContextRoute(
 
   let accessToken: string
   try {
-    accessToken = await decryptAccessToken(
-      { encryptedAccessToken: authed.record.encryptedAccessToken, iv: authed.record.iv },
-      authed.sessionId,
-      env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-    )
+    accessToken = await getValidGithubToken({
+      env,
+      sessionId: authed.sessionId,
+      record: authed.record,
+      encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+    })
   } catch (error) {
     // Never log the token itself — only the fact that decryption failed.
     console.error(

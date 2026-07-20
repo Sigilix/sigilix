@@ -18,7 +18,8 @@
 // A bare GET /slack/install (no param) keeps the original anonymous behavior.
 
 import { requireSession } from "@/src/lib/auth-middleware"
-import { decryptAccessToken, type SessionRecord } from "@/src/lib/auth-session"
+import type { SessionRecord } from "@/src/lib/auth-session"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
 import { upsertSlackWorkspace } from "@/src/lib/slack/slack-binding-store"
 import type { Env } from "@/src/shared/types/env"
@@ -148,11 +149,12 @@ export async function handleSlackInstall(request: Request, env: Env, ctx?: Execu
     }
     let accessToken: string
     try {
-      accessToken = await decryptAccessToken(
-        { encryptedAccessToken: session.record.encryptedAccessToken, iv: session.record.iv },
-        session.sessionId,
-        env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-      )
+      accessToken = await getValidGithubToken({
+        env,
+        sessionId: session.sessionId,
+        record: session.record,
+        encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+      })
     } catch {
       return portalRedirect(env, { slackError: "session_invalid" })
     }

@@ -95,14 +95,28 @@ async function insertChatbotEvent(
     .run()
 }
 
-async function seedSession(kv: KVNamespace, sessionId: string, login: string, githubUserId: number): Promise<void> {
+async function seedSession(
+  kv: KVNamespace,
+  sessionId: string,
+  login: string,
+  githubUserId: number,
+  tokens: {
+    accessToken?: string
+    refreshToken?: string
+    accessTokenExpiresAt?: number
+    refreshTokenExpiresAt?: number
+  } = {},
+): Promise<void> {
   await createSession({
     kv,
     sessionId,
     login,
     githubUserId,
     userId: `metrics-user-${githubUserId}`,
-    accessToken: "ghu_test_token",
+    accessToken: tokens.accessToken ?? "ghu_test_token",
+    ...(tokens.refreshToken !== undefined ? { refreshToken: tokens.refreshToken } : {}),
+    ...(tokens.accessTokenExpiresAt !== undefined ? { accessTokenExpiresAt: tokens.accessTokenExpiresAt } : {}),
+    ...(tokens.refreshTokenExpiresAt !== undefined ? { refreshTokenExpiresAt: tokens.refreshTokenExpiresAt } : {}),
     encryptionKeyB64url: ENC_KEY,
   })
 }
@@ -160,12 +174,27 @@ function reqWithBearer(token: string, query = ""): Request {
 }
 
 /** Stub GET /user/installations (the ONLY GitHub call this route makes). */
-function stubInstallations(ids: number[]): void {
+function stubInstallations(ids: number[], expectedAccessToken?: string): string[] {
+  const seenAuthorizations: string[] = []
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString()
+      if (url === "https://github.com/login/oauth/access_token") {
+        return new Response(
+          JSON.stringify({
+            access_token: expectedAccessToken,
+            refresh_token: "rotated-refresh",
+            expires_in: 28_800,
+            refresh_token_expires_in: 15_897_600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
       if (url.startsWith("https://api.github.com/user/installations?")) {
+        if (expectedAccessToken) {
+          seenAuthorizations.push(new Headers(init?.headers).get("authorization") ?? "")
+        }
         return new Response(JSON.stringify({ total_count: ids.length, installations: ids.map((id) => ({ id })) }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -174,6 +203,7 @@ function stubInstallations(ids: number[]): void {
       throw new Error(`unexpected fetch: ${url}`)
     }),
   )
+  return seenAuthorizations
 }
 
 const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString()
@@ -183,6 +213,30 @@ afterEach(() => {
 })
 
 describe("handleMetricsDashboardRoute (GET /v1/metrics/dashboard)", () => {
+  it("refreshes an expired GitHub token before resolving the dashboard scope", async () => {
+    const db = await makeDb()
+    const kv = makeKV()
+    await seedSession(kv, "expired-session", "octocat", 111, {
+      accessToken: "expired-access",
+      refreshToken: "old-refresh",
+      accessTokenExpiresAt: Date.now() - 1_000,
+      refreshTokenExpiresAt: Date.now() + 60_000,
+    })
+    const seenAuthorizations = stubInstallations([1], "rotated-access")
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_SESSION_ENCRYPTION_KEY: ENC_KEY,
+      GITHUB_OAUTH_CLIENT_ID: "client-id",
+      GITHUB_OAUTH_CLIENT_SECRET: "client-secret",
+      SIGILIX_PLATFORM_DB: db,
+    } as unknown as Env
+
+    const res = await handleMetricsDashboardRoute(reqWithSession("expired-session"), env)
+
+    expect(res.status).toBe(200)
+    expect(seenAuthorizations).toEqual(["Bearer rotated-access"])
+  })
+
   it("401 with neither a session nor a bearer api key", async () => {
     const db = await makeDb()
     const kv = makeKV()

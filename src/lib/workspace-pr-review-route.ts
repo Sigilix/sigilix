@@ -43,7 +43,7 @@
 // error state rather than a misleading empty review.
 
 import { requireSession } from "@/src/lib/auth-middleware"
-import { decryptAccessToken } from "@/src/lib/auth-session"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { SIGILIX_BOT_LOGIN } from "@/src/shared/domain/sigilix-identity"
@@ -372,11 +372,12 @@ export async function handleWorkspacePrReviewRoute(
     }
     let accessToken: string
     try {
-      accessToken = await decryptAccessToken(
-        { encryptedAccessToken: authed.record.encryptedAccessToken, iv: authed.record.iv },
-        authed.sessionId,
-        env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-      )
+      accessToken = await getValidGithubToken({
+        env,
+        sessionId: authed.sessionId,
+        record: authed.record,
+        encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+      })
     } catch (error) {
       console.error(
         JSON.stringify({

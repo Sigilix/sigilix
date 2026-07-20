@@ -48,8 +48,28 @@ function tokenCache(installationId: number, token = "inst-token"): Record<string
   return { [`gh-installation-token:${installationId}`]: { token, expiresAt: Date.now() + 3_600_000 } }
 }
 
-async function seedSession(kv: KVNamespace, sessionId: string, login: string): Promise<void> {
-  await createSession({ kv, sessionId, login, githubUserId: 1, accessToken: "ghu_test", encryptionKeyB64url: ENC_KEY })
+async function seedSession(
+  kv: KVNamespace,
+  sessionId: string,
+  login: string,
+  tokens: {
+    accessToken?: string
+    refreshToken?: string
+    accessTokenExpiresAt?: number
+    refreshTokenExpiresAt?: number
+  } = {},
+): Promise<void> {
+  await createSession({
+    kv,
+    sessionId,
+    login,
+    githubUserId: 1,
+    accessToken: tokens.accessToken ?? "ghu_test",
+    ...(tokens.refreshToken !== undefined ? { refreshToken: tokens.refreshToken } : {}),
+    ...(tokens.accessTokenExpiresAt !== undefined ? { accessTokenExpiresAt: tokens.accessTokenExpiresAt } : {}),
+    ...(tokens.refreshTokenExpiresAt !== undefined ? { refreshTokenExpiresAt: tokens.refreshTokenExpiresAt } : {}),
+    encryptionKeyB64url: ENC_KEY,
+  })
 }
 
 function reqSession(sessionId: string, path: string): Request {
@@ -78,12 +98,28 @@ function stubGithub(opts: {
   comments?: unknown[]
   reviews?: unknown[]
   issueComments?: unknown[]
-}) {
+  expectedUserAccessToken?: string
+}): string[] {
+  const seenUserAuthorizations: string[] = []
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString()
+      if (url === "https://github.com/login/oauth/access_token") {
+        return new Response(
+          JSON.stringify({
+            access_token: opts.expectedUserAccessToken,
+            refresh_token: "rotated-refresh",
+            expires_in: 28_800,
+            refresh_token_expires_in: 15_897_600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
       if (url.startsWith("https://api.github.com/user/installations?")) {
+        if (opts.expectedUserAccessToken) {
+          seenUserAuthorizations.push(new Headers(init?.headers).get("authorization") ?? "")
+        }
         const ids = opts.installationIds ?? [1]
         return new Response(JSON.stringify({ total_count: ids.length, installations: ids.map((id) => ({ id })) }), {
           status: 200,
@@ -101,6 +137,7 @@ function stubGithub(opts: {
       throw new Error(`unexpected fetch: ${url}`)
     }),
   )
+  return seenUserAuthorizations
 }
 
 afterEach(() => {
@@ -201,6 +238,27 @@ describe("pickOverviewComment", () => {
 })
 
 describe("handleWorkspacePrReviewRoute", () => {
+  it("refreshes an expired GitHub token before checking installation ownership", async () => {
+    const kv = makeKV(tokenCache(1))
+    await seedSession(kv, "expired-session", "octocat", {
+      accessToken: "expired-access",
+      refreshToken: "old-refresh",
+      accessTokenExpiresAt: Date.now() - 1_000,
+      refreshTokenExpiresAt: Date.now() + 60_000,
+    })
+    const seenUserAuthorizations = stubGithub({ installationIds: [1], expectedUserAccessToken: "rotated-access" })
+    const env = {
+      ...baseEnv(kv),
+      GITHUB_OAUTH_CLIENT_ID: "client-id",
+      GITHUB_OAUTH_CLIENT_SECRET: "client-secret",
+    } as Env
+
+    const res = await handleWorkspacePrReviewRoute(reqSession("expired-session", REVIEW_PATH), env)
+
+    expect(res.status).toBe(200)
+    expect(seenUserAuthorizations).toEqual(["Bearer rotated-access"])
+  })
+
   it("404 on a malformed path", async () => {
     const res = await handleWorkspacePrReviewRoute(new Request("https://x/v1/workspace/prs/bad"), baseEnv(makeKV()))
     expect(res.status).toBe(404)

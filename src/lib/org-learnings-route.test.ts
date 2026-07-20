@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { handleCreateOrgLearning, handleDeleteOrgLearning, handleListOrgLearnings } from "@/src/lib/org-learnings-route"
 import { handleOrgRoutes } from "@/src/lib/org-routes"
-import { base64urlEncode, createSession } from "@/src/lib/auth-session"
+import { base64urlEncode, createSession, decryptAccessToken, getSession } from "@/src/lib/auth-session"
 import { learningsKey } from "@/src/features/learnings"
 import type { LearningEntry, LearningStore } from "@/src/features/learnings"
 import type { Env } from "@/src/shared/types/env"
@@ -51,11 +51,27 @@ async function seedSession(kv: KVNamespace, sessionId: string, login: string): P
 function stubGitHub(opts: {
   installations: Array<{ id: number; account: { type: string; login: string } }>
   memberships: Array<{ role: string; state: string; organization: { login: string } }>
-}): void {
+  expectedAccessToken?: string
+}): string[] {
+  const seenAuthorizations: string[] = []
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString()
+      if (url === "https://github.com/login/oauth/access_token") {
+        return new Response(
+          JSON.stringify({
+            access_token: opts.expectedAccessToken,
+            refresh_token: "rotated-refresh",
+            expires_in: 28_800,
+            refresh_token_expires_in: 15_897_600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      if (opts.expectedAccessToken) {
+        seenAuthorizations.push(new Headers(init?.headers).get("authorization") ?? "")
+      }
       if (url.startsWith("https://api.github.com/user/installations")) {
         return new Response(
           JSON.stringify({ total_count: opts.installations.length, installations: opts.installations }),
@@ -71,6 +87,7 @@ function stubGitHub(opts: {
       return new Response("not found", { status: 404 })
     }),
   )
+  return seenAuthorizations
 }
 
 function stubOrgAdmin(): void {
@@ -129,6 +146,45 @@ afterEach(() => {
 })
 
 describe("org-learnings route", () => {
+  it("refreshes an expired GitHub token before resolving the organization role", async () => {
+    const { kv } = makeKV()
+    await createSession({
+      kv,
+      sessionId: "expired-session",
+      login: "octocat",
+      githubUserId: 111,
+      accessToken: "expired-access",
+      refreshToken: "old-refresh",
+      accessTokenExpiresAt: Date.now() - 1_000,
+      refreshTokenExpiresAt: Date.now() + 60_000,
+      encryptionKeyB64url: ENC_KEY,
+    })
+    const seenAuthorizations = stubGitHub({
+      installations: [{ id: 42, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "member", state: "active", organization: { login: "acme" } }],
+      expectedAccessToken: "rotated-access",
+    })
+    const env = {
+      ...baseEnv(kv),
+      GITHUB_OAUTH_CLIENT_ID: "client-id",
+      GITHUB_OAUTH_CLIENT_SECRET: "client-secret",
+    } as Env
+
+    const res = await handleListOrgLearnings(req("GET", "/v1/org/42/learnings", "expired-session"), env, CTX, 42)
+
+    expect(res.status).toBe(200)
+    expect(seenAuthorizations).toEqual(["Bearer rotated-access", "Bearer rotated-access"])
+    const persisted = await getSession({ kv, sessionId: "expired-session" })
+    expect(persisted).not.toBeNull()
+    await expect(
+      decryptAccessToken(
+        { encryptedAccessToken: persisted!.encryptedAccessToken, iv: persisted!.iv },
+        "expired-session",
+        ENC_KEY,
+      ),
+    ).resolves.toBe("rotated-access")
+  })
+
   it("401 with no session", async () => {
     const { kv } = makeKV()
     const res = await handleCreateOrgLearning(req("POST", "/v1/org/42/learnings", null, "{}"), baseEnv(kv), CTX, 42)

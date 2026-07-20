@@ -32,7 +32,7 @@ import {
 } from "@/src/lib/linear-token-broker-client"
 import { requireSession } from "@/src/lib/auth-middleware"
 import { renderConnectedPage } from "@/src/lib/oauth-connected-page"
-import { decryptAccessToken } from "@/src/lib/auth-session"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
 import {
   connectLinearOrganization,
@@ -286,11 +286,12 @@ export async function handleLinearTenantInstall(
   if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) return json({ error: "misconfigured" }, 503)
   let accessToken: string
   try {
-    accessToken = await decryptAccessToken(
-      { encryptedAccessToken: session.record.encryptedAccessToken, iv: session.record.iv },
-      session.sessionId,
-      env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-    )
+    accessToken = await getValidGithubToken({
+      env,
+      sessionId: session.sessionId,
+      record: session.record,
+      encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+    })
   } catch {
     return json({ error: "linear_install_failed" }, 500)
   }

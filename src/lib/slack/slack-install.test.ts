@@ -15,7 +15,7 @@ import {
   buildSlackAuthorizeUrl,
   handleSlackInstall,
 } from "@/src/lib/slack/slack-install"
-import { base64urlEncode, createSession } from "@/src/lib/auth-session"
+import { base64urlEncode, createSession, decryptAccessToken, getSession } from "@/src/lib/auth-session"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import type { Env } from "@/src/shared/types/env"
 
@@ -371,6 +371,8 @@ describe("handleSlackOAuthCallback", () => {
 // ─── handleSlackInstall ──────────────────────────────────────────────────────
 
 describe("handleSlackInstall", () => {
+  afterEach(() => vi.restoreAllMocks())
+
   it("returns 302 to the Slack authorize URL with a fresh state nonce", async () => {
     const kv = makeFakeKV()
     const env = makeEnv(kv, {
@@ -378,6 +380,7 @@ describe("handleSlackInstall", () => {
       OPENCLAW_BASE_URL: "https://app.sigilix.ai",
     })
 
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
     const res = await handleSlackInstall(new Request("https://app.sigilix.ai/slack/install"), env)
 
     expect(res.status).toBe(302)
@@ -386,6 +389,7 @@ describe("handleSlackInstall", () => {
     // A nonce was stored in KV.
     const hasStateKey = [...kv._store.keys()].some((k) => k.startsWith("slack-oauth-state:"))
     expect(hasStateKey).toBe(true)
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 
   it("returns 503 when SLACK_CLIENT_ID is unset", async () => {
@@ -486,6 +490,44 @@ describe("org-linked install → slack_workspace linkage", () => {
       "slack-oauth-state:org-state",
       JSON.stringify({ installationId, login: "octocat", userKey: USER_KEY }),
     )
+  }
+
+  function mockGithubAdminRefresh(expectedAccessToken: string): string[] {
+    const seenAuthorizations: string[] = []
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString()
+      if (url === "https://github.com/login/oauth/access_token") {
+        return new Response(
+          JSON.stringify({
+            access_token: expectedAccessToken,
+            refresh_token: "rotated-refresh",
+            expires_in: 28_800,
+            refresh_token_expires_in: 15_897_600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      if (url.startsWith("https://api.github.com/")) {
+        seenAuthorizations.push(new Headers(init?.headers).get("authorization") ?? "")
+      }
+      if (url.includes("/user/installations")) {
+        return new Response(
+          JSON.stringify({
+            total_count: 1,
+            installations: [{ id: 42, account: { type: "Organization", login: "acme" } }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      if (url.includes("/user/memberships/orgs")) {
+        return new Response(JSON.stringify([{ role: "admin", state: "active", organization: { login: "acme" } }]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      return new Response("not found", { status: 404 })
+    })
+    return seenAuthorizations
   }
 
   afterEach(() => {
@@ -619,6 +661,54 @@ describe("org-linked install → slack_workspace linkage", () => {
 
     expect(res.status).toBe(302)
     expect(res.headers.get("location")).toBe("https://app.sigilix.ai/apps/slack?slackError=invalid_installation")
+  })
+
+  it("refreshes an expired GitHub token before exact-install admin proof and org-linked state minting", async () => {
+    const kv = makeSessionKV()
+    const env = await makeSessionEnv(kv, {
+      GITHUB_OAUTH_CLIENT_ID: "github-client-id",
+      GITHUB_OAUTH_CLIENT_SECRET: "github-client-secret",
+    })
+    await createSession({
+      kv,
+      sessionId: "session-1",
+      login: "octocat",
+      githubUserId: 111,
+      userId: USER_ID,
+      accessToken: "expired-access",
+      refreshToken: "old-refresh",
+      accessTokenExpiresAt: Date.now() - 1_000,
+      refreshTokenExpiresAt: Date.now() + 60_000,
+      encryptionKeyB64url: ENC_KEY,
+    })
+    const seenAuthorizations = mockGithubAdminRefresh("rotated-access")
+
+    const response = await handleSlackInstall(
+      new Request("https://api.sigilix.ai/slack/install?installation_id=42", {
+        headers: { cookie: `${COOKIE}=session-1` },
+      }),
+      env,
+    )
+
+    expect(response.status).toBe(302)
+    expect(seenAuthorizations).toEqual(["Bearer rotated-access", "Bearer rotated-access"])
+    const location = new URL(response.headers.get("location") ?? "")
+    expect(location.origin + location.pathname).toBe("https://slack.com/oauth/v2/authorize")
+    const state = location.searchParams.get("state") ?? ""
+    expect(JSON.parse(kv._store.get(`slack-oauth-state:${state}`) ?? "{}")).toEqual({
+      installationId: 42,
+      login: "octocat",
+      userKey: USER_KEY,
+    })
+    const persisted = await getSession({ kv, sessionId: "session-1" })
+    expect(persisted).not.toBeNull()
+    await expect(
+      decryptAccessToken(
+        { encryptedAccessToken: persisted!.encryptedAccessToken, iv: persisted!.iv },
+        "session-1",
+        ENC_KEY,
+      ),
+    ).resolves.toBe("rotated-access")
   })
 
   it("REFUSES to re-point a team already linked to a DIFFERENT installation (no takeover)", async () => {

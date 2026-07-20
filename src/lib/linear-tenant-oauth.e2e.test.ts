@@ -7,7 +7,7 @@ import {
   LINEAR_AGENT_TOKEN_KEY,
   type LinearAgentTokenRecord,
 } from "@/src/lib/linear-agent-oauth"
-import { base64urlEncode, createSession } from "@/src/lib/auth-session"
+import { base64urlEncode, createSession, decryptAccessToken, getSession } from "@/src/lib/auth-session"
 import { makeD1 } from "@/src/test-shims/d1-sqlite-shim"
 import type { Env } from "@/src/shared/types/env"
 
@@ -33,7 +33,7 @@ function makeKV(): { kv: KVNamespace; values: Map<string, string> } {
   }
 }
 
-async function setup() {
+async function setup(options?: { expiredGithubToken?: boolean }) {
   const db = makeD1()
   await db.exec(BASE_SQL)
   await db.exec(IDENTITY_SQL)
@@ -75,7 +75,14 @@ async function setup() {
     login: "alice",
     githubUserId: 111,
     userId: "linear-user-111",
-    accessToken: "gh-alice",
+    accessToken: options?.expiredGithubToken ? "expired-access" : "gh-alice",
+    ...(options?.expiredGithubToken
+      ? {
+          refreshToken: "old-refresh",
+          accessTokenExpiresAt: Date.now() - 1_000,
+          refreshTokenExpiresAt: Date.now() + 60_000,
+        }
+      : {}),
     encryptionKeyB64url: ENC_KEY,
   })
   await createSession({
@@ -152,8 +159,10 @@ async function setup() {
     LINEAR_OAUTH_CLIENT_ID: "client-id",
     LINEAR_OAUTH_CLIENT_SECRET: "client-secret",
     OPENCLAW_GATEWAY_ISSUER: "https://api.sigilix.ai",
+    GITHUB_OAUTH_CLIENT_ID: "github-client-id",
+    GITHUB_OAUTH_CLIENT_SECRET: "github-client-secret",
   } as unknown as Env
-  return { db, env, records, pending, values, uninstallCalls }
+  return { db, env, kv, records, pending, values, uninstallCalls }
 }
 
 function withBatch(db: D1Database, batch: (statements: D1PreparedStatement[]) => Promise<D1Result[]>): D1Database {
@@ -183,11 +192,26 @@ function stateFrom(responseBody: { authorizeUrl: string }): string {
   return new URL(responseBody.authorizeUrl).searchParams.get("state") ?? ""
 }
 
-function stubExternal(): void {
+function stubExternal(options?: { expectedAccessToken?: string }): string[] {
+  const seenAuthorizations: string[] = []
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString()
+      if (url === "https://github.com/login/oauth/access_token") {
+        return new Response(
+          JSON.stringify({
+            access_token: options?.expectedAccessToken,
+            refresh_token: "rotated-refresh",
+            expires_in: 28_800,
+            refresh_token_expires_in: 15_897_600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      if (url.startsWith("https://api.github.com/")) {
+        seenAuthorizations.push(new Headers(init?.headers).get("authorization") ?? "")
+      }
       if (url.includes("/user/installations")) {
         return new Response(
           JSON.stringify({
@@ -242,10 +266,37 @@ function stubExternal(): void {
       return new Response("not found", { status: 404 })
     }),
   )
+  return seenAuthorizations
 }
 
 describe("tenant-bound Linear OAuth", () => {
   afterEach(() => vi.unstubAllGlobals())
+
+  it("refreshes an expired GitHub token before exact-install admin proof and state minting", async () => {
+    const { env, kv, values } = await setup({ expiredGithubToken: true })
+    const seenAuthorizations = stubExternal({ expectedAccessToken: "rotated-access" })
+
+    const response = await handleLinearTenantInstall(installRequest(11, "alice-session"), env, undefined, 11)
+
+    expect(response.status).toBe(200)
+    expect(seenAuthorizations).toEqual(["Bearer rotated-access", "Bearer rotated-access"])
+    const state = stateFrom((await response.json()) as { authorizeUrl: string })
+    expect(JSON.parse(values.get(`linear-oauth-state:${state}`) ?? "{}")).toMatchObject({
+      version: 1,
+      installationId: 11,
+      userId: "linear-user-111",
+      login: "alice",
+    })
+    const persisted = await getSession({ kv, sessionId: "alice-session" })
+    expect(persisted).not.toBeNull()
+    await expect(
+      decryptAccessToken(
+        { encryptedAccessToken: persisted!.encryptedAccessToken, iv: persisted!.iv },
+        "alice-session",
+        ENC_KEY,
+      ),
+    ).resolves.toBe("rotated-access")
+  })
 
   it("binds state to installation+user and stores two org tokens in different DO shards", async () => {
     const { db, env, records, values } = await setup()

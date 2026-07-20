@@ -7,8 +7,8 @@
 // placebo UI.
 
 import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
-import { decryptAccessToken } from "@/src/lib/auth-session"
 import { listGithubUserInstallationRepos } from "@/src/lib/github-user-repo-scope"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { getValidAgentTokenViaBroker } from "@/src/lib/linear-token-broker-client"
 import { hasJsonContentType } from "@/src/lib/portal-cors"
 import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
@@ -47,12 +47,19 @@ async function authenticateAdmin(
   }
   let accessToken: string
   try {
-    accessToken = await decryptAccessToken(
-      { encryptedAccessToken: session.record.encryptedAccessToken, iv: session.record.iv },
-      session.sessionId,
-      env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+    accessToken = await getValidGithubToken({
+      env,
+      sessionId: session.sessionId,
+      record: session.record,
+      encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+    })
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "linear-config-token-resolution-failed",
+        errorName: error instanceof Error ? error.name : "unknown",
+      }),
     )
-  } catch {
     return { ok: false, response: json({ error: "linear_config_failed" }, 500) }
   }
   if (!(await isAdminOfInstallation(accessToken, session.record.login, installationId))) {

@@ -85,6 +85,7 @@ async function buildStoredPayload(input: AgentLoopTelemetryRecordInput): Promise
     surface: input.surface,
     commentId: input.commentId,
     turns: input.turns,
+    finalAnswerRepairAttempts: input.finalAnswerRepairAttempts,
     toolCalls: input.toolCalls,
     totalMs: input.totalMs,
     finalAnswer: input.finalAnswer,

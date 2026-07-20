@@ -93,7 +93,7 @@
 // org-overview-route.ts), never a cross-tenant read.
 
 import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
-import { decryptAccessToken } from "@/src/lib/auth-session"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { listKeys, mapWithConcurrency, FETCH_CONCURRENCY } from "@/src/lib/kv-scan"
 import { computeFid } from "@/src/lib/review-memory/marker"
@@ -252,11 +252,12 @@ async function resolveSessionScope(env: Env, session: AuthedSession): Promise<Le
   }
   let accessToken: string
   try {
-    accessToken = await decryptAccessToken(
-      { encryptedAccessToken: session.record.encryptedAccessToken, iv: session.record.iv },
-      session.sessionId,
-      env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-    )
+    accessToken = await getValidGithubToken({
+      env,
+      sessionId: session.sessionId,
+      record: session.record,
+      encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+    })
   } catch (error) {
     console.error(
       JSON.stringify({

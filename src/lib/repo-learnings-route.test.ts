@@ -85,11 +85,27 @@ function stubGitHub(opts: {
   installations: Array<{ id: number; account: { type: string; login: string } }>
   memberships: Array<{ role: string; state: string; organization: { login: string } }>
   repos?: Record<number, RepoStub>
-}): void {
+  expectedAccessToken?: string
+}): string[] {
+  const seenAuthorizations: string[] = []
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString()
+      if (url === "https://github.com/login/oauth/access_token") {
+        return new Response(
+          JSON.stringify({
+            access_token: opts.expectedAccessToken,
+            refresh_token: "rotated-refresh",
+            expires_in: 28_800,
+            refresh_token_expires_in: 15_897_600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )
+      }
+      if (opts.expectedAccessToken) {
+        seenAuthorizations.push(new Headers(init?.headers).get("authorization") ?? "")
+      }
       if (url.startsWith("https://api.github.com/user/installations")) {
         return new Response(
           JSON.stringify({ total_count: opts.installations.length, installations: opts.installations }),
@@ -114,6 +130,7 @@ function stubGitHub(opts: {
       return new Response("not found", { status: 404 })
     }),
   )
+  return seenAuthorizations
 }
 
 /** Member of install 42 who ALSO has repo-write access to repo 555 ("acme/widget"). */
@@ -201,6 +218,44 @@ afterEach(() => {
 })
 
 describe("repo-learnings route", () => {
+  it("refreshes an expired GitHub token before resolving repository access", async () => {
+    const { kv } = makeKV()
+    await createSession({
+      kv,
+      sessionId: "expired-session",
+      userId: "user-111",
+      login: "octocat",
+      githubUserId: 111,
+      accessToken: "expired-access",
+      refreshToken: "old-refresh",
+      accessTokenExpiresAt: Date.now() - 1_000,
+      refreshTokenExpiresAt: Date.now() + 60_000,
+      encryptionKeyB64url: ENC_KEY,
+    })
+    const seenAuthorizations = stubGitHub({
+      installations: [{ id: INSTALL_ID, account: { type: "Organization", login: "acme" } }],
+      memberships: [{ role: "member", state: "active", organization: { login: "acme" } }],
+      repos: { [REPO_ID]: { fullName: REPO_FULL_NAME, permissions: { push: false } } },
+      expectedAccessToken: "rotated-access",
+    })
+    const env = {
+      ...baseEnv(kv),
+      GITHUB_OAUTH_CLIENT_ID: "client-id",
+      GITHUB_OAUTH_CLIENT_SECRET: "client-secret",
+    } as Env
+
+    const res = await handleListRepoLearnings(
+      req("GET", `/v1/org/${INSTALL_ID}/repos/${REPO_ID}/learnings`, "expired-session"),
+      env,
+      CTX,
+      INSTALL_ID,
+      REPO_ID,
+    )
+
+    expect(res.status).toBe(200)
+    expect(seenAuthorizations).toEqual(["Bearer rotated-access", "Bearer rotated-access", "Bearer rotated-access"])
+  })
+
   it("401 with no session", async () => {
     const { kv } = makeKV()
     const res = await handleCreateRepoLearning(

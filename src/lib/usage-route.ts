@@ -26,7 +26,7 @@
 
 import { requireSession } from "@/src/lib/auth-middleware"
 import { resolveInstallationPlan, type PlanName } from "@/src/lib/resolve-plan"
-import { decryptAccessToken } from "@/src/lib/auth-session"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID } from "@/src/lib/api-key-resolver"
 import { isAdminOfInstallation } from "@/src/lib/resolve-user-role"
 import { isLinkedToInstallation } from "@/src/lib/api-key-store"
@@ -402,11 +402,12 @@ export async function handleUsageRoute(request: Request, env: Env, ctx?: Executi
     }
     let accessToken: string
     try {
-      accessToken = await decryptAccessToken(
-        { encryptedAccessToken: session.record.encryptedAccessToken, iv: session.record.iv },
-        session.sessionId,
-        env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-      )
+      accessToken = await getValidGithubToken({
+        env,
+        sessionId: session.sessionId,
+        record: session.record,
+        encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+      })
     } catch (error) {
       console.error(
         JSON.stringify({ event: "usage-decrypt-failed", err: error instanceof Error ? error.message : String(error) }),

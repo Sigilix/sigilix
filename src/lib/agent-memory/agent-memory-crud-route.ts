@@ -29,7 +29,7 @@
 import type { Env } from "@/src/shared/types/env"
 import { requireSession, type AuthedSession } from "@/src/lib/auth-middleware"
 import { requireApiTenant } from "@/src/lib/api-key-resolver"
-import { decryptAccessToken } from "@/src/lib/auth-session"
+import { getValidGithubToken } from "@/src/lib/github-user-token"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
 import type { AgentMemoryKind, AgentMemoryRecord } from "./types"
 import { json, MAX_BODY_BYTES, storeMemoryFact } from "./agent-memory-route"
@@ -159,11 +159,12 @@ async function resolveSessionInstallationIds(env: Env, session: AuthedSession): 
   }
   let accessToken: string
   try {
-    accessToken = await decryptAccessToken(
-      { encryptedAccessToken: session.record.encryptedAccessToken, iv: session.record.iv },
-      session.sessionId,
-      env.OPENCLAW_SESSION_ENCRYPTION_KEY,
-    )
+    accessToken = await getValidGithubToken({
+      env,
+      sessionId: session.sessionId,
+      record: session.record,
+      encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY,
+    })
   } catch (err) {
     // Never log the token — only that decryption failed.
     emitTelemetry("agent-memory-session-scope-unavailable", {

@@ -87,6 +87,17 @@ describe("handleOrgRoutes dispatcher", () => {
     expect(response!.headers.get("access-control-allow-methods")).toContain("PUT")
   })
 
+  it("answers CORS preflight for repository-context onboarding import", async () => {
+    const request = new Request("https://x/v1/org/1/repository-context/import-onboarding", {
+      method: "OPTIONS",
+      headers: { origin: PORTAL_ORIGIN },
+    })
+    const response = await handleOrgRoutes(request, env, ctx)
+    expect(response).not.toBeNull()
+    expect(response!.status).toBe(204)
+    expect(response!.headers.get("access-control-allow-methods")).toContain("POST")
+  })
+
   it("rejects malformed member-route identifiers before authentication", async () => {
     const cases: Array<[string, string]> = [
       ["POST", "https://x/v1/org/not-a-number/members"],

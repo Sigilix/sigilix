@@ -13,6 +13,10 @@ import { normalizeEnv } from "@/src/shared/util/normalize-env"
 
 const BASE_SQL = readFileSync(new URL("../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
 const SLACK_SQL = readFileSync(new URL("../migrations/0019_create_slack_channel_repo.sql", import.meta.url), "utf8")
+const SLACK_DEDUPE_SQL = readFileSync(
+  new URL("../migrations/0036_create_slack_event_dedupe.sql", import.meta.url),
+  "utf8",
+)
 const REPOSITORY_CONTEXT_SQL = readFileSync(
   new URL("../migrations/0024_create_repository_context.sql", import.meta.url),
   "utf8",
@@ -145,6 +149,7 @@ async function makePlatformDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(BASE_SQL)
   await db.exec(SLACK_SQL)
+  await db.exec(SLACK_DEDUPE_SQL) // SIG-546: atomic event_id dedupe table
   await db.exec(REPOSITORY_CONTEXT_SQL)
   const now = "2026-07-14T00:00:00.000Z"
   await db
@@ -826,7 +831,12 @@ describe("signed Slack webhook verified citations", () => {
     expect(slackText).toContain(fileUrl)
     expect(slackText).toContain(compareUrl)
     expect(slackText).not.toContain(`/pull/${PR_NUMBER}`)
-    expect(kv.values.has(`slack-event:${TEAM_ID}:EvVerifiedCitation`)).toBe(true)
+    // SIG-546: the event_id claim now lives in the D1 dedupe table, not KV.
+    const claimRow = await db
+      .prepare("SELECT 1 FROM slack_event_dedupe WHERE event_id = ?")
+      .bind(`${TEAM_ID}:EvVerifiedCitation`)
+      .first()
+    expect(claimRow).not.toBeNull()
     expect([...kv.values.keys()].some((key) => key.startsWith("agent-loop-telemetry:"))).toBe(true)
 
     expect(memoryIndex.query).toHaveBeenCalledOnce()

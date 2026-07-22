@@ -17,11 +17,8 @@ import { resolveEntitlement, upsellFor } from "@/src/features/entitlements"
 
 type SlackMentionJob = Extract<JobMessage, { type: "slack-mention" }>
 
+// Completion-marker TTL (the separate consumer-side "already posted" guard).
 const SLACK_EVENT_TTL_SECONDS = 24 * 60 * 60
-// Slack retries immediately, after one minute, and finally after five. Expire
-// an abandoned pending hand-off before that final retry can recover it.
-const SLACK_PENDING_TTL_SECONDS = 4 * 60
-const SLACK_CLAIM_FINALIZE_ATTEMPTS = 3
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null
@@ -42,7 +39,7 @@ function slackTimestamp(value: unknown): string | null {
  *   2. mode=off → 200 empty (inert).
  *   3. SLACK_SIGNING_SECRET missing → 503.
  *   4. Signature verification → 401 on failure.
- *   5. app_mention idempotency via KV (TTL 24 h).
+ *   5. app_mention idempotency via an atomic D1 unique-constraint claim (SIG-546).
  *   6. Enqueue a secrets-free job and ack 200.
  *   7. The Queue consumer runs scope → token → rate-limit → agent → post/log.
  */
@@ -88,14 +85,9 @@ export async function handleSlackRequest(request: Request, env: Env, _ctx: Execu
   }
 
   // ── app_mention validation + idempotency ─────────────────────────────────────
-  // Claim a KV key for each unique event_id before scheduling work. A duplicate
-  // event_id returns 200 immediately without scheduling anything (Slack retry-safe).
-  //
-  // NOTE (accepted race / SIG follow-up): Cloudflare KV has no compare-and-set,
-  // so a true-concurrent double-delivery could theoretically race past the GET
-  // before either PUT lands. In practice the threat is bounded: we ack <3 s, so
-  // Slack's retry queue is sequential and the existing claim catches it. An
-  // atomic D1 unique-constraint claim is the tracked hardening before `on` GA.
+  // Atomically claim each unique event_id (SIG-546) before scheduling work; a
+  // duplicate returns 200 immediately without scheduling anything (Slack
+  // retry-safe). See the claim block below the field validation.
   if (body?.type !== "event_callback") {
     return new Response("", { status: 200 })
   }
@@ -116,18 +108,41 @@ export async function handleSlackRequest(request: Request, env: Env, _ctx: Execu
     return new Response("", { status: 200 })
   }
 
-  const claimKey = slackClaimKey(teamId, eventId)
-  const existing = await env.OPENCLAW_STATE.get(claimKey)
-  if (existing !== null) {
-    // A pending claim means another delivery has not yet proven its durable
-    // queue hand-off. Return 503 so Slack keeps retrying instead of accepting
-    // an event that the first delivery may still fail to enqueue. Any other
-    // value includes legacy "1" claims and confirmed queued work.
-    return new Response("", { status: existing === "pending" ? 503 : 200 })
+  // SIG-546: atomic event_id dedupe via a D1 unique constraint. The prior KV
+  // GET-then-PUT had no compare-and-set, so two genuinely-concurrent deliveries
+  // of the same event_id could both observe absence and both schedule work. An
+  // `INSERT ... ON CONFLICT DO NOTHING` gives exactly one delivery 1 row-affected
+  // (the winner); every other gets 0 and is treated as a duplicate.
+  const db = env.SIGILIX_PLATFORM_DB
+  if (!db) {
+    // Atomic dedupe requires the platform D1. Without it we cannot guarantee a
+    // concurrent double-delivery won't double-post — fail loud (Slack retries)
+    // rather than risk it. The binding is deployed in prod; absence is a misconfig.
+    console.error(JSON.stringify({ event: "slack-mention-dedupe-db-missing", eventId, teamId }))
+    return new Response("", { status: 503 })
   }
-  // Claim pending BEFORE enqueueing so a retry cannot receive a false success
-  // until this request has completed the durable hand-off.
-  await env.OPENCLAW_STATE.put(claimKey, "pending", { expirationTtl: SLACK_PENDING_TTL_SECONDS })
+
+  let claimed: boolean
+  try {
+    claimed = await claimSlackEvent(db, teamId, eventId)
+  } catch (error) {
+    // A claim write failure is transient — let Slack retry rather than drop the
+    // mention. (Slack retries are sequential, so a retry re-attempts the claim.)
+    console.error(
+      JSON.stringify({
+        event: "slack-mention-claim-failed",
+        eventId,
+        teamId,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return new Response("", { status: 503 })
+  }
+  if (!claimed) {
+    // Duplicate delivery — another request already claimed this event_id. Ack
+    // without scheduling anything (Slack retry-safe).
+    return new Response("", { status: 200 })
+  }
 
   const job: SlackMentionJob = {
     type: "slack-mention",
@@ -143,11 +158,10 @@ export async function handleSlackRequest(request: Request, env: Env, _ctx: Execu
     // durable hand-off succeeds. The payload contains no bot/signing secrets.
     await env.OPENCLAW_JOBS.send(job)
   } catch (error) {
-    try {
-      await env.OPENCLAW_STATE.delete(claimKey)
-    } catch {
-      // The pending claim expires after four minutes; never mask the enqueue failure.
-    }
+    // Release the claim so a Slack retry can re-claim and re-enqueue — otherwise
+    // the consumed event_id would make every retry a false "duplicate" and the
+    // mention would be lost.
+    await releaseSlackEvent(db, teamId, eventId)
     console.error(
       JSON.stringify({
         event: "slack-mention-enqueue-failed",
@@ -158,26 +172,44 @@ export async function handleSlackRequest(request: Request, env: Env, _ctx: Execu
     )
     return new Response("", { status: 503 })
   }
-  for (let attempt = 1; attempt <= SLACK_CLAIM_FINALIZE_ATTEMPTS; attempt += 1) {
-    try {
-      await env.OPENCLAW_STATE.put(claimKey, "queued", { expirationTtl: SLACK_EVENT_TTL_SECONDS })
-      break
-    } catch {
-      if (attempt === SLACK_CLAIM_FINALIZE_ATTEMPTS) {
-        // The queue already owns the job. Never ask Slack to retry a durably
-        // accepted event just because this advisory state transition failed.
-        console.error(JSON.stringify({ event: "slack-mention-claim-finalize-failed", eventId, teamId }))
-      }
-    }
-  }
 
   return new Response("", { status: 200 })
 }
 
 // ─── Queue consumer ───────────────────────────────────────────────────────────
 
-function slackClaimKey(teamId: string, eventId: string): string {
-  return `slack-event:${teamId}:${eventId}`
+// SIG-546: team-scoped dedupe key stored in slack_event_dedupe.event_id,
+// preserving the prior KV claim's `<team>:<event>` scoping.
+function slackDedupeKey(teamId: string, eventId: string): string {
+  return `${teamId}:${eventId}`
+}
+
+/**
+ * Atomically claim an event_id. Returns true iff THIS call inserted the row
+ * (the winner of any concurrent race); false if the row already existed (a
+ * duplicate delivery). `INSERT ... ON CONFLICT DO NOTHING` reports 1 row
+ * affected for the winner and 0 for every duplicate — the compare-and-set the
+ * KV path lacked.
+ */
+async function claimSlackEvent(db: D1Database, teamId: string, eventId: string): Promise<boolean> {
+  const result = await db
+    .prepare(`INSERT INTO slack_event_dedupe (event_id, created_at) VALUES (?, ?) ON CONFLICT(event_id) DO NOTHING`)
+    .bind(slackDedupeKey(teamId, eventId), new Date().toISOString())
+    .run()
+  return Number(result.meta.changes ?? 0) === 1
+}
+
+/**
+ * Release a claim so a Slack retry can re-claim it — used only when the durable
+ * enqueue fails AFTER a successful claim. Best-effort: a stale row is otherwise
+ * removed by the age-based purge.
+ */
+async function releaseSlackEvent(db: D1Database, teamId: string, eventId: string): Promise<void> {
+  try {
+    await db.prepare(`DELETE FROM slack_event_dedupe WHERE event_id = ?`).bind(slackDedupeKey(teamId, eventId)).run()
+  } catch {
+    // Best-effort; the scheduled purge reclaims an abandoned claim.
+  }
 }
 
 function slackCompletionKey(teamId: string, eventId: string): string {

@@ -16,6 +16,8 @@ CREATE TABLE slack_event_dedupe (
   created_at TEXT NOT NULL
 );
 
--- Age-based cleanup of claimed events (the KV path used a 24h TTL). A scheduled
--- purge deletes rows older than a retention window; this index keeps it cheap.
+-- Age-based cleanup of claimed events (the KV path used a 24h TTL). The
+-- scheduled() tick calls purgeStaleSlackEventDedupe, which deletes rows older
+-- than the retention window; this index keeps that purge cheap. A claim older
+-- than the shorter staleness window is also re-claimable (self-healing).
 CREATE INDEX idx_slack_event_dedupe_created_at ON slack_event_dedupe (created_at);

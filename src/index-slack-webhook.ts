@@ -19,6 +19,13 @@ type SlackMentionJob = Extract<JobMessage, { type: "slack-mention" }>
 
 // Completion-marker TTL (the separate consumer-side "already posted" guard).
 const SLACK_EVENT_TTL_SECONDS = 24 * 60 * 60
+// SIG-546: an event_id claim older than this is treated as ABANDONED and may be
+// re-claimed — self-healing that restores the old KV "pending" TTL. Slack retries
+// at 0 / 1 min / 5 min, so a claim stranded by a crash between the INSERT commit
+// and the enqueue is recoverable on the 5-min retry. A cleanly-acked event is
+// never re-delivered by Slack (it only retries non-2xx), so a successfully-
+// processed claim is never re-claimed.
+const SLACK_CLAIM_STALE_MS = 4 * 60 * 1000
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null
@@ -185,31 +192,58 @@ function slackDedupeKey(teamId: string, eventId: string): string {
 }
 
 /**
- * Atomically claim an event_id. Returns true iff THIS call inserted the row
- * (the winner of any concurrent race); false if the row already existed (a
- * duplicate delivery). `INSERT ... ON CONFLICT DO NOTHING` reports 1 row
- * affected for the winner and 0 for every duplicate — the compare-and-set the
- * KV path lacked.
+ * Atomically claim an event_id. Returns true iff THIS call won the claim — either
+ * a fresh insert (no prior row) or a re-claim of an ABANDONED row whose
+ * `created_at` is older than SLACK_CLAIM_STALE_MS. A duplicate of a still-fresh
+ * claim returns false. This is the compare-and-set the KV path lacked, plus the
+ * self-healing the old "pending" TTL provided:
+ *   - new event → INSERT → changes:1 → winner.
+ *   - duplicate, claim fresh → conflict, WHERE false → changes:0 → duplicate.
+ *   - duplicate, claim stale (abandoned) → conflict, WHERE true → UPDATE
+ *     created_at → changes:1 → re-claimed (recovers a stranded mention).
+ * Concurrent retries are safe: the first UPDATE moves created_at forward, so a
+ * racing retry sees a now-fresh row and gets changes:0.
  */
 async function claimSlackEvent(db: D1Database, teamId: string, eventId: string): Promise<boolean> {
+  const nowMs = Date.now()
   const result = await db
-    .prepare(`INSERT INTO slack_event_dedupe (event_id, created_at) VALUES (?, ?) ON CONFLICT(event_id) DO NOTHING`)
-    .bind(slackDedupeKey(teamId, eventId), new Date().toISOString())
+    .prepare(
+      `INSERT INTO slack_event_dedupe (event_id, created_at) VALUES (?, ?)
+       ON CONFLICT(event_id) DO UPDATE SET created_at = excluded.created_at
+       WHERE slack_event_dedupe.created_at < ?`,
+    )
+    .bind(
+      slackDedupeKey(teamId, eventId),
+      new Date(nowMs).toISOString(),
+      new Date(nowMs - SLACK_CLAIM_STALE_MS).toISOString(),
+    )
     .run()
   return Number(result.meta.changes ?? 0) === 1
 }
 
 /**
- * Release a claim so a Slack retry can re-claim it — used only when the durable
- * enqueue fails AFTER a successful claim. Best-effort: a stale row is otherwise
- * removed by the age-based purge.
+ * Release a claim so a Slack retry can immediately re-claim it — used only when
+ * the durable enqueue fails AFTER a successful claim. Best-effort: even if the
+ * DELETE fails, the row's `created_at` still ages out and the claim becomes
+ * re-claimable via the staleness window (and is eventually purged).
  */
 async function releaseSlackEvent(db: D1Database, teamId: string, eventId: string): Promise<void> {
   try {
     await db.prepare(`DELETE FROM slack_event_dedupe WHERE event_id = ?`).bind(slackDedupeKey(teamId, eventId)).run()
   } catch {
-    // Best-effort; the scheduled purge reclaims an abandoned claim.
+    // Best-effort; the staleness re-claim + age-based purge recover the row.
   }
+}
+
+// SIG-546: age-based purge so the dedupe table doesn't grow unbounded (the KV
+// path it replaced had a 24h TTL). Deletes claims older than the retention
+// window — safely beyond Slack's ~5-min retry window, so a live event is never
+// purged out from under a retry. Called from the scheduled() tick.
+const SLACK_DEDUPE_RETENTION_MS = 24 * 60 * 60 * 1000
+
+export async function purgeStaleSlackEventDedupe(db: D1Database): Promise<void> {
+  const cutoffIso = new Date(Date.now() - SLACK_DEDUPE_RETENTION_MS).toISOString()
+  await db.prepare(`DELETE FROM slack_event_dedupe WHERE created_at < ?`).bind(cutoffIso).run()
 }
 
 function slackCompletionKey(teamId: string, eventId: string): string {

@@ -44,7 +44,7 @@ import { postSlackMessage, fetchSlackThread, capAndRedactThread } from "@/src/li
 import { checkSlackRateLimit, recordSlackAction } from "@/src/lib/slack/slack-rate-limit"
 
 // Imports under test AFTER mocks are declared.
-import { handleSlackRequest } from "@/src/index-slack-webhook"
+import { handleSlackRequest, purgeStaleSlackEventDedupe } from "@/src/index-slack-webhook"
 import { dispatchJob } from "@/src/index-dispatch"
 
 // ─── HMAC sign helper (matches pattern from slack-verify.test.ts) ─────────────
@@ -83,28 +83,43 @@ function makeFakeKV() {
 
 type FakeKV = ReturnType<typeof makeFakeKV>
 
-// SIG-546: a minimal D1 stub implementing the atomic dedupe semantics — an
-// INSERT ... ON CONFLICT DO NOTHING reports changes:1 the first time a key is
-// claimed and changes:0 for every duplicate; DELETE releases the claim. `_rows`
-// is the claimed-key set for seeding/asserting.
+// SIG-546: a minimal D1 stub modelling the atomic dedupe semantics.
+//   - claim: INSERT ... ON CONFLICT DO UPDATE SET created_at=? WHERE created_at<?
+//     → changes:1 for a fresh insert OR a re-claim of a STALE row (stored
+//     created_at older than the staleness bind arg); changes:0 for a duplicate
+//     of a still-fresh row.
+//   - release: DELETE ... WHERE event_id = ? → removes the row.
+//   - purge:   DELETE ... WHERE created_at < ? → removes all rows older than the
+//     cutoff bind arg.
+// `_rows` maps event_id → created_at ISO; `_seed(key, iso?)` seeds a claim.
 function makeFakeDB() {
-  const rows = new Set<string>()
+  const rows = new Map<string, string>()
   const runInsert = vi.fn()
   const runDelete = vi.fn()
   const db = {
     prepare(sql: string) {
       return {
         bind(...args: unknown[]) {
-          const key = String(args[0])
           return {
             async run() {
               if (/INSERT/i.test(sql)) {
+                const [key, nowIso, staleIso] = args as [string, string, string]
                 runInsert(key)
-                if (rows.has(key)) return { meta: { changes: 0 } }
-                rows.add(key)
-                return { meta: { changes: 1 } }
+                const existing = rows.get(key)
+                if (existing === undefined || existing < staleIso) {
+                  rows.set(key, nowIso)
+                  return { meta: { changes: 1 } }
+                }
+                return { meta: { changes: 0 } }
+              }
+              if (/DELETE/i.test(sql) && /created_at/i.test(sql)) {
+                const cutoff = String(args[0])
+                let n = 0
+                for (const [k, iso] of [...rows]) if (iso < cutoff) (rows.delete(k), (n += 1))
+                return { meta: { changes: n } }
               }
               if (/DELETE/i.test(sql)) {
+                const key = String(args[0])
                 runDelete(key)
                 rows.delete(key)
                 return { meta: { changes: 1 } }
@@ -118,6 +133,9 @@ function makeFakeDB() {
     _rows: rows,
     _runInsert: runInsert,
     _runDelete: runDelete,
+    _seed(key: string, createdAtIso: string = new Date().toISOString()) {
+      rows.set(key, createdAtIso)
+    },
   }
   return db
 }
@@ -336,7 +354,7 @@ describe("handleSlackRequest", () => {
   it("(d) duplicate event_id → 200 without enqueueing or running the agent", async () => {
     const kv = makeFakeKV()
     const db = makeFakeDB()
-    db._rows.add(`${TEAM_ID}:${EVENT_ID}`) // pre-claimed by an earlier delivery
+    db._seed(`${TEAM_ID}:${EVENT_ID}`) // pre-claimed by an earlier delivery
     const env = makeEnv("on", kv, SIGNING_SECRET, db)
     const ctx = makeFakeCtx()
     const req = await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET)
@@ -375,6 +393,47 @@ describe("handleSlackRequest", () => {
     expect(queueSend).toHaveBeenCalledTimes(1)
   })
 
+  it("SIG-546: RE-CLAIMS an abandoned (stale) claim so a stranded mention self-heals", async () => {
+    const kv = makeFakeKV()
+    const db = makeFakeDB()
+    // A claim stranded ~10 min ago (older than the 4-min staleness window) — e.g.
+    // a crash between the INSERT commit and the enqueue. A retry must re-claim it.
+    db._seed(`${TEAM_ID}:${EVENT_ID}`, new Date(Date.now() - 10 * 60 * 1000).toISOString())
+    const env = makeEnv("on", kv, SIGNING_SECRET, db)
+    const ctx = makeFakeCtx()
+    const req = await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET)
+
+    const res = await handleSlackRequest(req, env, ctx as unknown as ExecutionContext)
+
+    expect(res.status).toBe(200)
+    expect(queueSend).toHaveBeenCalledTimes(1) // re-claimed and re-enqueued
+  })
+
+  it("SIG-546: does NOT re-claim a still-fresh claim (a genuine concurrent duplicate)", async () => {
+    const kv = makeFakeKV()
+    const db = makeFakeDB()
+    db._seed(`${TEAM_ID}:${EVENT_ID}`) // claimed just now (fresh)
+    const env = makeEnv("on", kv, SIGNING_SECRET, db)
+    const ctx = makeFakeCtx()
+    const req = await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET)
+
+    const res = await handleSlackRequest(req, env, ctx as unknown as ExecutionContext)
+
+    expect(res.status).toBe(200)
+    expect(queueSend).not.toHaveBeenCalled() // treated as a duplicate
+  })
+
+  it("SIG-546: purgeStaleSlackEventDedupe deletes claims past the retention window, keeps fresh ones", async () => {
+    const db = makeFakeDB()
+    db._seed("stale", new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()) // 48h old
+    db._seed("fresh", new Date().toISOString())
+
+    await purgeStaleSlackEventDedupe(db as unknown as D1Database)
+
+    expect(db._rows.has("stale")).toBe(false)
+    expect(db._rows.has("fresh")).toBe(true)
+  })
+
   it("SIG-546: returns 503 when the platform D1 binding is absent (fail loud, never silently double-post)", async () => {
     const kv = makeFakeKV()
     const env = makeEnv("on", kv, SIGNING_SECRET, null) // no SIGILIX_PLATFORM_DB
@@ -390,7 +449,7 @@ describe("handleSlackRequest", () => {
   it("does not treat another Slack team's matching event_id as a duplicate", async () => {
     const kv = makeFakeKV()
     const db = makeFakeDB()
-    db._rows.add(`T_OTHER:${EVENT_ID}`) // a DIFFERENT team already claimed this raw event_id
+    db._seed(`T_OTHER:${EVENT_ID}`) // a DIFFERENT team already claimed this raw event_id
     const env = makeEnv("on", kv, SIGNING_SECRET, db)
     const ctx = makeFakeCtx()
     const req = await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET)

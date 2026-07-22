@@ -132,7 +132,7 @@ import { enqueueDueSeatWork, handleStripeWebhookRoute } from "@/src/features/bil
 import { tryHandleBillingRoute } from "@/src/lib/billing-checkout-route"
 import { handleLinearWebhook, handleManualTrigger } from "@/src/index-webhooks"
 import { dispatchJob } from "@/src/index-dispatch"
-import { handleSlackRequest } from "@/src/index-slack-webhook"
+import { handleSlackRequest, purgeStaleSlackEventDedupe } from "@/src/index-slack-webhook"
 import { handleSlackInstall, handleSlackOAuthCallback, handleSlackInstalled } from "@/src/lib/slack/slack-install"
 import { handleLinearOAuthCallback } from "@/src/lib/linear-agent-oauth"
 import { tryHandleGitLabConnectRoute, isGitLabConnectCorsPath } from "@/src/lib/gitlab-connect"
@@ -833,15 +833,15 @@ export default {
     ctx.waitUntil(enqueueDueSeatWork(env)) // independent of the indexer gate
     if (env.SIGILIX_PLATFORM_DB)
       ctx.waitUntil(
-        sweepExpiredRepoActiveIndexRuns({ db: env.SIGILIX_PLATFORM_DB }).catch((err) =>
-          logTickError("repo-active-index-sweep-error", err),
-        ),
+        Promise.all([
+          sweepExpiredRepoActiveIndexRuns({ db: env.SIGILIX_PLATFORM_DB }),
+          purgeStaleSlackEventDedupe(env.SIGILIX_PLATFORM_DB), // SIG-546: bound the dedupe table
+        ]).catch((err) => logTickError("scheduled-d1-sweep-error", err)),
       )
-    // CodeRabbit C1: gate the auto-fire on OPENCLAW_INDEXER_ENABLED. The
-    // manual routes (index-repo / index-backfill / index-reconcile) stay
-    // ungated — those are operator-triggered and the operator already
-    // knows what flag state they're in. The cron is the only auto-trigger;
-    // a flag flip-off should immediately halt automatic fan-out.
+    // CodeRabbit C1: gate the auto-fire on OPENCLAW_INDEXER_ENABLED. The manual
+    // routes (index-repo / index-backfill / index-reconcile) stay ungated — those
+    // are operator-triggered and the operator already knows the flag state. The
+    // cron is the only auto-trigger; a flag flip-off must halt automatic fan-out.
     if (!isIndexerEnabled(env)) {
       console.log(JSON.stringify({ event: "index-reconcile-tick-skip-disabled" }))
       return

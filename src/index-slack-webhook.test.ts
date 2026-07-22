@@ -44,7 +44,7 @@ import { postSlackMessage, fetchSlackThread, capAndRedactThread } from "@/src/li
 import { checkSlackRateLimit, recordSlackAction } from "@/src/lib/slack/slack-rate-limit"
 
 // Imports under test AFTER mocks are declared.
-import { handleSlackRequest } from "@/src/index-slack-webhook"
+import { handleSlackRequest, purgeStaleSlackEventDedupe } from "@/src/index-slack-webhook"
 import { dispatchJob } from "@/src/index-dispatch"
 
 // ─── HMAC sign helper (matches pattern from slack-verify.test.ts) ─────────────
@@ -82,6 +82,64 @@ function makeFakeKV() {
 }
 
 type FakeKV = ReturnType<typeof makeFakeKV>
+
+// SIG-546: a minimal D1 stub modelling the atomic dedupe semantics.
+//   - claim: INSERT ... ON CONFLICT DO UPDATE SET created_at=? WHERE created_at<?
+//     → changes:1 for a fresh insert OR a re-claim of a STALE row (stored
+//     created_at older than the staleness bind arg); changes:0 for a duplicate
+//     of a still-fresh row.
+//   - release: DELETE ... WHERE event_id = ? → removes the row.
+//   - purge:   DELETE ... WHERE created_at < ? → removes all rows older than the
+//     cutoff bind arg.
+// `_rows` maps event_id → created_at ISO; `_seed(key, iso?)` seeds a claim.
+function makeFakeDB() {
+  const rows = new Map<string, string>()
+  const runInsert = vi.fn()
+  const runDelete = vi.fn()
+  const db = {
+    prepare(sql: string) {
+      return {
+        bind(...args: unknown[]) {
+          return {
+            async run() {
+              if (/INSERT/i.test(sql)) {
+                const [key, nowIso, staleIso] = args as [string, string, string]
+                runInsert(key)
+                const existing = rows.get(key)
+                if (existing === undefined || existing < staleIso) {
+                  rows.set(key, nowIso)
+                  return { meta: { changes: 1 } }
+                }
+                return { meta: { changes: 0 } }
+              }
+              if (/DELETE/i.test(sql) && /created_at/i.test(sql)) {
+                const cutoff = String(args[0])
+                let n = 0
+                for (const [k, iso] of [...rows]) if (iso < cutoff) (rows.delete(k), (n += 1))
+                return { meta: { changes: n } }
+              }
+              if (/DELETE/i.test(sql)) {
+                const key = String(args[0])
+                runDelete(key)
+                rows.delete(key)
+                return { meta: { changes: 1 } }
+              }
+              return { meta: { changes: 0 } }
+            },
+          }
+        },
+      }
+    },
+    _rows: rows,
+    _runInsert: runInsert,
+    _runDelete: runDelete,
+    _seed(key: string, createdAtIso: string = new Date().toISOString()) {
+      rows.set(key, createdAtIso)
+    },
+  }
+  return db
+}
+type FakeDB = ReturnType<typeof makeFakeDB>
 
 const queueSend = vi.fn(async (_job: unknown) => undefined)
 
@@ -142,12 +200,18 @@ async function makeSignedRequest(body: string, secret: string, tsOverride?: stri
 
 // ─── Env factory ──────────────────────────────────────────────────────────────
 
-function makeEnv(mode: "off" | "shadow" | "on", kv: FakeKV, secret: string | undefined = SIGNING_SECRET): Env {
+function makeEnv(
+  mode: "off" | "shadow" | "on",
+  kv: FakeKV,
+  secret: string | undefined = SIGNING_SECRET,
+  db: FakeDB | null = makeFakeDB(),
+): Env {
   return {
     OPENCLAW_STATE: kv as unknown as KVNamespace,
     OPENCLAW_JOBS: { send: queueSend } as unknown as Queue<JobMessage>,
     SIGILIX_SLACK_MODE: mode,
     SLACK_SIGNING_SECRET: secret,
+    ...(db ? { SIGILIX_PLATFORM_DB: db as unknown as D1Database } : {}),
   } as unknown as Env
 }
 
@@ -289,9 +353,9 @@ describe("handleSlackRequest", () => {
 
   it("(d) duplicate event_id → 200 without enqueueing or running the agent", async () => {
     const kv = makeFakeKV()
-    // Pre-seed the idempotency key.
-    kv._store.set(`slack-event:${TEAM_ID}:${EVENT_ID}`, "1")
-    const env = makeEnv("on", kv)
+    const db = makeFakeDB()
+    db._seed(`${TEAM_ID}:${EVENT_ID}`) // pre-claimed by an earlier delivery
+    const env = makeEnv("on", kv, SIGNING_SECRET, db)
     const ctx = makeFakeCtx()
     const req = await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET)
 
@@ -305,10 +369,74 @@ describe("handleSlackRequest", () => {
     expect(postSlackMessage).not.toHaveBeenCalled()
   })
 
-  it("returns 503 for a pending event claim so Slack keeps retrying until queue handoff is known", async () => {
+  it("SIG-546: concurrent double-delivery of the same event_id enqueues EXACTLY once", async () => {
     const kv = makeFakeKV()
-    kv._store.set(`slack-event:${TEAM_ID}:${EVENT_ID}`, "pending")
-    const env = makeEnv("on", kv)
+    const db = makeFakeDB() // shared claim table across both deliveries
+    const env = makeEnv("on", kv, SIGNING_SECRET, db)
+    const ctx = makeFakeCtx()
+
+    const [res1, res2] = await Promise.all([
+      handleSlackRequest(
+        await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET),
+        env,
+        ctx as unknown as ExecutionContext,
+      ),
+      handleSlackRequest(
+        await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET),
+        env,
+        ctx as unknown as ExecutionContext,
+      ),
+    ])
+
+    // Both ack 200 (winner + duplicate); only the atomic-claim winner scheduled work.
+    expect([res1.status, res2.status].sort()).toEqual([200, 200])
+    expect(queueSend).toHaveBeenCalledTimes(1)
+  })
+
+  it("SIG-546: RE-CLAIMS an abandoned (stale) claim so a stranded mention self-heals", async () => {
+    const kv = makeFakeKV()
+    const db = makeFakeDB()
+    // A claim stranded ~10 min ago (older than the 4-min staleness window) — e.g.
+    // a crash between the INSERT commit and the enqueue. A retry must re-claim it.
+    db._seed(`${TEAM_ID}:${EVENT_ID}`, new Date(Date.now() - 10 * 60 * 1000).toISOString())
+    const env = makeEnv("on", kv, SIGNING_SECRET, db)
+    const ctx = makeFakeCtx()
+    const req = await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET)
+
+    const res = await handleSlackRequest(req, env, ctx as unknown as ExecutionContext)
+
+    expect(res.status).toBe(200)
+    expect(queueSend).toHaveBeenCalledTimes(1) // re-claimed and re-enqueued
+  })
+
+  it("SIG-546: does NOT re-claim a still-fresh claim (a genuine concurrent duplicate)", async () => {
+    const kv = makeFakeKV()
+    const db = makeFakeDB()
+    db._seed(`${TEAM_ID}:${EVENT_ID}`) // claimed just now (fresh)
+    const env = makeEnv("on", kv, SIGNING_SECRET, db)
+    const ctx = makeFakeCtx()
+    const req = await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET)
+
+    const res = await handleSlackRequest(req, env, ctx as unknown as ExecutionContext)
+
+    expect(res.status).toBe(200)
+    expect(queueSend).not.toHaveBeenCalled() // treated as a duplicate
+  })
+
+  it("SIG-546: purgeStaleSlackEventDedupe deletes claims past the retention window, keeps fresh ones", async () => {
+    const db = makeFakeDB()
+    db._seed("stale", new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()) // 48h old
+    db._seed("fresh", new Date().toISOString())
+
+    await purgeStaleSlackEventDedupe(db as unknown as D1Database)
+
+    expect(db._rows.has("stale")).toBe(false)
+    expect(db._rows.has("fresh")).toBe(true)
+  })
+
+  it("SIG-546: returns 503 when the platform D1 binding is absent (fail loud, never silently double-post)", async () => {
+    const kv = makeFakeKV()
+    const env = makeEnv("on", kv, SIGNING_SECRET, null) // no SIGILIX_PLATFORM_DB
     const ctx = makeFakeCtx()
     const req = await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET)
 
@@ -320,8 +448,9 @@ describe("handleSlackRequest", () => {
 
   it("does not treat another Slack team's matching event_id as a duplicate", async () => {
     const kv = makeFakeKV()
-    kv._store.set(`slack-event:T_OTHER:${EVENT_ID}`, "queued")
-    const env = makeEnv("on", kv)
+    const db = makeFakeDB()
+    db._seed(`T_OTHER:${EVENT_ID}`) // a DIFFERENT team already claimed this raw event_id
+    const env = makeEnv("on", kv, SIGNING_SECRET, db)
     const ctx = makeFakeCtx()
     const req = await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET)
 
@@ -329,7 +458,7 @@ describe("handleSlackRequest", () => {
 
     expect(res.status).toBe(200)
     expect(queueSend).toHaveBeenCalledTimes(1)
-    expect(kv._store.get(`slack-event:${TEAM_ID}:${EVENT_ID}`)).toBe("queued")
+    expect(db._rows.has(`${TEAM_ID}:${EVENT_ID}`)).toBe(true)
   })
 
   // ── (e) on + valid scoped app_mention → 200 ack + agent + post ──────────────
@@ -502,7 +631,8 @@ describe("handleSlackRequest", () => {
 
   it("returns 503 and releases the event claim when queue handoff fails", async () => {
     const kv = makeFakeKV()
-    const env = makeEnv("on", kv)
+    const db = makeFakeDB()
+    const env = makeEnv("on", kv, SIGNING_SECRET, db)
     const ctx = makeFakeCtx()
     const req = await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET)
     queueSend.mockRejectedValueOnce(new Error("queue unavailable"))
@@ -510,8 +640,9 @@ describe("handleSlackRequest", () => {
     const res = await handleSlackRequest(req, env, ctx as unknown as ExecutionContext)
 
     expect(res.status).toBe(503)
-    expect(kv.delete).toHaveBeenCalledWith(`slack-event:${TEAM_ID}:${EVENT_ID}`)
-    expect(kv._store.has(`slack-event:${TEAM_ID}:${EVENT_ID}`)).toBe(false)
+    // The claim is released so a Slack retry can re-claim and re-enqueue.
+    expect(db._runDelete).toHaveBeenCalledWith(`${TEAM_ID}:${EVENT_ID}`)
+    expect(db._rows.has(`${TEAM_ID}:${EVENT_ID}`)).toBe(false)
     expect(ctx.waitUntil).not.toHaveBeenCalled()
   })
 
@@ -670,33 +801,10 @@ describe("handleSlackRequest", () => {
 
   // ── New event_id is stored in KV before work is enqueued ────────────────────
 
-  it("transitions a short pending claim to a 24-hour queued claim around the durable handoff", async () => {
+  it("SIG-546: claims the event_id in D1 before enqueueing (no false success on a duplicate retry)", async () => {
     const kv = makeFakeKV()
-    const env = makeEnv("on", kv)
-    const ctx = makeFakeCtx()
-    const req = await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET)
-
-    await handleSlackRequest(req, env, ctx as unknown as ExecutionContext)
-
-    // KV put must have been called synchronously (before the 200 ack).
-    const stored = kv._store.get(`slack-event:${TEAM_ID}:${EVENT_ID}`)
-    expect(stored).toBe("queued")
-    expect(kv.put).toHaveBeenNthCalledWith(1, `slack-event:${TEAM_ID}:${EVENT_ID}`, "pending", {
-      expirationTtl: 240,
-    })
-    expect(kv.put).toHaveBeenNthCalledWith(2, `slack-event:${TEAM_ID}:${EVENT_ID}`, "queued", {
-      expirationTtl: 86_400,
-    })
-  })
-
-  it("retries the queued claim transition after a transient KV failure", async () => {
-    const kv = makeFakeKV()
-    let queuedAttempts = 0
-    kv.put.mockImplementation(async (key: string, value: string) => {
-      if (value === "queued" && queuedAttempts++ < 2) throw new Error("KV unavailable")
-      kv._store.set(key, value)
-    })
-    const env = makeEnv("on", kv)
+    const db = makeFakeDB()
+    const env = makeEnv("on", kv, SIGNING_SECRET, db)
     const ctx = makeFakeCtx()
     const req = await makeSignedRequest(APP_MENTION_BODY, SIGNING_SECRET)
 
@@ -704,7 +812,8 @@ describe("handleSlackRequest", () => {
 
     expect(res.status).toBe(200)
     expect(queueSend).toHaveBeenCalledTimes(1)
-    expect(queuedAttempts).toBe(3)
-    expect(kv._store.get(`slack-event:${TEAM_ID}:${EVENT_ID}`)).toBe("queued")
+    // The winning delivery persisted the team-scoped claim.
+    expect(db._runInsert).toHaveBeenCalledWith(`${TEAM_ID}:${EVENT_ID}`)
+    expect(db._rows.has(`${TEAM_ID}:${EVENT_ID}`)).toBe(true)
   })
 })

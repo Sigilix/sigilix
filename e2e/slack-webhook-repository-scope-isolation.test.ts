@@ -41,6 +41,10 @@ import { resolveEntitlement, upsellFor } from "@/src/features/entitlements"
 
 const BASE_SQL = readFileSync(new URL("../migrations/0001_create_tenant_repo_usage.sql", import.meta.url), "utf8")
 const SLACK_SQL = readFileSync(new URL("../migrations/0019_create_slack_channel_repo.sql", import.meta.url), "utf8")
+const SLACK_DEDUPE_SQL = readFileSync(
+  new URL("../migrations/0036_create_slack_event_dedupe.sql", import.meta.url),
+  "utf8",
+)
 
 const SIGNING_SECRET = "slack-scope-isolation-secret"
 const TEAM_ID = "T0TENANT42"
@@ -133,6 +137,7 @@ async function makePlatformDb(): Promise<D1Database> {
   const db = makeD1()
   await db.exec(BASE_SQL)
   await db.exec(SLACK_SQL)
+  await db.exec(SLACK_DEDUPE_SQL) // SIG-546: atomic event_id dedupe table
   await db
     .prepare(
       "INSERT INTO tenant (installation_id, account_login, account_type, created_at, updated_at)" +

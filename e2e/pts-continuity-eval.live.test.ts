@@ -37,6 +37,9 @@ import {
   type ModelClient,
 } from "./pts-continuity-harness"
 import { buildScorecard, formatScorecard } from "./pts-continuity-scorecard"
+// Side-effect import: self-registers the SIG-582 reasoning-v2 compactor as a treatment, so
+// `PTS_TREATMENT=reasoning-v2 npm run pts-continuity-eval` measures it against the baseline.
+import "./pts-compaction-v2"
 
 const MODEL = process.env.PTS_MODEL?.trim() || "openai/gpt-oss-120b"
 const RUNS = (() => {

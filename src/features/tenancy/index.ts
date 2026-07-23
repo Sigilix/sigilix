@@ -49,8 +49,8 @@ export {
 export type { TenantBillingGuard } from "./adapters/d1-tenant-store"
 export { resolveTenantCap } from "./adapters/resolve-tenant-cap"
 export { appendUsage } from "./adapters/d1-usage-ledger"
-export { readTenantUsageSince, readUsageRollupSince } from "./adapters/d1-usage-read"
-export type { TenantUsageRow } from "./adapters/d1-usage-read"
+export { readTenantUsageSince, readUsageRollupSince, readPtsSessionUsageSince } from "./adapters/d1-usage-read"
+export type { TenantUsageRow, PtsSessionUsageRow } from "./adapters/d1-usage-read"
 export {
   resolveUsageMeterMode,
   resolveUsagePoolCap,

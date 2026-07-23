@@ -30,6 +30,7 @@ import {
 } from "@/src/lib/admin/admin-metrics-aggregate"
 import { DEFAULT_PRICING } from "@/src/shared/domain/model-pricing"
 import { loadMemoryGardenerDigest } from "@/src/lib/memory-gardener-digest"
+import { readPtsSessionUsageSince } from "@/src/features/tenancy"
 import type { Env } from "@/src/shared/types/env"
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -239,7 +240,7 @@ export async function handleAdminMetricsRoute(request: Request, env: Env): Promi
   }
 
   gaps.push(
-    "Per-served-model token volume (Boreas/Pyroeis/Astraeus) is NOT persisted: usage_ledger.tokens is a single total per PR review with no per-model split, and usage_events carries no token counts. Only total review tokens are available.",
+    "Per-served-model token volume (Boreas/Pyroeis/Astraeus) is NOT persisted: usage_ledger.tokens is a single total per PR review with no per-model split. Session token counts DO exist per-run in usage_events (surfaced under `pts`), but not split per served model.",
   )
 
   // ── Cost (estimate — flagged) ───────────────────────────────
@@ -300,6 +301,45 @@ export async function handleAdminMetricsRoute(request: Request, env: Env): Promi
   // → null (never blocks the metrics response).
   const memoryGardener = await loadMemoryGardenerDigest(env)
 
+  // ── PTS token-cost telemetry (SIG-583 M0) ───────────────────
+  // Per-tenant token-cost of agentic SESSIONS (coding_agent + chatbot) — the
+  // token-cost half of the Persistent-Task-State wedge, made visible live per
+  // tenant. HONESTY: this is session COST, not state-loss/retention. Prod runs
+  // are bounded and never compact the context window, so there is no reset event
+  // to score retention against live (see gap below); the retention metric lives
+  // in the eval harness (SIG-578).
+  const ptsRead = await readPtsSessionUsageSince(env, sinceIso)
+  // Round each per-tenant cost to cents so a row never renders as a float artifact
+  // (0.07000000000000001) next to the cent-rounded total below.
+  const ptsPerTenant = (ptsRead.ok ? ptsRead.rows : []).map((r) => ({
+    ...r,
+    costUsd: Math.round(r.costUsd * 100) / 100,
+  }))
+  if (!ptsRead.ok) {
+    gaps.push("PTS session token-cost read faulted — the per-tenant table degraded to empty and may under-report.")
+  }
+  gaps.push(
+    "PTS state-loss/continuity is NOT yet measured in prod: agentic runs are bounded and never compact the context window, so there is no reset event to score retention against. Only session token-cost is surfaced under `pts`; the retention metric lives in the eval harness (SIG-578) and needs prod compaction to surface live.",
+  )
+  // The session meters (coding_agent + chatbot) are SEAT-scoped, keyed by user_key,
+  // not by installation. Runs with no org context are written with installation_id=0
+  // (see d1-usage-events.ts), so the installationId:0 row is a BLENDED bucket across
+  // distinct seats/tenants — not one tenant. Flag it so `perTenant` is not read as
+  // exact tenant granularity.
+  if (ptsPerTenant.some((r) => r.installationId === 0)) {
+    gaps.push(
+      "PTS `perTenant` includes an installationId:0 row — session meters are seat-scoped and org-less runs are recorded under installation_id=0, so that row blends multiple seats/tenants and is NOT a single tenant.",
+    )
+  }
+  const ptsTotals = ptsPerTenant.reduce(
+    (acc, r) => ({
+      sessions: acc.sessions + r.sessions,
+      tokens: acc.tokens + r.tokens,
+      costUsd: acc.costUsd + r.costUsd,
+    }),
+    { sessions: 0, tokens: 0, costUsd: 0 },
+  )
+
   return json(
     {
       generatedAt: new Date(nowMs).toISOString(),
@@ -331,6 +371,10 @@ export async function handleAdminMetricsRoute(request: Request, env: Env): Promi
       },
       revenue,
       margin: { grossUsd },
+      pts: {
+        perTenant: ptsPerTenant,
+        totals: { ...ptsTotals, costUsd: Math.round(ptsTotals.costUsd * 100) / 100 },
+      },
       memoryGardener,
       gaps,
     },

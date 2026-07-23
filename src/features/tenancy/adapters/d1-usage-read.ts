@@ -21,6 +21,73 @@ export type TenantUsageRow = {
   reviews: number
 }
 
+// SIG-583 (PTS M0): per-tenant token-cost of agentic SESSIONS.
+export type PtsSessionUsageRow = {
+  installationId: number
+  accountLogin: string | null
+  accountType: string | null
+  sessions: number
+  tokens: number
+  costUsd: number
+}
+
+/**
+ * SIG-583 (PTS M0): per-tenant token-cost of agentic SESSIONS — the seat meters
+ * (`coding_agent` + `chatbot`), one usage_events row per portal-chat / CLI run.
+ * These are the sessions whose context-window cost the Persistent-Task-State
+ * work aims to cut; the admin dashboard surfaces this so the token-cost half of
+ * the wedge is visible live per tenant. Grouped by installation, joined to
+ * tenant metadata. Fail-open: `{ok:true, rows:[]}` when the binding is absent
+ * (dark → legitimately empty); `{ok:false}` on a D1 error (callers MUST treat
+ * as a fault, not "no usage"). Never throws.
+ */
+export async function readPtsSessionUsageSince(
+  env: Pick<Env, "SIGILIX_PLATFORM_DB">,
+  sinceIso: string,
+): Promise<{ ok: true; rows: PtsSessionUsageRow[] } | { ok: false }> {
+  if (!env.SIGILIX_PLATFORM_DB) return { ok: true, rows: [] }
+  const db = env.SIGILIX_PLATFORM_DB
+  try {
+    const sql =
+      "SELECT u.installation_id AS installationId," +
+      " COUNT(*) AS sessions," +
+      " COALESCE(SUM(u.tokens), 0) AS tokens," +
+      " COALESCE(SUM(u.cost_usd), 0) AS costUsd," +
+      " t.account_login AS accountLogin," +
+      " t.account_type AS accountType" +
+      " FROM usage_events u" +
+      " LEFT JOIN tenant t ON t.installation_id = u.installation_id" +
+      " WHERE u.created_at >= ? AND u.meter IN ('coding_agent', 'chatbot')" +
+      " GROUP BY u.installation_id"
+    type RawRow = {
+      installationId: unknown
+      sessions: unknown
+      tokens: unknown
+      costUsd: unknown
+      accountLogin: unknown
+      accountType: unknown
+    }
+    const { results } = await db.prepare(sql).bind(sinceIso).all<RawRow>()
+    const rows = results.map((r) => ({
+      installationId: Number(r.installationId),
+      accountLogin: typeof r.accountLogin === "string" ? r.accountLogin : null,
+      accountType: typeof r.accountType === "string" ? r.accountType : null,
+      sessions: Number(r.sessions) || 0,
+      tokens: Number(r.tokens) || 0,
+      costUsd: Number(r.costUsd) || 0,
+    }))
+    return { ok: true, rows }
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "d1-pts-session-usage-read-failed",
+        err: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return { ok: false }
+  }
+}
+
 /**
  * Sum usage_ledger rows for a single tenant since `sinceIso` (inclusive).
  *

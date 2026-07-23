@@ -12,6 +12,9 @@ import { reasoningPreservingCompactor, COMPACTION_V2_ID, COMPACTION_V2_SYSTEM } 
 import {
   runContinuitySession,
   resolveTreatmentCompactor,
+  registerTreatmentCompactor,
+  __resetTreatmentCompactorsForTest,
+  standardConditions,
   naiveSummaryCompactor,
   type ModelClient,
   type CompactionInput,
@@ -119,5 +122,29 @@ describe("reasoningPreservingCompactor", () => {
       model: throwing,
     })
     expect(m.errored).toBe(true)
+  })
+})
+
+// The regression that stranded SIG-582: with no treatment registered, the harness
+// omits the treatment arm entirely and the eval logs "treatment condition SKIPPED".
+// These guard that importing this module wires reasoning-v2 into the standard conditions
+// (present when registered, omitted when not) — the whole point of self-registration.
+describe("harness integration — treatment arm is no longer SKIPPED", () => {
+  it("standardConditions includes the reasoning-v2 treatment arm once it is registered", () => {
+    const treatment = resolveTreatmentCompactor("reasoning-v2") // registered at import
+    expect(treatment?.id).toBe("reasoning-v2")
+    const conditions = standardConditions(treatment)
+    expect(conditions.map((c) => c.id)).toEqual(["control-a", "control-b", "treatment"])
+    expect(conditions.find((c) => c.id === "treatment")?.compactor.id).toBe("reasoning-v2")
+  })
+
+  it("omits the treatment arm when none is registered (the stranded-on-main state)", () => {
+    __resetTreatmentCompactorsForTest()
+    try {
+      expect(resolveTreatmentCompactor("reasoning-v2")).toBeNull()
+      expect(standardConditions(null).map((c) => c.id)).toEqual(["control-a", "control-b"])
+    } finally {
+      registerTreatmentCompactor(reasoningPreservingCompactor) // restore the import-time registration
+    }
   })
 })

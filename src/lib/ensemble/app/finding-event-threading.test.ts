@@ -41,13 +41,24 @@ describe("finding-event sink threading", () => {
     expect(read("./orchestrator.ts")).toContain("postedFindingSink: args.postedFindingSink")
   })
 
-  it("publish forwards the posted sink into persistSubmittedReview", () => {
-    expect(read("./publish.ts")).toContain("postedFindingSink")
+  it("publish forwards BOTH sinks into persistSubmittedReview", () => {
+    const publish = read("./publish.ts")
+    expect(publish).toContain("postedFindingSink")
+    expect(publish).toContain("findingEventSink")
+  })
+
+  it("the orchestrator forwards findingEventSink into publish too (publish-stage captures)", () => {
+    expect(read("./orchestrator.ts")).toMatch(
+      /publishReviewSubmission\([\s\S]{0,400}findingEventSink: args\.findingEventSink/,
+    )
   })
 
   it("publish-finalize records the surviving set using the manifest's own key", () => {
     const finalize = read("./publish-finalize.ts")
-    expect(finalize).toContain("postedFindingSink.push({")
+    expect(finalize).toContain("postedFindingSink?.push({")
+    // Every survivor also gets a publish-stage capture — otherwise a finding that
+    // tripped no gate has no row at all, and content_fingerprint stays NULL.
+    expect(finalize).toContain("capturePostedFinding(findingEventSink, f)")
     // Must reuse the manifest key, NOT re-derive from (path, headline) — a second
     // derivation site would let the join fail silently.
     expect(finalize).toContain("findingKey: f.key")

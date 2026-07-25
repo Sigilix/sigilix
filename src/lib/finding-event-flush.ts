@@ -19,6 +19,7 @@ import {
   type FindingEventCapture,
   type PostedFindingCapture,
 } from "@/src/lib/ensemble/app/finding-event-capture"
+import { PROMPT_VERSION } from "@/src/prompts/pr-review"
 import type { Env } from "@/src/shared/types/env"
 
 /**
@@ -50,6 +51,10 @@ export async function flushFindingEventLog(
       repoId: job.repoId ?? 0,
       prNumber: job.prNumber,
       headSha: job.headSha,
+      // Unrecoverable if not captured at write time. modelId still needs the
+      // router's RESOLVED id threaded through (a tier alias would be worse than
+      // null, since MaaS aliases silently re-point).
+      promptVersion: PROMPT_VERSION,
     }
     const drafts = await materializeFindingEvents(captures)
     const postedRecords = posted.length > 0 ? buildPostedFindingRecords(posted) : null

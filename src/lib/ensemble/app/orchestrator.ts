@@ -203,7 +203,6 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     }
 
     // ─── SIG-88: pre-fanout merged-on-approve short-circuit ────
-    //
     // When the PR is already merged at fan-out time (e.g. the webhook was queued after a
     // long delay and the human merged meanwhile), short-circuit to a marker-only APPROVE.
     // CodeRabbit's behavior: GitHub's native "approved these changes" one-liner stands in
@@ -882,10 +881,11 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     emitPhaseCompleted(perfCtx, "post_validation", postValidationStartedAtMs)
     // SIG-304: dry-run cut — return the built review without publishing.
     if (args.dryRun) return dryRunResult(telemetry, submissionVerdict, renderableUnanchoredForSubmission)
-    // SIG-318 (PR 12f): publish owns overview, stale-head guard #3, submit, persistence.
     return attachInvariantLensAmendmentWork(
       await publishReviewSubmission({
-        postedFindingSink: args.postedFindingSink, // SIG-606: the reconcile authority
+        // SIG-318 (PR 12f): publish owns overview, stale-head guard #3, submit, persistence.
+        postedFindingSink: args.postedFindingSink, // SIG-606 reconcile authority + captures
+        findingEventSink: args.findingEventSink,
         scmProvider: args.scmProvider,
         env,
         owner,

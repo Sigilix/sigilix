@@ -7,7 +7,8 @@
 import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { PullRequestMeta } from "@/src/shared/types/github"
-import type { PostedFindingCapture } from "@/src/lib/ensemble/app/finding-event-capture"
+import { capturePostedFinding } from "@/src/lib/ensemble/app/finding-event-capture"
+import type { FindingEventCapture, PostedFindingCapture } from "@/src/lib/ensemble/app/finding-event-capture"
 import type { ReviewManifestFinding } from "@/src/lib/review-manifest"
 import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import type { SigilixConfig } from "@/src/lib/sigilix-config"
@@ -36,6 +37,9 @@ export interface PersistSubmittedReviewDeps {
   /** SIG-606: receives the SURVIVING candidates — the authority the dispatcher
    *  reconciles finding outcomes against. Optional; omitted by tests. */
   postedFindingSink?: PostedFindingCapture[]
+  /** SIG-606: also receives a `publish`-stage capture per survivor, so every posted
+   *  finding has a row and content_fingerprint is populated. */
+  findingEventSink?: FindingEventCapture[]
   incrementalCoverageEntries?: IncrementalReviewCoverageWriteEntry[]
   fullPrDiff: string
   sigilixConfig: SigilixConfig
@@ -68,6 +72,7 @@ export async function persistSubmittedReview(deps: PersistSubmittedReviewDeps, r
     reviewManifestEnabled,
     currentFindingsForManifest,
     postedFindingSink,
+    findingEventSink,
     incrementalCoverageEntries,
     fullPrDiff,
     sigilixConfig,
@@ -78,9 +83,14 @@ export async function persistSubmittedReview(deps: PersistSubmittedReviewDeps, r
   // `key` is the manifest's already-computed finding key, so this joins the gate
   // captures without re-deriving (a second derivation site would let the join fail
   // silently). Structural only — no headline/body leaves this call.
-  if (postedFindingSink) {
+  if (postedFindingSink || findingEventSink) {
     for (const f of currentFindingsForManifest) {
-      postedFindingSink.push({
+      // A publish-stage capture for EVERY survivor: without it, a finding that
+      // tripped no gate has no row at all (censored sampling), and
+      // content_fingerprint — the join key human dismissals carry — is NULL on
+      // every validator-stage row.
+      capturePostedFinding(findingEventSink, f)
+      postedFindingSink?.push({
         findingKey: f.key,
         surface: f.inlineCommentId != null ? "posted-inline" : "posted-body",
         inlineCommentId: f.inlineCommentId ?? null,

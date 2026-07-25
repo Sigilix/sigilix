@@ -32,8 +32,12 @@ export function reconcileFindingOutcomes(
   // `!posted` (not `=== null`) so an undefined caller can't slip past strict TS
   // into a crash. An empty Map is truthy, so the null-vs-empty distinction holds.
   return drafts.map((draft) => {
-    if (!posted) {
-      // No posted set observed — we do not know, and we do not guess.
+    if (!posted || draft.identityResolved === false) {
+      // Two ways we legitimately do not know:
+      //  • no posted set observed (errored/aborted review), or
+      //  • the candidate had no derivable identity, so its key CANNOT match the
+      //    posted set — treating that as `suppressed` would record a finding we may
+      //    well have posted as rejected, purely because we couldn't identify it.
       // trust_tier is publication-assigned, so it is NULL on a non-survivor row.
       return { ...draft, outcome: "unknown" as const, trustTier: null, inlineCommentId: null }
     }

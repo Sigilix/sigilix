@@ -39,6 +39,7 @@ import {
   type CollectedVerdict,
 } from "@/src/lib/ensemble/domain/validation"
 import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
+import { captureGateHit, type FindingEventCapture } from "@/src/lib/ensemble/app/finding-event-capture"
 
 type AstResult = Awaited<ReturnType<typeof runAstRules>>
 type SecurityManifest = Awaited<ReturnType<typeof buildSecurityFactManifest>>
@@ -93,6 +94,9 @@ export interface AdjudicateArgs {
   telemetry: AdjudicateTelemetry
   /** The dispatcher's mutable validation-rejection sink (the `on*FindingDropped` callbacks push to it). */
   validationSink: ValidationRejectionEvent[] | undefined
+  /** SIG-606: the dispatcher's mutable finding-event sink. Same callbacks push a
+   *  per-CANDIDATE capture here so suppressed candidates are recorded, not just counted. */
+  findingEventSink: FindingEventCapture[] | undefined
   sigilixConfig: SigilixConfig
   fullPrDiff: string
   wasTruncated: boolean
@@ -129,6 +133,7 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
     ensembleConfig,
     telemetry,
     validationSink,
+    findingEventSink,
     sigilixConfig,
     fullPrDiff,
     wasTruncated,
@@ -200,6 +205,15 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
     // pure helper's "pack undefined or empty" branch.
     testingEvidence: testingEvidencePackWithCoverage,
     onTestingFindingDropped: (finding, reason) => {
+      // SIG-606: this gate's callback takes a bare `reason` code (not an `info`
+      // object) and always hard-drops, hence the literal `enforced: true`.
+      captureGateHit(findingEventSink, {
+        gate: "uncited-testing",
+        stage: "validator",
+        reason,
+        enforced: true,
+        finding,
+      })
       console.log(
         JSON.stringify({
           event: "pr-review-testing-finding-dropped",
@@ -252,6 +266,13 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
         dropped: info.dropped,
         category: finding.category,
       })
+      captureGateHit(findingEventSink, {
+        gate: "security",
+        stage: "validator",
+        reason: info.reason,
+        enforced: info.dropped,
+        finding,
+      })
     },
     // SIG-111: thread the tests-finding specificity gate mode +
     // telemetry through. Default `shadow` — counts/telemeters the
@@ -297,6 +318,13 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
         dropped: info.dropped,
         category: finding.category,
       })
+      captureGateHit(findingEventSink, {
+        gate: "tests",
+        stage: "validator",
+        reason: info.reason,
+        enforced: info.dropped,
+        finding,
+      })
     },
     // SIG-109: thread the logic evidence + mode. Evidence is built
     // PR-A-contained — added-line text from the FULL PR diff +
@@ -334,6 +362,13 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
         dropped: info.dropped,
         category: finding.category,
       })
+      captureGateHit(findingEventSink, {
+        gate: "logic",
+        stage: "validator",
+        reason: info.reason,
+        enforced: info.dropped,
+        finding,
+      })
     },
     // SIG-308: logic-refutation backstop. Default `off` in code; wrangler
     // sets `shadow` so production counts/telemeters the would-flag rate
@@ -364,6 +399,13 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
         reason: info.reason,
         dropped: info.dropped,
         category: finding.category,
+      })
+      captureGateHit(findingEventSink, {
+        gate: "logic-refutation",
+        stage: "validator",
+        reason: info.reason,
+        enforced: info.dropped,
+        finding,
       })
     },
     // SIG-325: generalized refutation-survival gate. Default `off` in code;
@@ -400,6 +442,13 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
         dropped: info.dropped,
         category: finding.category,
       })
+      captureGateHit(findingEventSink, {
+        gate: "refutation-survival",
+        stage: "validator",
+        reason: info.reason,
+        enforced: info.dropped,
+        finding,
+      })
     },
     // SIG-328/SIG-334: logic-claim refutation gate. Drops a sev>=4 logic
     // finding only when its claim (control-flow / sync-race / retry
@@ -433,6 +482,13 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
         reason: info.reason,
         dropped: info.dropped,
         category: finding.category,
+      })
+      captureGateHit(findingEventSink, {
+        gate: "logic-claim-refutation",
+        stage: "validator",
+        reason: info.reason,
+        enforced: info.dropped,
+        finding,
       })
     },
     // SIG-110: thread perf evidence + mode. Evidence is the same
@@ -470,6 +526,13 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
         dropped: info.dropped,
         category: finding.category,
       })
+      captureGateHit(findingEventSink, {
+        gate: "perf",
+        stage: "validator",
+        reason: info.reason,
+        enforced: info.dropped,
+        finding,
+      })
     },
     // SIG-281 PR C (Rec 4): inline-grounding gate. Default `shadow` —
     // counts/telemeters the would-demote until the operator flips
@@ -500,6 +563,13 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
         reason: info.reason,
         dropped: info.dropped,
         category: finding.category,
+      })
+      captureGateHit(findingEventSink, {
+        gate: "inline-grounding",
+        stage: "validator",
+        reason: info.reason,
+        enforced: info.dropped,
+        finding,
       })
     },
     // SIG-290 v1: absence-claim grounding gate. Default `off` — the gate
@@ -536,6 +606,13 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
         reason: info.reason,
         dropped: info.dropped,
         category: finding.category,
+      })
+      captureGateHit(findingEventSink, {
+        gate: "absence-grounding",
+        stage: "validator",
+        reason: info.reason,
+        enforced: info.dropped,
+        finding,
       })
     },
     // Cross-cutting over-fire Option B: window-blindness gate. Default off
@@ -576,6 +653,13 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
         dropped: info.dropped,
         category: finding.category,
       })
+      captureGateHit(findingEventSink, {
+        gate: "window-blindness",
+        stage: "validator",
+        reason: info.reason,
+        enforced: info.dropped,
+        finding,
+      })
     },
     // SIG-602 v1: diff-consistency gate. Default `off` — the gate doesn't run
     // until the operator flips SIGILIX_DIFF_CONSISTENCY_VALIDATOR_MODE to
@@ -614,6 +698,13 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
         dropped: info.dropped,
         category: finding.category,
       })
+      captureGateHit(findingEventSink, {
+        gate: "diff-consistency",
+        stage: "validator",
+        reason: info.reason,
+        enforced: info.dropped,
+        finding,
+      })
     },
     // SIG-293 v1: security-grounding gate (secrets-exposure). Default
     // `off` — the gate doesn't run until the operator flips
@@ -649,6 +740,13 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
         dropped: info.dropped,
         category: finding.category,
       })
+      captureGateHit(findingEventSink, {
+        gate: "security-grounding",
+        stage: "validator",
+        reason: info.reason,
+        enforced: info.dropped,
+        finding,
+      })
     },
     // SIG-311 Layers A+B: security usage-vs-mention gate. Default off until
     // OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE is flipped to shadow/enforce.
@@ -677,6 +775,13 @@ export function adjudicateFindings(a: AdjudicateArgs): AdjudicateResult {
         reason: info.reason,
         dropped: info.dropped,
         category: finding.category,
+      })
+      captureGateHit(findingEventSink, {
+        gate: "security-usage",
+        stage: "validator",
+        reason: info.reason,
+        enforced: info.dropped,
+        finding,
       })
     },
     // SIG-318 (PR 12a): the orchestrator originally targeted

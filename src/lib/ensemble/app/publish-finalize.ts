@@ -7,6 +7,7 @@
 import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { PullRequestMeta } from "@/src/shared/types/github"
+import type { PostedFindingCapture } from "@/src/lib/ensemble/app/finding-event-capture"
 import type { ReviewManifestFinding } from "@/src/lib/review-manifest"
 import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import type { SigilixConfig } from "@/src/lib/sigilix-config"
@@ -32,6 +33,9 @@ export interface PersistSubmittedReviewDeps {
   meta: PullRequestMeta
   reviewManifestEnabled: EnsembleConfig["flags"]["reviewManifestEnabled"]
   currentFindingsForManifest: ReviewManifestFinding[]
+  /** SIG-606: receives the SURVIVING candidates — the authority the dispatcher
+   *  reconciles finding outcomes against. Optional; omitted by tests. */
+  postedFindingSink?: PostedFindingCapture[]
   incrementalCoverageEntries?: IncrementalReviewCoverageWriteEntry[]
   fullPrDiff: string
   sigilixConfig: SigilixConfig
@@ -63,11 +67,27 @@ export async function persistSubmittedReview(deps: PersistSubmittedReviewDeps, r
     meta,
     reviewManifestEnabled,
     currentFindingsForManifest,
+    postedFindingSink,
     incrementalCoverageEntries,
     fullPrDiff,
     sigilixConfig,
     maybePostAstAutoInline,
   } = deps
+
+  // SIG-606: record what publication ACTUALLY did with each surviving candidate.
+  // `key` is the manifest's already-computed finding key, so this joins the gate
+  // captures without re-deriving (a second derivation site would let the join fail
+  // silently). Structural only — no headline/body leaves this call.
+  if (postedFindingSink) {
+    for (const f of currentFindingsForManifest) {
+      postedFindingSink.push({
+        findingKey: f.key,
+        surface: f.inlineCommentId != null ? "posted-inline" : "posted-body",
+        inlineCommentId: f.inlineCommentId ?? null,
+        trustTier: f.trustTier ?? null,
+      })
+    }
+  }
   if (scmProvider !== "github") {
     await maybePostAstAutoInline()
     return

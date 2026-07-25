@@ -38,6 +38,7 @@
 // leaves (overview / stale-head / dismiss / fallback / counter / noop-merge / SLO
 // + perf telemetry). It never imports the orchestrator god-file.
 
+import type { PostedFindingCapture } from "@/src/lib/ensemble/app/finding-event-capture"
 import type { Env } from "@/src/shared/types/env"
 import type { CheckRunAnnotation } from "@/src/shared/types/github"
 import type { PullRequestMeta } from "@/src/shared/types/github"
@@ -99,6 +100,9 @@ export interface PublishTelemetry extends FinalizeTelemetry {
 }
 
 export interface PublishArgs<Tel extends PublishTelemetry> {
+  /** SIG-606: receives the SURVIVING candidates at publication — the authority the
+   *  dispatcher reconciles finding outcomes against (never a gate's shadow flag). */
+  postedFindingSink?: PostedFindingCapture[] | undefined
   scmProvider: ScmProviderKind
   env: Env
   owner: string
@@ -234,6 +238,8 @@ export async function publishReviewSubmission<Tel extends PublishTelemetry>(
     meta,
     reviewManifestEnabled,
     currentFindingsForManifest,
+    // SIG-606: publication is the authority reconcile resolves outcomes against.
+    ...(a.postedFindingSink !== undefined ? { postedFindingSink: a.postedFindingSink } : {}),
     ...(incrementalCoverageEntries !== undefined ? { incrementalCoverageEntries } : {}),
     fullPrDiff,
     sigilixConfig,

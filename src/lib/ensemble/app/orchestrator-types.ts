@@ -40,6 +40,7 @@ import type { SynthesizerProvenance } from "@/src/lib/ensemble/domain/validation
 import type { SynthAttemptOutcome } from "@/src/lib/ensemble/domain/synth"
 import type { EnsembleConfig } from "@/src/lib/ensemble/domain/config"
 import type { ValidationRejectionEvent } from "@/src/do/validation-metrics"
+import type { FindingEventCapture, PostedFindingCapture } from "@/src/lib/ensemble/app/finding-event-capture"
 import type { GraphRetrievalSample } from "@/src/do/graph-metrics"
 import type { GraphExpansionSample } from "@/src/do/graph-expansion-metrics"
 import type { ReviewStatusReporter } from "@/src/lib/pr-review-status-reporter"
@@ -84,6 +85,19 @@ export interface EnsembleHandlerArgs {
    * (tests) can omit it.
    */
   validationSink?: ValidationRejectionEvent[]
+  /**
+   * SIG-606: mutable per-CANDIDATE finding sink. The validator gate callbacks push
+   * a capture for every candidate they hit (posted AND suppressed); the dispatcher
+   * materializes + reconciles + appends it to `finding_event` once after the review.
+   * Optional so non-dispatcher callers (tests) can omit it.
+   */
+  findingEventSink?: FindingEventCapture[]
+  /**
+   * SIG-606: mutable sink for the candidates that SURVIVED to publication, keyed by
+   * the manifest's already-computed finding key. This is the authority the
+   * dispatcher reconciles outcomes against — a gate's enforce/shadow flag is NOT.
+   */
+  postedFindingSink?: PostedFindingCapture[]
   /**
    * SIG-152: dispatcher's single-sample sink for the per-review
    * `pr-review-graph-retrieval` telemetry. The graph block pushes one sample

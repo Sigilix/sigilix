@@ -204,12 +204,11 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
 
     // ─── SIG-88: pre-fanout merged-on-approve short-circuit ────
     //
-    // When the PR is already merged at fan-out time (e.g. the webhook
-    // was queued after a long delay and the human merged in the
-    // meantime), short-circuit to a marker-only APPROVE. CodeRabbit's
-    // behavior: GitHub's native "approved these changes" one-liner
-    // stands in for a review on already-merged code instead of running
-    // the full ensemble + posting REQUEST_CHANGES on a merged PR.
+    // When the PR is already merged at fan-out time (e.g. the webhook was queued after a
+    // long delay and the human merged meanwhile), short-circuit to a marker-only APPROVE.
+    // CodeRabbit's behavior: GitHub's native "approved these changes" one-liner stands in
+    // for a review on already-merged code instead of running the full ensemble + posting
+    // REQUEST_CHANGES on a merged PR.
     //
     // We reuse the `meta.merged_at` value we already fetched for the
     // stale-head guard above — no extra GET round-trip. The pre-submit
@@ -644,8 +643,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
       }),
     )
 
-    // ─── Post-synthesis validation ─────────────────────────────
-    // SIG-318 (PR 12a): validation, severity clamps, and consensus ranking live in ./adjudicate.
+    // ─── Post-synthesis validation ─── SIG-318 (PR 12a): clamps + consensus live in ./adjudicate.
     const { trustLedgerMode, showEvidence, validated, consensusVerdict, consensusProvenance, consensusByIndex } =
       adjudicateFindings({
         env,
@@ -656,6 +654,7 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
         ensembleConfig,
         telemetry,
         validationSink: args.validationSink,
+        findingEventSink: args.findingEventSink,
         sigilixConfig,
         fullPrDiff,
         wasTruncated,
@@ -883,9 +882,10 @@ export async function handlePrReviewEnsemble(args: EnsembleHandlerArgs): Promise
     emitPhaseCompleted(perfCtx, "post_validation", postValidationStartedAtMs)
     // SIG-304: dry-run cut — return the built review without publishing.
     if (args.dryRun) return dryRunResult(telemetry, submissionVerdict, renderableUnanchoredForSubmission)
-    // SIG-318 (PR 12f): publish owns overview, stale-head guard #3, submit, and persistence.
+    // SIG-318 (PR 12f): publish owns overview, stale-head guard #3, submit, persistence.
     return attachInvariantLensAmendmentWork(
       await publishReviewSubmission({
+        postedFindingSink: args.postedFindingSink, // SIG-606: the reconcile authority
         scmProvider: args.scmProvider,
         env,
         owner,

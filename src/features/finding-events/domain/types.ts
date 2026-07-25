@@ -4,6 +4,20 @@
 // ONLY: no headline, no body, no diff hunk — those are customer-source-derived and
 // deliberately out of scope (see migrations/0037_create_finding_event.sql).
 
+// ─── READ CONTRACT (read this before querying the table) ───
+//
+// ROWS PER FINDING ARE VARIABLE. A finding gets one row per gate it tripped, PLUS a
+// `stage: "publish"` row if it survived. So: 1 row (posted, tripped nothing), 2 (posted,
+// one gate), N+1 (posted, N gates) — while a suppressed finding has only its gate rows.
+// Consequences:
+//   • Outcome RATES must be computed over DISTINCT finding_key per review, never
+//     COUNT(*) GROUP BY outcome — the raw count is biased toward posted findings.
+//   • Two rows sharing a finding_key within one head_sha CAN disagree on `outcome`
+//     (a validator row for a finding with no derivable identity reports `unknown`
+//     while its publish row reports `posted-*`). Prefer the `stage:"publish"` row:
+//     it is authoritative for identity and is the one carrying content_fingerprint.
+//   • content_fingerprint is populated on publish rows for ANCHORED survivors only.
+
 /** Where in the pipeline this event was observed. */
 export type FindingEventStage = "validator" | "render-prep" | "verification" | "publish"
 

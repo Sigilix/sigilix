@@ -29,8 +29,15 @@ import type { FindingEventDraft, FindingEventStage, PostedFindingRecord } from "
 /** A candidate observed mid-review. Sync-constructible; keys resolved at flush. */
 export interface FindingEventCapture {
   path: string
-  /** IN-MEMORY ONLY — hashed into findingKey, never persisted. */
+  /** IN-MEMORY ONLY — hashed into findingKey, never persisted. Ignored when
+   *  `findingKey` is supplied. */
   headline: string
+  /**
+   * A PRE-COMPUTED key, when the call site already holds one (the review manifest
+   * does, derived by the same computeFindingKey at render-prep). Supplying it avoids
+   * a second derivation site — the failure mode there is a silent, total join miss.
+   */
+  findingKey?: string
   stage: FindingEventStage
   gate?: string | null
   reason?: string | null
@@ -70,8 +77,9 @@ export interface PostedFindingCapture {
 }
 
 /** Hard cap on captures materialized per review. The sink is fed by 13 gate sites
- *  across the whole candidate set, so it is unbounded in principle; the batch write
- *  is one db.batch(). Truncation is LOGGED, never silent. */
+ *  across the whole candidate set PLUS one capture per survivor at publish, so it is
+ *  unbounded in principle; the batch write is one db.batch(). Truncation is LOGGED,
+ *  never silent, and is STAGE-AWARE — see boundCaptures. */
 const MAX_FINDING_EVENTS = 500
 
 /** Persisted label codes are short by construction; clamp as defence-in-depth so a
@@ -86,6 +94,36 @@ function clampCode(v: string | null | undefined): string | null {
 /** Total string coercion — these feed computeFindingKey, which calls .toLowerCase(). */
 function safeStr(v: unknown): string {
   return typeof v === "string" ? v : ""
+}
+
+/**
+ * Apply MAX_FINDING_EVENTS, keeping `publish`-stage captures FIRST.
+ *
+ * A positional `slice(0, MAX)` is the wrong end to cut: gate captures accumulate
+ * throughout the review while publish captures are appended once at the end, so a
+ * large review would drop 100% of the publish rows — the only ones carrying
+ * `content_fingerprint`, and the only cure for a finding that tripped no gate having
+ * no row at all. That silently reopens both gaps precisely on the reviews with the
+ * most label value. Order within each group is preserved (stable partition).
+ */
+function boundCaptures(captures: readonly FindingEventCapture[]): FindingEventCapture[] {
+  if (captures.length <= MAX_FINDING_EVENTS) return [...captures]
+  const publish = captures.filter((c) => c.stage === "publish")
+  const rest = captures.filter((c) => c.stage !== "publish")
+  const kept = [...publish.slice(0, MAX_FINDING_EVENTS), ...rest].slice(0, MAX_FINDING_EVENTS)
+  console.warn(
+    JSON.stringify({
+      event: "finding-event-capture-truncated",
+      captured: captures.length,
+      kept: kept.length,
+      cap: MAX_FINDING_EVENTS,
+      // Per-stage, so a reader can tell WHICH rows were lostrather than just how many.
+      publishCaptured: publish.length,
+      publishKept: kept.filter((c) => c.stage === "publish").length,
+      gateDropped: rest.length - kept.filter((c) => c.stage !== "publish").length,
+    }),
+  )
+  return kept
 }
 
 /** Minimal shape the gate callbacks already hold.
@@ -137,19 +175,7 @@ export function captureGateHit(
  * Order is preserved so a caller can correlate positionally.
  */
 export async function materializeFindingEvents(captures: readonly FindingEventCapture[]): Promise<FindingEventDraft[]> {
-  const bounded = captures.length > MAX_FINDING_EVENTS ? captures.slice(0, MAX_FINDING_EVENTS) : captures
-  if (bounded.length < captures.length) {
-    // Never a silent cap — a truncated corpus that reads as complete is worse than
-    // a short one that says so.
-    console.warn(
-      JSON.stringify({
-        event: "finding-event-capture-truncated",
-        captured: captures.length,
-        kept: bounded.length,
-        cap: MAX_FINDING_EVENTS,
-      }),
-    )
-  }
+  const bounded = boundCaptures(captures)
   return Promise.all(
     bounded.map(async (c) => {
       // Total: computeFindingKey calls .toLowerCase(), so a runtime undefined here
@@ -159,8 +185,9 @@ export async function materializeFindingEvents(captures: readonly FindingEventCa
       // No headline → no derivable identity. The key below cannot match the posted
       // set, so flag it and let reconcile record `unknown` instead of a
       // confidently-wrong `suppressed`.
-      const identityResolved = headline.length > 0
-      const findingKey = await computeFindingKey(path, headline)
+      const preKey = safeStr(c.findingKey).trim()
+      const identityResolved = preKey.length > 0 || headline.length > 0
+      const findingKey = preKey.length > 0 ? preKey : await computeFindingKey(path, headline)
       // Explicit field list — a spread would leak `headline` into the draft.
       // `satisfies` is load-bearing: it is what rejects `headline:` at compile time.
       return {
@@ -206,4 +233,46 @@ export function buildPostedFindingRecords(posted: readonly PostedFindingCapture[
     })
   }
   return out
+}
+
+/** The manifest projection of a posted finding — everything a publish-stage capture
+ *  needs, including the key and the content fingerprint. */
+interface PostedManifestFinding {
+  key: string
+  path: string
+  score?: number | null | undefined
+  line?: number | null | undefined
+  category?: string | null | undefined
+  contentFingerprint?: string | null | undefined
+}
+
+/**
+ * Record a candidate that SURVIVED to publication, as a `publish`-stage capture.
+ *
+ * WHY THIS EXISTS (two gaps it closes):
+ *  1. The validator gates only capture candidates they HIT. A finding that tripped
+ *     no gate had no row at all — censored sampling, the exact thing the table
+ *     exists to prevent.
+ *  2. `contentFingerprint` is assigned AFTER the validator stage, so every
+ *     validator-stage row has it NULL. It is the join key for human dismissals
+ *     (which carry a fingerprint, not a headline), so without a publish-stage row
+ *     a dismissal has nothing to join to. NOTE: populated for ANCHORED survivors
+ *     only — body-only/unanchored entries reach here with no fingerprint, because
+ *     the annotate pass covers the consensus findings, not the unanchored rollup.
+ *     Those have no inline comment and so no dismissal to join to either.
+ *
+ * Uses the manifest's own `key` — no re-derivation, and no headline handling here.
+ */
+export function capturePostedFinding(sink: FindingEventCapture[] | undefined, f: PostedManifestFinding): void {
+  if (!sink) return
+  sink.push({
+    findingKey: safeStr(f.key),
+    path: safeStr(f.path),
+    headline: "", // unused: the key is supplied
+    stage: "publish",
+    contentFingerprint: f.contentFingerprint ?? null,
+    category: f.category ?? null,
+    score: f.score ?? null,
+    line: f.line ?? null,
+  })
 }

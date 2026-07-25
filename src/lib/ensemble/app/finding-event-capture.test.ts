@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest"
 
 import {
   captureGateHit,
+  capturePostedFinding,
   materializeFindingEvents,
   buildPostedFindingRecords,
   type FindingEventCapture,
@@ -220,5 +221,69 @@ describe("end-to-end: capture → materialize → reconcile", () => {
     const drafts = await materializeFindingEvents([{ path: "src/a.ts", headline: "Real", stage: "validator" }])
     expect(drafts[0]!.identityResolved).toBe(true)
     expect(reconcileFindingOutcomes(drafts, buildPostedFindingRecords([]))[0]!.outcome).toBe("suppressed")
+  })
+})
+
+describe("capturePostedFinding (publish-stage coverage)", () => {
+  it("records EVERY survivor, so a finding that tripped no gate still gets a row", async () => {
+    const sink: FindingEventCapture[] = []
+    capturePostedFinding(sink, {
+      key: "abc123",
+      path: "src/x.ts",
+      score: 3,
+      line: 4,
+      category: "logic",
+      contentFingerprint: "fp-64hex",
+    })
+    const [draft] = await materializeFindingEvents(sink)
+    expect(draft).toMatchObject({
+      findingKey: "abc123",
+      stage: "publish",
+      contentFingerprint: "fp-64hex",
+      category: "logic",
+      score: 3,
+      identityResolved: true,
+    })
+  })
+
+  it("uses the manifest's PRE-COMPUTED key — no second derivation site", async () => {
+    const sink: FindingEventCapture[] = []
+    // headline is deliberately empty; the supplied key must win and identity must
+    // still count as resolved (a derived key would differ and break the join).
+    capturePostedFinding(sink, { key: "manifest-key", path: "src/x.ts" })
+    const [draft] = await materializeFindingEvents(sink)
+    expect(draft!.findingKey).toBe("manifest-key")
+    expect(draft!.identityResolved).toBe(true)
+  })
+
+  it("carries the manifest's content_fingerprint through to the draft", async () => {
+    // The fingerprint is the ONLY join key a human dismissal has (dismissals carry a
+    // fingerprint, not a headline), and validator-stage captures can't supply it
+    // because it is assigned later in the pipeline.
+    const postSink: FindingEventCapture[] = []
+    capturePostedFinding(postSink, { key: "k", path: "a.ts", contentFingerprint: "fp" })
+    const [postDraft] = await materializeFindingEvents(postSink)
+    expect(postDraft!.contentFingerprint).toBe("fp")
+  })
+
+  it("the cap keeps PUBLISH rows and drops gate rows — not the other way round", async () => {
+    // A positional slice would drop 100% of publish rows (they are appended last),
+    // silently losing every fingerprint on exactly the largest reviews.
+    const gates = Array.from({ length: 505 }, (_, i) => ({
+      path: `f${i}.ts`,
+      headline: `h${i}`,
+      stage: "validator" as const,
+    }))
+    const sink: FindingEventCapture[] = [...gates]
+    capturePostedFinding(sink, { key: "survivor", path: "s.ts", contentFingerprint: "fp" })
+
+    const drafts = await materializeFindingEvents(sink)
+    expect(drafts).toHaveLength(500)
+    expect(drafts.some((d) => d.stage === "publish")).toBe(true)
+    expect(drafts.find((d) => d.stage === "publish")!.contentFingerprint).toBe("fp")
+  })
+
+  it("no-ops without a sink", () => {
+    expect(() => capturePostedFinding(undefined, { key: "k", path: "p" })).not.toThrow()
   })
 })

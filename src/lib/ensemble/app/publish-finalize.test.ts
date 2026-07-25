@@ -17,6 +17,11 @@ import { recordReviewedDiffHash } from "@/src/lib/noop-merge-detect"
 import { writeIncrementalReviewCoverage } from "@/src/lib/ensemble/adapters/incremental-coverage"
 import { readAggregate } from "@/src/lib/fleet/fleet-store"
 import { isEligible } from "@/src/shared/domain/fleet-aggregate"
+import {
+  materializeFindingEvents,
+  type FindingEventCapture,
+  type PostedFindingCapture,
+} from "@/src/lib/ensemble/app/finding-event-capture"
 import type { Env } from "@/src/shared/types/env"
 import type { GitHubClient } from "@/src/shared/adapters/github"
 import type { PullRequestMeta } from "@/src/shared/types/github"
@@ -112,5 +117,44 @@ describe("persistSubmittedReview", () => {
     expect(writeIncrementalReviewCoverage).not.toHaveBeenCalled()
     expect(recordReviewedDiffHash).not.toHaveBeenCalled()
     expect([...store.keys()].some((key) => key.startsWith("fleet:"))).toBe(false)
+  })
+})
+
+// SIG-606: the REAL path, not a source grep. A source assertion would still pass if
+// the capture block were moved below an early return (e.g. the non-GitHub branch),
+// silently killing publish rows.
+describe("persistSubmittedReview — SIG-606 finding-event capture", () => {
+  it("captures a publish-stage row per survivor, carrying the manifest key", async () => {
+    const { env } = mockEnv()
+    const findingEventSink: FindingEventCapture[] = []
+    await persistSubmittedReview(makeDeps(env, { findingEventSink }), 7)
+
+    expect(findingEventSink).toHaveLength(1)
+    const [draft] = await materializeFindingEvents(findingEventSink)
+    expect(draft).toMatchObject({ findingKey: "f1", stage: "publish", path: "src/x.ts", category: "security" })
+  })
+
+  it("runtime proof of the privacy invariant: no headline reaches the draft", async () => {
+    // The guarantee is compile-time via `satisfies`; this is the runtime net, and this
+    // is the PR that adds a new push site whose input DOES carry a headline.
+    const { env } = mockEnv()
+    const findingEventSink: FindingEventCapture[] = []
+    await persistSubmittedReview(makeDeps(env, { findingEventSink }), 7)
+    const [draft] = await materializeFindingEvents(findingEventSink)
+    expect(draft).not.toHaveProperty("headline")
+    expect(JSON.stringify(draft)).not.toContain("SQL injection in handler")
+  })
+
+  it("records the posted set alongside it, keyed the same way", async () => {
+    const { env } = mockEnv()
+    const postedFindingSink: PostedFindingCapture[] = []
+    await persistSubmittedReview(makeDeps(env, { postedFindingSink }), 7)
+    expect(postedFindingSink).toEqual([
+      { findingKey: "f1", surface: "posted-body", inlineCommentId: null, trustTier: null },
+    ])
+  })
+
+  it("both sinks absent → no throw (they are optional everywhere)", async () => {
+    await expect(persistSubmittedReview(makeDeps(mockEnv().env), 7)).resolves.toBeUndefined()
   })
 })

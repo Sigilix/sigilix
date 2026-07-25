@@ -29,6 +29,14 @@ export type PostedSurface = "posted-inline" | "posted-body"
 export interface FindingEventDraft {
   /** Stable-ish identity computed at push time; joins a candidate across stages. */
   findingKey: string
+  /**
+   * False when the candidate lacked the inputs to derive a real key (e.g. a missing
+   * headline), so `findingKey` is a fabricated placeholder that CANNOT match the
+   * posted set. Such a row must reconcile to `unknown`, never `suppressed` —
+   * otherwise a finding we actually posted gets recorded as rejected purely because
+   * we couldn't identify it. Absent/true means the key is real.
+   */
+  identityResolved?: boolean
   contentFingerprint?: string | null
   category?: string | null
   score?: number | null

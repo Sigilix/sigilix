@@ -6,6 +6,8 @@
 // `export` keyword + imports). The switch statement is untouched; it
 // imports nothing from the entry module.
 
+import { flushFindingEventLog } from "@/src/lib/finding-event-flush"
+import type { FindingEventCapture, PostedFindingCapture } from "@/src/lib/ensemble/app/finding-event-capture"
 import type { Env } from "@/src/shared/types/env"
 import type { JobMessage } from "@/src/shared/types/job"
 import { GitHubClient } from "@/src/shared/adapters/github"
@@ -227,18 +229,14 @@ export async function dispatchJob(
         }),
       )
       // ARC-190: string runId messages use the DO dedupe/retry path.
-      // SIG-119: the ensemble's validator callbacks push rejection events
-      // into this sink; the dispatcher flushes it once to ValidationMetricsDO
-      // in the finally below (off the review hot path, non-fatal).
-      const validationSink: ValidationRejectionEvent[] = []
-      // SIG-152: the ensemble's graph block pushes its one per-review
-      // graph-retrieval sample here (0 or 1 element); flushed alongside the
-      // validation sink in the finally below.
-      const graphMetricsSink: GraphRetrievalSample[] = []
-      // SIG-286 PR2.5: the ensemble's graph-context-expansion block pushes its
-      // one per-review shadow sample here (0 or 1 element); flushed to
-      // GraphExpansionMetricsDO in the finally below.
-      const graphExpansionMetricsSink: GraphExpansionSample[] = []
+      // Mutable telemetry sinks — the ensemble pushes into these; each is flushed
+      // exactly once in the finally below, off the review hot path and non-fatal.
+      // Per-sink semantics are documented on EnsembleHandlerArgs (orchestrator-types).
+      const validationSink: ValidationRejectionEvent[] = [] // SIG-119
+      const findingEventSink: FindingEventCapture[] = [] // SIG-606 gate captures
+      const postedFindingSink: PostedFindingCapture[] = [] // SIG-606 reconcile authority
+      const graphMetricsSink: GraphRetrievalSample[] = [] // SIG-152
+      const graphExpansionMetricsSink: GraphExpansionSample[] = [] // SIG-286 PR2.5
       const repositoryContextIdentity =
         job.repoId === undefined ? null : makeGitHubRepositoryContextReviewIdentity(job.installationId, job.repoId)
       const baseArgs = {
@@ -253,6 +251,8 @@ export async function dispatchJob(
         // and inject it; the handler reads it instead of env.OPENCLAW_*.
         ensembleConfig: parseEnsembleConfig(env),
         validationSink,
+        findingEventSink,
+        postedFindingSink,
         graphMetricsSink,
         graphExpansionMetricsSink,
         ...(backgroundWaitUntil !== undefined ? { backgroundWaitUntil } : {}),
@@ -456,6 +456,7 @@ export async function dispatchJob(
                 )
               }
             }
+            await flushFindingEventLog(env, job, findingEventSink, postedFindingSink) // SIG-606, fail-soft
             // SIG-152: flush the per-review graph-retrieval sample once.
             // Non-fatal — same guarantees as the validation flush above.
             const graphSample = graphMetricsSink[0]

@@ -20,6 +20,10 @@
 //
 // NOTHING here logs or returns the SA token / the request body.
 
+import { withUsageReporting, teeForUsage } from "@/src/lib/boreas-gateway/provider-usage"
+import { codingAgentEventCost } from "@/src/shared/domain/sigilix-model-burn"
+import { gatewayProviderUsageEnabled } from "@/src/lib/boreas-gateway/provider-usage-mode"
+import { updateUsageEventCost } from "@/src/features/tenancy"
 import type { Env } from "@/src/shared/types/env"
 import { requireApiTenant, LEGACY_TENANT_INSTALLATION_ID, seatKeyFor } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
@@ -212,6 +216,12 @@ export async function handleVertexChatRoute(
   // /v1/usage/report can late-bind cost onto it. Sanitized (bounded length, control
   // chars stripped); absent/blank → undefined → an unkeyed row (unchanged behavior).
   const correlationId = sanitizeCorrelationId(request.headers.get("x-sigilix-correlation-id"))
+  // sig-gateway-usage: the correlation header is OUR CLI's convention. A third-party
+  // OpenAI-compatible client (which this gateway supports) never sends it, and a
+  // modified CLI can simply drop it — either way the row would be unkeyed and its
+  // cost invisible forever. Mint one server-side so every admitted request is
+  // meterable. Only used when provider metering is on, so the off-path is unchanged.
+  const meterEventId = correlationId ?? crypto.randomUUID()
   if (meterDecision.mode !== "off") {
     ctx.waitUntil(
       appendUsageEvent(env, {
@@ -219,7 +229,7 @@ export async function handleVertexChatRoute(
         installationId,
         userKey: seatKey,
         surface: "cli",
-        eventId: correlationId ?? null,
+        eventId: gatewayProviderUsageEnabled(env) ? meterEventId : (correlationId ?? null),
         nowIso: new Date(now).toISOString(),
       }),
     )
@@ -232,5 +242,36 @@ export async function handleVertexChatRoute(
   // semantics, the daily counter (already applied above, once), and the
   // generic-error-detail contract are all preserved; see fallback-chain.ts for
   // the retry/telemetry/marker design.
-  return runGatewayChain(env, ctx, cfg, raw as Record<string, unknown>)
+  // sig-gateway-usage: meter from PROVIDER-REPORTED usage instead of trusting the
+  // client's self-report. `withUsageReporting` asks a streaming provider to emit a
+  // final usage chunk; `teeForUsage` reads a COPY of the response so the caller's
+  // stream stays byte-identical. Dark by default — with the flag off this is the
+  // previous behavior exactly (client-attested cost via /v1/usage/report).
+  // Skip when: the flag is off, OR metering is explicitly killed (mode "off" is a
+  // true kill switch — it must shed this D1 write too, not just the append).
+  if (!gatewayProviderUsageEnabled(env) || meterDecision.mode === "off") {
+    return runGatewayChain(env, ctx, cfg, raw as Record<string, unknown>)
+  }
+  const upstream = await runGatewayChain(env, ctx, cfg, withUsageReporting(raw as Record<string, unknown>))
+  const { forward, usage } = teeForUsage(upstream)
+  ctx.waitUntil(
+    usage
+      .then(async (u) => {
+        if (!u) return // provider reported nothing — leave the client-attested path alone
+        const { tokens, costUsd } = codingAgentEventCost(cfg.sigilixModel, u.inputTokens, u.outputTokens)
+        if (tokens <= 0) return
+        // userKey scopes the UPDATE to THIS seat. The event id can be client-supplied,
+        // so without it a caller could late-bind its cheap numbers onto another
+        // seat's row (the guard usage-report-route.ts already applies).
+        await updateUsageEventCost(env, {
+          meter: "coding_agent",
+          eventId: meterEventId,
+          tokens,
+          costUsd,
+          userKey: seatKey,
+        })
+      })
+      .catch(() => {}),
+  )
+  return forward
 }

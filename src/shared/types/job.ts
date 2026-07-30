@@ -511,6 +511,9 @@ export type JobMessage =
       owner: string
       repo: string
       installationId: number
+      /** Re-run a backfill the once-ever guard already marked complete (e.g. after an
+       *  embedding-model migration). Operator-initiated only. */
+      force?: boolean
     }
   | ({ type: "corpus-issue-upsert"; linearIssueId: string } & LinearJobTenantContext)
   // SIG-545 B3: a Linear issue was assigned to the Sigilix agent user (interim

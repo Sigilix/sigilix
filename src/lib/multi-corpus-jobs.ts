@@ -8,6 +8,11 @@
 // OPENCLAW_MULTICORPUS_RETRIEVAL is "on" (the webhook producers gate on the
 // flag before enqueueing, so the consumers trust that gate).
 
+import {
+  claimCorpusPrBackfill,
+  markCorpusPrBackfillComplete,
+  releaseCorpusPrBackfillClaim,
+} from "@/src/lib/multi-corpus-backfill-guard"
 import type { Env } from "@/src/shared/types/env"
 import { getInstallationToken } from "@/src/shared/adapters/github/github-app"
 import { GitHubClient } from "@/src/shared/adapters/github"
@@ -69,6 +74,9 @@ export interface CorpusPrBackfillJob {
   installationId: number
   /** Override the 90-day window (YYYY-MM-DD). Mainly for tests. */
   sinceDate?: string
+  /** Deliberately re-run a backfill that already completed (e.g. after an
+   *  embedding-model migration). Bypasses the once-ever guard. */
+  force?: boolean
 }
 
 /**
@@ -88,42 +96,102 @@ export async function handleCorpusPrBackfill(env: Env, job: CorpusPrBackfillJob,
     // skipping the corpus.
     throw new Error("corpus-pr-backfill: GITHUB_APP_ID and GITHUB_PRIVATE_KEY required")
   }
-  const sinceDate = job.sinceDate ?? isoDate(nowMs - BACKFILL_DAYS * 24 * 60 * 60 * 1000)
-  const token = await getInstallationToken({
-    kv: env.OPENCLAW_STATE,
-    appId: env.GITHUB_APP_ID,
-    privateKey: env.GITHUB_PRIVATE_KEY,
-    installationId: job.installationId,
+  // Once-ever guard FIRST — before any GitHub call and before any embed. The job is
+  // enqueued from several ungated producers (installation.created,
+  // installation_repositories.added, webhook redelivery, queue retry), so the
+  // consumer is the only place that reliably sees every attempt.
+  const claim = await claimCorpusPrBackfill(env, {
+    owner: job.owner,
+    repo: job.repo,
+    nowMs,
+    ...(job.force !== undefined ? { force: job.force } : {}),
   })
-  const client = new GitHubClient({ token })
-  const prs = await client.searchMergedPullRequests(job.owner, job.repo, sinceDate, {
-    maxItems: BACKFILL_MAX_PRS,
-  })
-  let upserted = 0
-  for (const pr of prs) {
-    const manifest = await readReviewManifest(env, job.owner, job.repo, pr.number)
-    const verdict = manifest.kind === "ok" ? deriveVerdictLabel(manifest.manifest.findings) : undefined
-    const ok = await upsertPrDoc(env, {
-      owner: job.owner,
-      repo: job.repo,
-      number: pr.number,
-      title: pr.title,
-      body: pr.body,
-      ...(verdict !== undefined ? { verdict } : {}),
-    })
-    if (ok) upserted += 1
+  if (!claim.ok) {
+    console.log(
+      JSON.stringify({
+        event: "multicorpus-pr-backfill-skipped",
+        owner: job.owner,
+        repo: job.repo,
+        reason: claim.reason,
+        completedAtMs: claim.record.completedAtMs ?? null,
+      }),
+    )
+    return
   }
-  console.log(
-    JSON.stringify({
-      event: "multicorpus-pr-backfill-complete",
+  // Everything below runs under the claim. On ANY failure we release it before
+  // rethrowing — otherwise the queue's immediate retries all see `in-flight`, ack
+  // cleanly, and the backfill is lost forever (it only fires on install, so nothing
+  // re-triggers it after the stale window).
+  try {
+    const sinceDate = job.sinceDate ?? isoDate(nowMs - BACKFILL_DAYS * 24 * 60 * 60 * 1000)
+    const token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId: job.installationId,
+    })
+    const client = new GitHubClient({ token })
+    const prs = await client.searchMergedPullRequests(job.owner, job.repo, sinceDate, {
+      maxItems: BACKFILL_MAX_PRS,
+    })
+    let upserted = 0
+    for (const pr of prs) {
+      const manifest = await readReviewManifest(env, job.owner, job.repo, pr.number)
+      const verdict = manifest.kind === "ok" ? deriveVerdictLabel(manifest.manifest.findings) : undefined
+      const ok = await upsertPrDoc(env, {
+        owner: job.owner,
+        repo: job.repo,
+        number: pr.number,
+        title: pr.title,
+        body: pr.body,
+        ...(verdict !== undefined ? { verdict } : {}),
+      })
+      if (ok) upserted += 1
+    }
+    // ⚠️ upsertPrDoc SWALLOWS Workers AI / Vectorize failures and returns false, so a
+    // transient AI outage yields found:300 / upserted:0 with no throw. Marking that
+    // "complete" would suppress the backfill FOREVER — the corpus would be
+    // permanently empty and nothing re-fires. Only a fully-successful pass earns the
+    // completion marker; anything less releases so the queue's retry re-runs it.
+    if (upserted < prs.length) {
+      await releaseCorpusPrBackfillClaim(env, { owner: job.owner, repo: job.repo })
+      console.warn(
+        JSON.stringify({
+          event: "multicorpus-pr-backfill-incomplete",
+          owner: job.owner,
+          repo: job.repo,
+          found: prs.length,
+          upserted,
+        }),
+      )
+      throw new Error(`corpus-pr-backfill: ${prs.length - upserted}/${prs.length} PR upserts failed`)
+    }
+    await markCorpusPrBackfillComplete(env, {
       owner: job.owner,
       repo: job.repo,
-      sinceDate,
+      // A FRESH clock — `nowMs` is dispatch time, so reusing it made every record
+      // claim the run took 0ms. That's the field you read during a cost incident.
+      nowMs: Date.now(),
+      startedAtMs: nowMs,
       found: prs.length,
       upserted,
-      truncated: prs.length >= BACKFILL_MAX_PRS,
-    }),
-  )
+    })
+    console.log(
+      JSON.stringify({
+        event: "multicorpus-pr-backfill-complete",
+        owner: job.owner,
+        repo: job.repo,
+        sinceDate,
+        found: prs.length,
+        upserted,
+        truncated: prs.length >= BACKFILL_MAX_PRS,
+      }),
+    )
+  } catch (error) {
+    // Release so the queue's retry is a real retry, not a silent no-op.
+    await releaseCorpusPrBackfillClaim(env, { owner: job.owner, repo: job.repo })
+    throw error
+  }
 }
 
 function isoDate(ms: number): string {

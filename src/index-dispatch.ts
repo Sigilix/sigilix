@@ -961,14 +961,14 @@ export async function dispatchJob(
         title: job.title,
         body: job.body,
       })
-    case "corpus-pr-backfill":
-      // SIG-44: 90-day merged-PR backfill on repo onboarding.
+    case "corpus-pr-backfill": // SIG-44: 90-day merged-PR backfill on repo onboarding.
       return handleCorpusPrBackfill(
         env,
         {
           owner: job.owner,
           repo: job.repo,
           installationId: job.installationId,
+          ...(job.force !== undefined ? { force: job.force } : {}),
         },
         Date.now(),
       )

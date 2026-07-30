@@ -18,6 +18,7 @@
 // malformed body 400s, but a match-nothing report (unknown id, wrong seat) is a 200 no-op
 // — this is telemetry the CLI fires fire-and-forget and must never block a coding turn.
 
+import { gatewayProviderUsageEnabled } from "@/src/lib/boreas-gateway/provider-usage-mode"
 import type { Env } from "@/src/shared/types/env"
 import { requireApiTenant, seatKeyFor } from "@/src/lib/api-key-resolver"
 import { readBodyCapped } from "@/src/shared/util/read-body-capped"
@@ -89,6 +90,16 @@ export async function handleUsageReportRoute(request: Request, env: Env, ctx: Ex
   // THIS key. This is the tenant guard: the client-supplied id alone can't reach
   // another seat's row.
   const seatKey = seatKeyFor(auth.caller)
+
+  // sig-gateway-usage: when the gateway meters from PROVIDER-reported usage, the
+  // server's number is authoritative and this client-attested one MUST NOT land.
+  // updateUsageEventCost is a plain overwrite, and this route fires AFTER the
+  // gateway's waitUntil resolves — so without this guard the untrusted client's
+  // value would simply win the race, defeating the whole point. It can also post
+  // zeros to wipe a real measurement. Accept + no-op so old CLIs don't see errors.
+  if (gatewayProviderUsageEnabled(env)) {
+    return json({ ok: true, ignored: "provider-metered" }, 200)
+  }
 
   // updateUsageEventCost fails open (never throws) and is a pure UPDATE — it never
   // appends a row, so the coding_agent COUNT is untouched and can't double-count.

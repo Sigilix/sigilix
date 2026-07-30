@@ -30,7 +30,7 @@ export interface RetrievedChunk {
 
 /** A prior-PR or Linear-issue corpus hit. Mirrors `CorpusHit` in `@/lib/multi-corpus`. */
 export interface CorpusHit {
-  kind: "pr" | "issue"
+  kind: "pr" | "issue" | "commit" | "review-comment" | "review"
   /** "#234" for a PR, "ARC-42" for an issue. */
   ref: string
   /** Verdict (PR) or status (issue) for the labeled prompt block. */
@@ -43,6 +43,7 @@ export interface CorpusHit {
 export interface MultiCorpusResult {
   pr: CorpusHit[]
   issue: CorpusHit[]
+  history: CorpusHit[]
 }
 
 export interface RetrievalPort {

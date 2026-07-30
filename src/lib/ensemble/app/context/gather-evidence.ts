@@ -217,6 +217,7 @@ export async function gatherRetrievalEvidence(a: GatherEvidenceArgs): Promise<Ga
     ? retrieveMultiCorpus(env, owner, repo, preflightQuery, { prNumber, headSha }).catch(() => ({
         pr: [],
         issue: [],
+        history: [],
       }))
     : null
   // ARC-284: phase-completed event always emits (even on the catch

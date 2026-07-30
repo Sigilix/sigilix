@@ -434,7 +434,10 @@ export class GitHubClient {
       const res = await this.restGet<{
         items?: Array<{ number?: number; title?: string; body?: string | null }>
       }>(
-        `/search/issues?q=${q}&sort=updated&order=desc&per_page=${perPage}&page=${page}`,
+        // sort=created (IMMUTABLE), not updated: the history backfill walks this list
+        // with a persistent cursor across invocations, and `updated` reorders whenever
+        // anyone comments on an old merged PR — which would skip entries permanently.
+        `/search/issues?q=${q}&sort=created&order=desc&per_page=${perPage}&page=${page}`,
         opts?.signal !== undefined ? { signal: opts.signal } : undefined,
       )
       const items = res.items ?? []

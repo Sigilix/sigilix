@@ -515,6 +515,20 @@ export type JobMessage =
        *  embedding-model migration). Operator-initiated only. */
       force?: boolean
     }
+  | {
+      // History-corpus ingestion (commit messages + human PR review discussion →
+      // the `history:` namespace). op "backfill" runs under the D1 lease, sharded
+      // + resumable; op "pr-upsert" is the cheap per-merged-PR increment.
+      type: "history-ingest"
+      op: "backfill" | "pr-upsert"
+      owner: string
+      repo: string
+      installationId: number
+      prNumber?: number
+      force?: boolean
+      /** Backfill continuation: the shard chain's fenced lease token. */
+      leaseToken?: string
+    }
   | ({ type: "corpus-issue-upsert"; linearIssueId: string } & LinearJobTenantContext)
   // SIG-545 B3: a Linear issue was assigned to the Sigilix agent user (interim
   // assignee path) OR an AgentSessionEvent delegated/mentioned the agent. The

@@ -691,6 +691,13 @@ SIGILIX_REPO_ACTIVE_INDEX_MODE = "on"
 # degrades gracefully to pure-vector. Re-enable only after the durable fix
 # (correct graphMissingForManifest comparison + content-hash skip-unchanged).
 SIGILIX_GRAPH_INDEX = "off"
+# History-corpus ingestion (commit messages + human PR review discussion → the
+# `history:` Vectorize namespace). "on" enables the install-time leased backfill +
+# per-merge upsert. DARK by default. The backfill runs under the D1
+# history_ingest_lease (migration 0039): sharded, resume-from-cursor,
+# run-until-complete — NOT the KV run-once pattern. Cost: one-time per repo
+# (≈ up to 300 PRs × ~5-15 docs of embeds, single dollars), then per-merge cents.
+SIGILIX_HISTORY_CORPUS = "off"
 SIGILIX_GRAPH_RETRIEVAL = "post"
 
 # SIG-604: full-index skip-unchanged reuse. "on" lets a full (re)index skip the

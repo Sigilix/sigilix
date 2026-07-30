@@ -175,7 +175,7 @@ describe("retrieveMultiCorpus", () => {
   it("returns empty corpora on empty query without calling Vectorize", async () => {
     const { env } = makeEnv({})
     const res = await retrieveMultiCorpus(env, "a", "b", "   ")
-    expect(res).toEqual({ pr: [], issue: [] })
+    expect(res).toEqual({ pr: [], issue: [], history: [] })
     expect(env.OPENCLAW_CODE_INDEX.query).not.toHaveBeenCalled()
   })
   it("drops matches missing required metadata", async () => {
@@ -192,6 +192,7 @@ describe("formatMultiCorpusForPrompt", () => {
     const result: MultiCorpusResult = {
       pr: [{ kind: "pr", ref: "#234", label: "changes_required", content: "Fix retry", score: 0.8 }],
       issue: [{ kind: "issue", ref: "ARC-42", label: "Done", content: "Retry storm", score: 0.7 }],
+      history: [],
     }
     const out = formatMultiCorpusForPrompt(result)!
     expect(out).toContain("--- past PR #234 (verdict: changes_required) ---")
@@ -199,12 +200,13 @@ describe("formatMultiCorpusForPrompt", () => {
     expect(out).toContain("--- Linear issue ARC-42 (status: Done) ---")
   })
   it("returns null when there are no hits", () => {
-    expect(formatMultiCorpusForPrompt({ pr: [], issue: [] })).toBeNull()
+    expect(formatMultiCorpusForPrompt({ pr: [], issue: [], history: [] })).toBeNull()
   })
   it("omits the parenthetical when label is empty", () => {
     const out = formatMultiCorpusForPrompt({
       pr: [{ kind: "pr", ref: "#9", label: "", content: "c", score: 1 }],
       issue: [],
+      history: [],
     })!
     expect(out).toContain("--- past PR #9 ---")
   })

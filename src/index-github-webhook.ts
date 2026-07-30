@@ -6,6 +6,7 @@
 // src/index-internals.ts (a leaf->leaf edge, acyclic); it imports nothing
 // from the entry module.
 
+import { enqueueHistoryBackfills, enqueueHistoryPrUpsert } from "@/src/lib/history-ingest-producer"
 import type { Env } from "@/src/shared/types/env"
 import type { ScmReviewEventInput } from "@/src/lib/ensemble/ports"
 import { GitHubClient } from "@/src/shared/adapters/github"
@@ -173,9 +174,9 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
         )
         // SIG-44: alongside code indexing, enqueue a 90-day merged-PR
         // backfill per repo so the pr: corpus is populated on onboarding.
-        // Best-effort + fully isolated: a failure here never changes the
-        // index-fanout response (GitHub redelivery would re-run the code
-        // index, which is the load-bearing path). Flag-gated.
+        // Best-effort + isolated: never changes the index-fanout response
+        // (redelivery re-runs the code index — the load-bearing path). Flag-gated.
+        ctx.waitUntil(enqueueHistoryBackfills(env, repositories, installationId)) // dark; lease dedupes
         if (multiCorpusEnabled(env)) {
           for (const r of repositories) {
             const fullName = typeof r?.full_name === "string" ? r.full_name : ""
@@ -271,10 +272,11 @@ export async function handleGitHubWebhook(request: Request, env: Env, ctx: Execu
         }),
       )
     }
-    // SIG-44: a merged PR refreshes the pr: multi-corpus namespace with its
-    // title/body + derived verdict. Placed BEFORE the draft/skip returns
-    // below (a closed PR otherwise short-circuits at decidePullRequestJobs).
-    // Fire-and-forget via waitUntil; flag-gated; never blocks the ack.
+    // SIG-44: a merged PR refreshes the pr: corpus (title/body + verdict). BEFORE the
+    // draft/skip returns below; waitUntil fire-and-forget; flag-gated; never blocks the ack.
+    if (action === "closed" && pr.merged === true && typeof installationId === "number") {
+      ctx.waitUntil(enqueueHistoryPrUpsert(env, { owner, repo, prNumber: pr.number, installationId })) // dark
+    }
     if (multiCorpusEnabled(env) && action === "closed" && pr.merged === true) {
       ctx.waitUntil(
         env.OPENCLAW_JOBS.send({

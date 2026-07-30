@@ -48,6 +48,7 @@ import { runPrReviewWithDoCallback } from "@/src/do/consumer-wrapper"
 import { enqueuePrReviewJob } from "@/src/do/webhook-enqueue"
 import { handleIndexRepoJob } from "@/src/lib/indexer"
 import { handleCorpusPrUpsert, handleCorpusPrBackfill, handleCorpusIssueUpsert } from "@/src/lib/multi-corpus-jobs"
+import { handleHistoryIngest } from "@/src/lib/history-corpus-jobs"
 import { finalStatusUpdate } from "@/src/lib/pr-review-status-phases"
 import {
   attachExistingCheckRun,
@@ -433,8 +434,7 @@ export async function dispatchJob(
               surface: parseReviewOutputSurface(env.OPENCLAW_REVIEW_OUTPUT_SURFACE),
               ...(reviewMetaForComplete !== undefined ? { reviewMeta: reviewMetaForComplete } : {}),
             })
-            // SIG-119: flush collected validator-rejection telemetry once.
-            // Non-fatal — a metrics failure must never affect the review.
+            // SIG-119: flush validator-rejection telemetry once (non-fatal — never affects the review).
             if (validationSink.length > 0) {
               try {
                 await recordValidationMetrics(env, {
@@ -952,8 +952,7 @@ export async function dispatchJob(
         prNumber: job.prNumber,
         installationId: job.installationId,
       })
-    case "corpus-pr-upsert":
-      // SIG-44: embed a merged PR into the pr: multi-corpus namespace.
+    case "corpus-pr-upsert": // SIG-44: embed a merged PR into the pr: multi-corpus namespace.
       return handleCorpusPrUpsert(env, {
         owner: job.owner,
         repo: job.repo,
@@ -961,6 +960,8 @@ export async function dispatchJob(
         title: job.title,
         body: job.body,
       })
+    case "history-ingest": // history corpus: leased backfill / per-merge upsert (dark).
+      return handleHistoryIngest(env, job, Date.now())
     case "corpus-pr-backfill": // SIG-44: 90-day merged-PR backfill on repo onboarding.
       return handleCorpusPrBackfill(
         env,
@@ -972,8 +973,7 @@ export async function dispatchJob(
         },
         Date.now(),
       )
-    case "corpus-issue-upsert":
-      // SIG-44: embed a Linear issue into the issue: multi-corpus namespace.
+    case "corpus-issue-upsert": // SIG-44: embed a Linear issue into the issue: multi-corpus namespace.
       return handleCorpusIssueUpsert(env, {
         linearIssueId: job.linearIssueId,
         ...(linearTenantContextFromJob(job) ? { tenant: linearTenantContextFromJob(job)! } : {}),

@@ -25,6 +25,13 @@ import { embedText } from "@/src/shared/adapters/model"
 
 export const PR_NAMESPACE_PREFIX = "pr:"
 export const ISSUE_NAMESPACE_PREFIX = "issue:"
+// The `history:` sibling (commit messages + human review discussion) lives in
+// history-corpus.ts; the namespace is DEFINED here (single derivation — write and
+// read sides must never drift) and queried here so retrieval stays one call.
+export const HISTORY_NAMESPACE_PREFIX = "history:"
+export function historyNamespace(owner: string, repo: string): string {
+  return `${HISTORY_NAMESPACE_PREFIX}${owner.toLowerCase()}/${repo.toLowerCase()}`
+}
 
 /**
  * Multi-corpus retrieval is on only when the flag is exactly "on" (matches
@@ -241,7 +248,7 @@ export async function upsertIssueDoc(env: MultiCorpusEnv, doc: IssueCorpusDoc): 
 // ---------------------------------------------------------------------
 
 export interface CorpusHit {
-  kind: "pr" | "issue"
+  kind: "pr" | "issue" | "commit" | "review-comment" | "review"
   /** "#234" for a PR, "ARC-42" for an issue. */
   ref: string
   /** Verdict (PR) or status (issue) for the labeled prompt block. */
@@ -253,6 +260,9 @@ export interface CorpusHit {
 export interface MultiCorpusResult {
   pr: CorpusHit[]
   issue: CorpusHit[]
+  /** Repo-history hits (commits / human review discussion). Empty until the
+   *  history corpus is ingested for the repo — soft, like the other legs. */
+  history: CorpusHit[]
 }
 
 const CORPUS_TOP_K = 3
@@ -271,7 +281,7 @@ export async function retrieveMultiCorpus(
   opts: { topK?: number; prNumber?: number; headSha?: string } = {},
 ): Promise<MultiCorpusResult> {
   const trimmed = queryText.trim()
-  if (!trimmed) return { pr: [], issue: [] }
+  if (!trimmed) return { pr: [], issue: [], history: [] }
   const topK = opts.topK ?? CORPUS_TOP_K
 
   let queryVector: number[]
@@ -286,12 +296,13 @@ export async function retrieveMultiCorpus(
         err: error instanceof Error ? error.message : String(error),
       }),
     )
-    return { pr: [], issue: [] }
+    return { pr: [], issue: [], history: [] }
   }
 
-  const [pr, issue] = await Promise.all([
+  const [pr, issue, history] = await Promise.all([
     queryCorpus(env, prNamespace(owner, repo), queryVector, topK, "pr"),
     queryCorpus(env, issueNamespace(owner, repo), queryVector, topK, "issue"),
+    queryCorpus(env, historyNamespace(owner, repo), queryVector, topK, "history"),
   ])
 
   console.log(
@@ -304,11 +315,12 @@ export async function retrieveMultiCorpus(
       namespaces: {
         pr: { matches: pr.length, topScore: pr[0]?.score ?? null },
         issue: { matches: issue.length, topScore: issue[0]?.score ?? null },
+        history: { matches: history.length, topScore: history[0]?.score ?? null },
       },
     }),
   )
 
-  return { pr, issue }
+  return { pr, issue, history }
 }
 
 async function queryCorpus(
@@ -316,7 +328,7 @@ async function queryCorpus(
   namespace: string,
   vector: number[],
   topK: number,
-  kind: "pr" | "issue",
+  kind: "pr" | "issue" | "history",
 ): Promise<CorpusHit[]> {
   let res: { matches: VectorizeMatch[] }
   try {
@@ -335,6 +347,13 @@ async function queryCorpus(
   for (const m of res.matches ?? []) {
     const md = m.metadata
     if (!md || typeof md.content !== "string" || typeof md.ref !== "string") continue
+    if (kind === "history") {
+      // History docs carry their own sub-kind (commit / review-comment / review).
+      const sub = md.kind
+      const hitKind = sub === "commit" || sub === "review-comment" || sub === "review" ? sub : "commit"
+      out.push({ kind: hitKind, ref: md.ref, label: "", content: md.content, score: m.score })
+      continue
+    }
     const label =
       kind === "pr"
         ? typeof md.verdict === "string"
@@ -364,11 +383,17 @@ const MAX_TOTAL_CHARS = 6_000
 export function formatMultiCorpusForPrompt(result: MultiCorpusResult): string | null {
   const blocks: string[] = []
   let total = 0
-  for (const h of [...result.pr, ...result.issue]) {
+  // `?? []` on history: pre-existing callers/mocks may still hand the two-leg
+  // shape; a formatting helper must render what it got, never throw.
+  for (const h of [...result.pr, ...result.issue, ...(result.history ?? [])]) {
     const header =
       h.kind === "pr"
         ? `--- past PR ${h.ref}${h.label ? ` (verdict: ${h.label})` : ""} ---`
-        : `--- Linear issue ${h.ref}${h.label ? ` (status: ${h.label})` : ""} ---`
+        : h.kind === "issue"
+          ? `--- Linear issue ${h.ref}${h.label ? ` (status: ${h.label})` : ""} ---`
+          : h.kind === "commit"
+            ? `--- past commit ${h.ref} ---`
+            : `--- past review discussion (${h.ref}) ---`
     const body = h.content.length > MAX_BLOCK_CHARS ? h.content.slice(0, MAX_BLOCK_CHARS) : h.content
     const block = `${header}\n${body}`
     if (total + block.length > MAX_TOTAL_CHARS) break

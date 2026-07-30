@@ -267,6 +267,7 @@ beforeEach(() => {
   mockRetrieveMultiCorpus.mockResolvedValue({
     pr: [{ kind: "pr", ref: "#1", label: "approved", content: GITHUB_SENTINEL, score: 1 }],
     issue: [],
+    history: [],
   })
   mockLoadScopedRules.mockResolvedValue({
     perDirectoryRules: [{ dirPath: "src", body: GITHUB_SENTINEL }],
